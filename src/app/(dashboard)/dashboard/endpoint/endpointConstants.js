@@ -30,3 +30,16 @@ export const PONYTAIL_LEVELS = [
   { id: "full", label: "Full", desc: "Ladder enforced: stdlib/native first" },
   { id: "ultra", label: "Ultra", desc: "YAGNI extremist, deletion first" },
 ];
+
+export const HEADROOM_MODES = [
+  { id: "", label: "Default", desc: "Lossless AST/SmartCrusher compression" },
+  { id: "lossy_inline", label: "Lossy Inline", desc: "Lossless + Kompress ML for prose/traces" },
+  { id: "ccr", label: "CCR", desc: "Content-Centric Retrieval markers" },
+];
+
+export const HEADROOM_PROTECT_RECENTS = [
+  { value: 0, label: "Off", desc: "Compress all eligible messages" },
+  { value: 1, label: "1 turn", desc: "Keep the most recent turn untouched" },
+  { value: 2, label: "2 turns", desc: "Keep the last 2 turns untouched" },
+];
+

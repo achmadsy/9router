@@ -15,15 +15,18 @@ services:
       HOSTNAME: "0.0.0.0"
       NODE_ENV: production
       HEADROOM_URL: http://headroom:8787
+      SENTRY_DSN: "${SENTRY_DSN:-}"
     depends_on:
       - headroom
 
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    image: ghcr.io/headroomlabs-ai/headroom:latest
     container_name: headroom
     restart: always
     ports:
       - "8787:8787"
+    environment:
+      - HEADROOM_COMPRESS_ALLOW_REMOTE=true
 
 volumes:
   9router-data:

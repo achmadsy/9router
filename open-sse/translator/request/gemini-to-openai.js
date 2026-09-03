@@ -44,7 +44,11 @@ export function geminiToOpenAIRequest(model, body, stream) {
     for (const content of body.contents) {
       const converted = convertGeminiContent(content);
       if (converted) {
-        result.messages.push(converted);
+        if (Array.isArray(converted)) {
+          result.messages.push(...converted);
+        } else {
+          result.messages.push(converted);
+        }
       }
     }
   }
@@ -71,16 +75,18 @@ export function geminiToOpenAIRequest(model, body, stream) {
   return result;
 }
 
-// Convert Gemini content to OpenAI message
+// Convert Gemini content to OpenAI message(s)
+// Handles multi-part functionResponse turns (returns array of tool messages)
 function convertGeminiContent(content) {
   const role = content.role === GEMINI_ROLE.USER ? ROLE.USER : ROLE.ASSISTANT;
-  
+
   if (!content.parts || !Array.isArray(content.parts)) {
     return null;
   }
 
   const parts = [];
   const toolCalls = [];
+  const toolResults = [];
 
   for (const part of content.parts) {
     if (part.text !== undefined) {
@@ -110,12 +116,23 @@ function convertGeminiContent(content) {
     }
 
     if (part.functionResponse) {
-      return {
+      toolResults.push({
         role: ROLE.TOOL,
         tool_call_id: part.functionResponse.id || `call_${part.functionResponse.name}`,
         content: JSON.stringify(part.functionResponse.response?.result || part.functionResponse.response || {})
-      };
+      });
     }
+  }
+
+  // Turn contains tool responses (each response is a separate OpenAI tool message)
+  if (toolResults.length > 0) {
+    if (toolCalls.length > 0 || parts.length > 0) {
+      const companion = { role };
+      if (parts.length > 0) companion.content = collapseTextParts(parts);
+      if (toolCalls.length > 0) companion.tool_calls = toolCalls;
+      return [...toolResults, companion];
+    }
+    return toolResults;
   }
 
   if (toolCalls.length > 0) {

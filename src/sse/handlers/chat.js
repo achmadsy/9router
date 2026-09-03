@@ -280,6 +280,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       headroomUrl: chatSettings.headroomUrl || DEFAULT_HEADROOM_URL,
       headroomCompressUserMessages: !!chatSettings.headroomCompressUserMessages,
       headroomTimeoutMs: chatSettings.headroomTimeoutMs,
+      headroomMode: chatSettings.headroomMode || "",
+      headroomProtectRecent: chatSettings.headroomProtectRecent || 0,
       cavemanEnabled: !!chatSettings.cavemanEnabled,
       cavemanLevel: chatSettings.cavemanLevel || "full",
       ponytailEnabled: !!chatSettings.ponytailEnabled,

@@ -34,13 +34,46 @@ function sanitizeGeminiFunctionName(name) {
   return sanitized.substring(0, 64);
 }
 
+// Gemini-family upstreams require strict user/model alternation and reject
+// requests whose contents end with a "model" turn ("Requests ending model turn
+// are not supported." HTTP 400). A trailing model turn can appear when a client
+// sends a trailing assistant message (prefill) or an unanswered tool call, or
+// when a compression round-trip drops a tool response. Repair both here:
+//  - drop trailing model turns entirely (upstream has nothing to respond to);
+//  - drop orphaned functionCall parts that lack a matching functionResponse
+//    in a later turn (unanswered calls cannot precede a new user turn).
 function normalizeGeminiContents(contents) {
+  // First pass: collect functionResponse ids available anywhere in the conversation.
+  const answeredIds = new Set();
+  for (const c of contents || []) {
+    for (const part of c?.parts || []) {
+      if (part.functionResponse?.id) answeredIds.add(part.functionResponse.id);
+      else if (part.functionResponse?.name) answeredIds.add(`call_${part.functionResponse.name}`);
+    }
+  }
+
   const out = [];
   for (const c of contents || []) {
     if (!c?.role || !Array.isArray(c.parts) || c.parts.length === 0) continue;
+    let parts = c.parts;
+    if (c.role === GEMINI_ROLE.MODEL) {
+      const kept = parts.filter(part => {
+        if (!part.functionCall) return true;
+        const id = part.functionCall.id || `call_${part.functionCall.name}`;
+        return answeredIds.has(id);
+      });
+      if (kept.length !== parts.length) parts = kept;
+      // Turns left with no meaningful parts (empty text/signature-only) are dropped
+      if (parts.length === 0 || parts.every(p => p.text === "" && !p.functionCall)) continue;
+    }
     const last = out.at(-1);
-    if (last?.role === c.role) last.parts.push(...c.parts);
-    else out.push({ ...c, parts: [...c.parts] });
+    if (last?.role === c.role) last.parts.push(...parts);
+    else out.push({ ...c, parts: [...parts] });
+  }
+
+  // Second pass: a trailing model turn gives the API nothing to respond to.
+  while (out.length > 0 && out.at(-1).role === GEMINI_ROLE.MODEL) {
+    out.pop();
   }
   return out;
 }

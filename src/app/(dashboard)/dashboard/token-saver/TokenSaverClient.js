@@ -8,13 +8,17 @@ import {
   WENYAN_LOCALES,
   CAVEMAN_LEVELS,
   PONYTAIL_LEVELS,
+  HEADROOM_MODES,
+  HEADROOM_PROTECT_RECENTS,
 } from "../endpoint/endpointConstants";
 
 export default function TokenSaverClient() {
   const [rtkEnabled, setRtkEnabledState] = useState(true);
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
   const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
-  const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(3000);
+  const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(15000);
+  const [headroomMode, setHeadroomMode] = useState("");
+  const [headroomProtectRecent, setHeadroomProtectRecent] = useState(0);
   const [headroomStatus, setHeadroomStatus] = useState({
     installed: false,
     running: false,
@@ -122,6 +126,16 @@ export default function TokenSaverClient() {
     setHeadroomUrl(next);
     await patchSetting({ headroomUrl: next });
     refreshHeadroomStatus();
+  };
+
+  const handleHeadroomMode = (mode) => {
+    setHeadroomMode(mode);
+    patchSetting({ headroomMode: mode });
+  };
+
+  const handleHeadroomProtectRecent = (value) => {
+    setHeadroomProtectRecent(value);
+    patchSetting({ headroomProtectRecent: value });
   };
 
   const refreshHeadroomStatus = useCallback(async () => {
@@ -424,6 +438,8 @@ export default function TokenSaverClient() {
           setHeadroomEnabled(!!data.headroomEnabled);
           setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
           if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(data.headroomTimeoutMs);
+          if (typeof data.headroomMode === "string") setHeadroomMode(data.headroomMode);
+          if (typeof data.headroomProtectRecent === "number") setHeadroomProtectRecent(data.headroomProtectRecent);
           setCodeAware(data.headroomCodeAware === true);
           setKompress(data.headroomKompress !== false);
           setCavemanEnabled(!!data.cavemanEnabled);
@@ -542,6 +558,58 @@ export default function TokenSaverClient() {
             onChange={() => handleHeadroomEnabled(!headroomEnabled)}
           />
         </div>
+        {headroomEnabled && (
+          <div className="mb-4 ml-1 pl-3 pb-2 border-l-2 border-border flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-xs font-medium">Compression Mode</p>
+                <p className="text-xs text-text-muted">
+                  {HEADROOM_MODES.find((m) => m.id === headroomMode)?.desc}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {HEADROOM_MODES.map((mode) => (
+                  <button
+                    key={mode.id}
+                    onClick={() => handleHeadroomMode(mode.id)}
+                    className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                      headroomMode === mode.id
+                        ? "bg-primary text-white border-primary"
+                        : "bg-transparent border-border text-text-muted hover:bg-surface-2"
+                    }`}
+                    title={mode.desc}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-xs font-medium">Protect Recent Messages</p>
+                <p className="text-xs text-text-muted">
+                  {HEADROOM_PROTECT_RECENTS.find((r) => r.value === headroomProtectRecent)?.desc}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {HEADROOM_PROTECT_RECENTS.map((rec) => (
+                  <button
+                    key={rec.value}
+                    onClick={() => handleHeadroomProtectRecent(rec.value)}
+                    className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                      headroomProtectRecent === rec.value
+                        ? "bg-primary text-white border-primary"
+                        : "bg-transparent border-border text-text-muted hover:bg-surface-2"
+                    }`}
+                    title={rec.desc}
+                  >
+                    {rec.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
         {headroomStatus.installed && (
           <div className="mb-3 ml-1 pl-3 pb-4 border-l-2 border-border">
             <div className="flex items-center gap-2 flex-wrap">

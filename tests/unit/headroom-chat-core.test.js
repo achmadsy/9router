@@ -251,6 +251,62 @@ describe("handleChatCore Headroom diagnostics", () => {
     );
   });
 
+  it("compresses Antigravity payload when routed to antigravity provider", async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const original = "antigravity long original prompt";
+    const compressed = "antigravity compressed prompt";
+
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes("/v1/compress")) {
+        return new Response(JSON.stringify({
+          messages: [{ role: "user", content: compressed }],
+          tokens_before: 100,
+          tokens_after: 20,
+          tokens_saved: 80,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    await handleChatCore({
+      body: { model: "gemini-3.8-flash-high", stream: false, messages: [{ role: "user", content: original }] },
+      modelInfo: { provider: "antigravity", model: "gemini-3.8-flash-high" },
+      credentials: { projectId: "test-proj", _clientSessionId: 12345, providerSpecificData: {} },
+      log,
+      connectionId: "test-conn",
+      headroomEnabled: true,
+      headroomUrl: "http://localhost:8787",
+      headroomCompressUserMessages: false,
+      rtkEnabled: false,
+      cavemanEnabled: false,
+      ponytailEnabled: false,
+      clientRawRequest: {
+        endpoint: "/v1/chat/completions",
+        body: {},
+        headers: { accept: "application/json" },
+      },
+    });
+
+    expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        project: "test-proj",
+        userAgent: "antigravity",
+        request: expect.objectContaining({
+          contents: expect.arrayContaining([
+            expect.objectContaining({
+              role: "user",
+              parts: expect.arrayContaining([
+                expect.objectContaining({ text: compressed }),
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    }));
+    expect(log.warn).not.toHaveBeenCalledWith("HEADROOM", expect.stringContaining("unsupported antigravity request shape"));
+    expect(log.info).toHaveBeenCalledWith("HEADROOM", expect.stringContaining("reported token delta=80 before=100 after=20"));
+  });
+
   it("bypasses token savers when requested by the client", async () => {
     const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const pxpipeTransform = vi.fn();

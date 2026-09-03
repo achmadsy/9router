@@ -303,11 +303,39 @@ function flattenTypeArrays(obj) {
   }
 }
 
-// Infer missing type=object when properties exist (Gemini requires explicit type)
+// Gemini's Schema proto requires `type` on every node. JSON Schema allows typeless
+// nodes, and Google upstream rejects them with "…items.items: missing field."
+// Infer a sensible type for every schema node that lacks one:
+//  - has `items`        → "array"
+//  - has `properties`   → "object"
+//  - has `enum`         → "string"
+//  - otherwise          → "string" (safe generic leaf)
+// Tuple `items: [...]` is collapsed to its first element schema — the proto only
+// supports a single items schema, not positional tuples.
+// `properties` values are schema nodes, but `properties` itself is a plain map —
+// never inject a type into it.
 function ensureObjectType(obj) {
-  if (!obj || typeof obj !== "object") return;
-  if (obj.properties && !obj.type) obj.type = "object";
-  for (const v of Object.values(obj)) if (v && typeof v === "object") ensureObjectType(v);
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+
+  if (obj.type === "array" && Array.isArray(obj.items)) {
+    obj.items = obj.items[0] && typeof obj.items[0] === "object" ? obj.items[0] : { type: "string" };
+  }
+
+  if (!obj.type) {
+    if (obj.items !== undefined) obj.type = "array";
+    else if (obj.properties) obj.type = "object";
+    else if (obj.enum) obj.type = "string";
+    else if (Object.keys(obj).length > 0) obj.type = "string";
+  }
+
+  if (obj.type === "array" && obj.items && typeof obj.items === "object" && !Array.isArray(obj.items) && !obj.items.type) {
+    obj.items.type = obj.items.properties ? "object" : "string";
+  }
+
+  if (obj.properties) {
+    for (const value of Object.values(obj.properties)) ensureObjectType(value);
+  }
+  if (obj.items && typeof obj.items === "object") ensureObjectType(obj.items);
 }
 
 // Convert prefixItems (tuple validation) to items — Gemini cannot express tuples,

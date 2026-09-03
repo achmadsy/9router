@@ -4,6 +4,30 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 
+// Initialize Sentry early if configured in environment
+if (process.env.SENTRY_DSN) {
+  try {
+    const Sentry = require("@sentry/node");
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || "production",
+      release: "9router@0.5.65",
+      tracesSampleRate: 0.1,
+      beforeSend(event) {
+        if (event.request?.headers) {
+          delete event.request.headers.authorization;
+          delete event.request.headers["x-api-key"];
+          delete event.request.headers["x-9r-peer-token"];
+        }
+        return event;
+      },
+    });
+    console.log("[Sentry] early initialized from custom-server.js");
+  } catch (err) {
+    console.error("[Sentry] early init failed:", err?.message || err);
+  }
+}
+
 const origCreate = http.createServer.bind(http);
 
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.

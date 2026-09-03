@@ -37,6 +37,58 @@ describe("compressWithHeadroom", () => {
     });
   });
 
+  it("passes mode and protect_recent in config when specified", async () => {
+    let requestPayload;
+    global.fetch = vi.fn(async (_url, init) => {
+      requestPayload = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        messages: [{ role: "user", content: "compressed" }],
+        tokens_before: 100,
+        tokens_after: 50,
+        tokens_saved: 50,
+      }), { status: 200 });
+    });
+    const body = { messages: [{ role: "user", content: "long prompt" }] };
+
+    const stats = await compressWithHeadroom(body, {
+      enabled: true,
+      url: "http://localhost:8787",
+      model: "gpt-4o",
+      mode: "lossy_inline",
+      protectRecent: 2,
+    });
+
+    expect(stats.tokens_saved).toBe(50);
+    expect(requestPayload.config).toEqual({
+      mode: "lossy_inline",
+      protect_recent: 2,
+    });
+  });
+
+  it("omits mode and protect_recent when default or unset", async () => {
+    let requestPayload;
+    global.fetch = vi.fn(async (_url, init) => {
+      requestPayload = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        messages: [{ role: "user", content: "compressed" }],
+        tokens_before: 100,
+        tokens_after: 50,
+        tokens_saved: 50,
+      }), { status: 200 });
+    });
+    const body = { messages: [{ role: "user", content: "long prompt" }] };
+
+    await compressWithHeadroom(body, {
+      enabled: true,
+      url: "http://localhost:8787",
+      model: "gpt-4o",
+      mode: "",
+      protectRecent: 0,
+    });
+
+    expect(requestPayload.config).toBeUndefined();
+  });
+
   it("compresses responses input in-place", async () => {
     global.fetch = vi.fn(async () => new Response(JSON.stringify({
       messages: [{ role: "user", content: "short" }],
@@ -193,9 +245,114 @@ describe("compressWithHeadroom", () => {
     expect(body.messages[0].content).toBe("long");
   });
 
+  it("compresses Antigravity request in-place", async () => {
+    let requestPayload;
+    global.fetch = vi.fn(async (_url, init) => {
+      requestPayload = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        messages: [
+          { role: "system", content: "compressed system" },
+          { role: "user", content: "compressed user" },
+          { role: "assistant", content: "compressed assistant" },
+          { role: "user", content: "compressed follow-up" },
+        ],
+        tokens_before: 60,
+        tokens_after: 25,
+        tokens_saved: 35,
+      }), { status: 200 });
+    });
+
+    const body = {
+      project: "test-proj-123",
+      model: "gemini-3.8-flash-high",
+      userAgent: "antigravity",
+      requestId: "agent-test-1",
+      requestType: "agent",
+      request: {
+        sessionId: 8888,
+        generationConfig: { temperature: 0.7 },
+        systemInstruction: { role: "user", parts: [{ text: "original system" }] },
+        contents: [
+          { role: "user", parts: [{ text: "original user long context" }] },
+          { role: "model", parts: [{ text: "original assistant long response" }] },
+          { role: "user", parts: [{ text: "original follow-up query" }] },
+        ],
+      },
+    };
+
+    const stats = await compressWithHeadroom(body, {
+      enabled: true,
+      url: "http://localhost:8787",
+      model: "gemini-3.8-flash-high",
+      format: "antigravity",
+    });
+
+    expect(stats.tokens_saved).toBe(35);
+    expect(requestPayload.messages).toEqual([
+      { role: "system", content: "original system" },
+      { role: "user", content: "original user long context" },
+      { role: "assistant", content: "original assistant long response" },
+      { role: "user", content: "original follow-up query" },
+    ]);
+    expect(body.project).toBe("test-proj-123");
+    expect(body.request.sessionId).toBe(8888);
+    expect(body.request.systemInstruction).toEqual({
+      role: "user",
+      parts: [{ text: "compressed system" }],
+    });
+    expect(body.request.contents).toEqual([
+      { role: "user", parts: [{ text: "compressed user" }] },
+      { role: "model", parts: [{ text: "compressed assistant" }] },
+      { role: "user", parts: [{ text: "compressed follow-up" }] },
+    ]);
+  });
+
+  it("compresses Gemini direct request in-place", async () => {
+    let requestPayload;
+    global.fetch = vi.fn(async (_url, init) => {
+      requestPayload = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        messages: [
+          { role: "system", content: "compressed gemini system" },
+          { role: "user", content: "compressed gemini user" },
+        ],
+        tokens_before: 40,
+        tokens_after: 15,
+        tokens_saved: 25,
+      }), { status: 200 });
+    });
+
+    const body = {
+      contents: [
+        { role: "user", parts: [{ text: "original gemini user prompt" }] },
+      ],
+      systemInstruction: { role: "user", parts: [{ text: "original gemini system" }] },
+    };
+
+    const stats = await compressWithHeadroom(body, {
+      enabled: true,
+      url: "http://localhost:8787",
+      model: "gemini-2.5-flash",
+      format: "gemini",
+    });
+
+    expect(stats.tokens_saved).toBe(25);
+    expect(requestPayload.messages).toEqual([
+      { role: "system", content: "original gemini system" },
+      { role: "user", content: "original gemini user prompt" },
+    ]);
+    expect(body.systemInstruction).toEqual({
+      role: "user",
+      parts: [{ text: "compressed gemini system" }],
+    });
+    expect(body.contents).toEqual([
+      { role: "user", parts: [{ text: "compressed gemini user" }] },
+    ]);
+  });
+
   it("skips unknown shapes", async () => {
     global.fetch = vi.fn();
-    const body = { contents: [{ parts: [{ text: "long" }] }] };
+    const body = { customKey: "foo" };
 
     const stats = await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787" });
 
@@ -244,7 +401,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: null });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(15000);
     });
 
     it("falls back to the default timeout when timeoutMs is 0", async () => {
@@ -254,7 +411,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: 0 });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(15000);
     });
 
     it("falls back to the default timeout when timeoutMs is negative", async () => {
@@ -264,7 +421,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: -100 });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(15000);
     });
 
     it("falls back to the default timeout when timeoutMs is NaN", async () => {
@@ -274,7 +431,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: NaN });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(15000);
     });
 
     it("falls back to the default timeout when timeoutMs is Infinity", async () => {
@@ -284,7 +441,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: Infinity });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(15000);
     });
 
     it("falls back to the default timeout when timeoutMs is a string", async () => {
@@ -294,7 +451,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: "5000" });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(15000);
     });
   });
 });

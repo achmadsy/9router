@@ -1,5 +1,7 @@
 // Logger utility for cloud
 
+import { captureMessage } from "@/lib/sentry";
+
 const LOG_LEVELS = {
   DEBUG: 0,
   INFO: 1,
@@ -41,6 +43,9 @@ export function line(tag, symbol, message) {
 // Like line() but always printed regardless of LOG_LEVEL (errors must never be hidden)
 export function errorLine(tag, symbol, message) {
   console.log(`[${formatTime()}] ${tag} ${symbol} ${message}`);
+  try {
+    captureMessage(message, "error", { tags: { tag, symbol, kind: "errorLine" } });
+  } catch { /* fail-open */ }
 }
 
 // Format thinking intent for the request line ("high(10k)" / "off" / "auto")
@@ -92,6 +97,12 @@ export function error(tag, message, data) {
     const dataStr = data ? ` ${formatData(data)}` : "";
     console.log(`[${formatTime()}] ❌ [${tag}] ${message}${dataStr}`);
   }
+  try {
+    captureMessage(`[${tag}] ${message}`, "error", {
+      tags: { tag, kind: "error" },
+      extra: data ? { data } : undefined,
+    });
+  } catch { /* fail-open */ }
 }
 
 export function request(method, path, extra) {
