@@ -57,7 +57,7 @@ describe("handleChatCore Headroom diagnostics", () => {
   });
 
   it("logs why Headroom was skipped on chat completions", async () => {
-    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
     await handleChatCore({
       body: { model: "gpt-4o", stream: false, messages: [{ role: "user", content: "hello" }] },
@@ -89,6 +89,46 @@ describe("handleChatCore Headroom diagnostics", () => {
     expect(log.warn).toHaveBeenCalledWith(
       "HEADROOM",
       expect.stringContaining("http://localhost:8787/v1/compress")
+    );
+    expect(log.error).toHaveBeenCalledWith(
+      "HEADROOM",
+      expect.stringContaining("compression failed: request failed")
+    );
+  });
+
+  it("logs error when Headroom fetch times out", async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    global.fetch = vi.fn(async () => {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    });
+
+    await handleChatCore({
+      body: { model: "gpt-4o", stream: false, messages: [{ role: "user", content: "hello" }] },
+      modelInfo: { provider: "openai", model: "gpt-4o" },
+      credentials: { apiKey: "test-key", providerSpecificData: {} },
+      log,
+      connectionId: "test-conn",
+      headroomEnabled: true,
+      headroomUrl: "http://localhost:8787",
+      headroomCompressUserMessages: false,
+      rtkEnabled: false,
+      cavemanEnabled: false,
+      ponytailEnabled: false,
+      clientRawRequest: {
+        endpoint: "/v1/chat/completions",
+        body: {},
+        headers: { accept: "application/json" },
+      },
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "HEADROOM",
+      expect.stringContaining("skipped: request failed: The operation was aborted due to timeout")
+    );
+    expect(log.error).toHaveBeenCalledWith(
+      "HEADROOM",
+      expect.stringContaining("compression failed: request failed: The operation was aborted due to timeout")
     );
   });
 
