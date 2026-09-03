@@ -42,6 +42,23 @@ function sanitizeGeminiFunctionName(name) {
 //  - drop trailing model turns entirely (upstream has nothing to respond to);
 //  - drop orphaned functionCall parts that lack a matching functionResponse
 //    in a later turn (unanswered calls cannot precede a new user turn).
+
+const INSTRUCTIONS_REGEX = /<instructions>([\s\S]*?)<\/instructions>/gi;
+
+// Extract <instructions>...</instructions> blocks from text.
+// Returns { instructions: string[], cleanText: string }
+function extractInstructionsFromText(text) {
+  if (typeof text !== "string" || !text.includes("<instructions>")) {
+    return { instructions: [], cleanText: text };
+  }
+  const instructions = [];
+  const cleanText = text.replace(INSTRUCTIONS_REGEX, (_, inner) => {
+    const trimmed = inner.trim();
+    if (trimmed) instructions.push(trimmed);
+    return "";
+  }).trim();
+  return { instructions, cleanText };
+}
 function normalizeGeminiContents(contents) {
   // First pass: collect functionResponse ids available anywhere in the conversation.
   const answeredIds = new Set();
@@ -138,7 +155,45 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
           parts: [{ text: typeof content === "string" ? content : extractTextContent(content) }]
         };
       } else if (role === ROLE.USER || (role === ROLE.SYSTEM && body.messages.length === 1)) {
-        const parts = convertOpenAIContentToParts(content);
+        // Extract mid-conversation <instructions> tags (from Claude Code system reminders)
+        // Move them to systemInstruction so Gemini treats them as system guidance,
+        // not user dialog to echo or converse about.
+        let userContent = content;
+        if (typeof content === "string" && content.includes("<instructions>")) {
+          const { instructions, cleanText } = extractInstructionsFromText(content);
+          if (instructions.length > 0) {
+            if (!result.systemInstruction) {
+              result.systemInstruction = { role: GEMINI_ROLE.USER, parts: [] };
+            }
+            for (const instr of instructions) {
+              result.systemInstruction.parts.push({ text: instr });
+            }
+          }
+          userContent = cleanText;
+        } else if (Array.isArray(content)) {
+          const cleanedArray = [];
+          for (const item of content) {
+            if (item && item.type === OPENAI_BLOCK.TEXT && typeof item.text === "string" && item.text.includes("<instructions>")) {
+              const { instructions, cleanText } = extractInstructionsFromText(item.text);
+              if (instructions.length > 0) {
+                if (!result.systemInstruction) {
+                  result.systemInstruction = { role: GEMINI_ROLE.USER, parts: [] };
+                }
+                for (const instr of instructions) {
+                  result.systemInstruction.parts.push({ text: instr });
+                }
+              }
+              if (cleanText) {
+                cleanedArray.push({ ...item, text: cleanText });
+              }
+            } else {
+              cleanedArray.push(item);
+            }
+          }
+          userContent = cleanedArray;
+        }
+
+        const parts = convertOpenAIContentToParts(userContent);
         if (parts.length > 0) {
           result.contents.push({ role: GEMINI_ROLE.USER, parts });
         }
@@ -363,6 +418,7 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
   }
 
   // Convert Claude messages to Gemini contents
+  const extractedInstructions = [];
   if (claudeRequest.messages && Array.isArray(claudeRequest.messages)) {
     for (const msg of claudeRequest.messages) {
       const parts = [];
@@ -370,7 +426,13 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
           if (block.type === CLAUDE_BLOCK.TEXT) {
-            parts.push({ text: block.text });
+            if (msg.role !== ROLE.ASSISTANT && typeof block.text === "string" && block.text.includes("<instructions>")) {
+              const { instructions, cleanText } = extractInstructionsFromText(block.text);
+              extractedInstructions.push(...instructions);
+              if (cleanText) parts.push({ text: cleanText });
+            } else {
+              parts.push({ text: block.text });
+            }
           } else if (block.type === CLAUDE_BLOCK.TOOL_USE) {
             parts.push({
               thoughtSignature: signature,
@@ -399,7 +461,13 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
           }
         }
       } else if (typeof msg.content === "string") {
-        parts.push({ text: msg.content });
+        if (msg.role !== ROLE.ASSISTANT && msg.content.includes("<instructions>")) {
+          const { instructions, cleanText } = extractInstructionsFromText(msg.content);
+          extractedInstructions.push(...instructions);
+          if (cleanText) parts.push({ text: cleanText });
+        } else {
+          parts.push({ text: msg.content });
+        }
       }
 
       if (parts.length > 0) {
@@ -442,6 +510,10 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
     } else if (typeof claudeRequest.system === "string") {
       systemParts.push({ text: claudeRequest.system });
     }
+  }
+
+  for (const instr of extractedInstructions) {
+    systemParts.push({ text: instr });
   }
 
   if (systemParts.length > 0) {

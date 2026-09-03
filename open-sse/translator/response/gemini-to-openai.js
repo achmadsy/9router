@@ -7,6 +7,20 @@ import { reasoningDelta } from "../concerns/reasoning.js";
 import { encodeDataUri } from "../concerns/image.js";
 import { toOpenAIFinish } from "../concerns/finishReason.js";
 
+// Strip echoed system/task instructions from model delta text
+const ECHOED_INSTRUCTIONS_REGEX = /<instructions>[\s\S]*?(?:<\/instructions>|$)/gi;
+const ECHOED_SYSTEM_REMINDER_REGEX = /<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/gi;
+
+export function stripEchoedInstructions(text) {
+  if (typeof text !== "string") return text;
+  if (!text.includes("<instructions>") && !text.includes("<system-reminder>")) {
+    return text;
+  }
+  return text
+    .replace(ECHOED_INSTRUCTIONS_REGEX, "")
+    .replace(ECHOED_SYSTEM_REMINDER_REGEX, "");
+}
+
 // Build chunk meta for current gemini state
 function chunkMeta(state) {
   return { id: `chatcmpl-${state.messageId}`, created: Math.floor(Date.now() / 1000), model: state.model };
@@ -83,11 +97,14 @@ export function geminiToOpenAIResponse(chunk, state) {
       // can also stream thought parts without a signature; those must not be
       // surfaced as normal assistant content in OpenAI-compatible clients.
       if (part.text !== undefined && part.text !== "") {
-        results.push(buildChunk(
-          chunkMeta(state),
-          isThought ? reasoningDelta(part.text) : { content: part.text },
-          null
-        ));
+        const textToEmit = isThought ? part.text : stripEchoedInstructions(part.text);
+        if (textToEmit) {
+          results.push(buildChunk(
+            chunkMeta(state),
+            isThought ? reasoningDelta(part.text) : { content: textToEmit },
+            null
+          ));
+        }
       }
 
       // Function call
