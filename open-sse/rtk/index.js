@@ -3,6 +3,7 @@
 import { RAW_CAP, MIN_COMPRESS_SIZE } from "./constants.js";
 import { autoDetectFilter } from "./autodetect.js";
 import { safeApply } from "./applyFilter.js";
+import { captureRtkError } from "./sentry.js";
 
 // Compress tool_result content in-place. Returns stats or null if disabled/failed.
 export function compressMessages(body, enabled) {
@@ -82,6 +83,7 @@ export function compressMessages(body, enabled) {
     }
   } catch (e) {
     console.warn("[RTK] compressMessages error:", e.message);
+    captureRtkError(e, "rtk:compress", { format: "standard" });
     return null;
   }
   return stats;
@@ -112,6 +114,7 @@ function compressKiroFormat(body, enabled) {
     }
   } catch (e) {
     console.warn("[RTK] compressKiroFormat error:", e.message);
+    captureRtkError(e, "rtk:compress", { format: "kiro" });
     return null;
   }
   return stats;

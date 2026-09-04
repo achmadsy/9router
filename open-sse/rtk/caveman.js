@@ -3,7 +3,14 @@
 
 import { injectSystemPrompt } from "./systemInject.js";
 import { CAVEMAN_PROMPTS } from "./cavemanPrompts.js";
+import { captureRtkError } from "./sentry.js";
 
 export function injectCaveman(body, format, level) {
-  injectSystemPrompt(body, format, CAVEMAN_PROMPTS[level]);
+  try {
+    const prompt = CAVEMAN_PROMPTS[level];
+    if (!prompt) return;
+    injectSystemPrompt(body, format, prompt);
+  } catch (err) {
+    captureRtkError(err, "caveman:inject", { format, level });
+  }
 }
