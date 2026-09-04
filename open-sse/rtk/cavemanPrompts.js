@@ -10,6 +10,19 @@ export const CAVEMAN_LEVELS = {
   WENYAN_ULTRA: "wenyan-ultra",
 };
 
+export const CAVEMAN_ESTIMATED_REDUCTIONS = {
+  [CAVEMAN_LEVELS.LITE]: "~40% cut",
+  [CAVEMAN_LEVELS.FULL]: "~65% cut",
+  [CAVEMAN_LEVELS.ULTRA]: "~80% cut",
+  [CAVEMAN_LEVELS.WENYAN_LITE]: "~50% cut",
+  [CAVEMAN_LEVELS.WENYAN]: "~85% cut",
+  [CAVEMAN_LEVELS.WENYAN_ULTRA]: "~90% cut",
+};
+
+export function getCavemanReduction(level) {
+  return CAVEMAN_ESTIMATED_REDUCTIONS[level] || null;
+}
+
 const SHARED_BOUNDARIES = "Code blocks, file paths, commands, errors, URLs: keep exact. Security warnings, irreversible action confirmations, multi-step ordered sequences: write normal. Resume terse style after.";
 
 const SHARED_EXAMPLES = "Not: \"Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by...\" Yes: \"Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:\"";
