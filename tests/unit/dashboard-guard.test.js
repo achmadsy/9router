@@ -285,6 +285,23 @@ describe("dashboard guard local-only access", () => {
 
     expect(response).toBe(mocks.nextResponse);
   });
+
+  it("allows /api/zcode/captcha routes from loopback without auth or CLI token", async () => {
+    const response = await proxy(localRequest("/api/zcode/captcha/config", {
+      host: "localhost:20128",
+    }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("rejects /api/zcode/captcha routes from remote callers", async () => {
+    const response = await proxy(request("/api/zcode/captcha/config", {
+      host: "router.example.com",
+    }));
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toContain("local-only");
+  });
 });
 
 describe("dashboard guard helpers", () => {

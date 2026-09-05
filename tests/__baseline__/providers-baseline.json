@@ -1008,5 +1008,9 @@
       "preserveCacheControl": true
     },
     "format": "openai"
+  },
+  "zcode": {
+    "baseUrl": "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages",
+    "format": "claude"
   }
 }

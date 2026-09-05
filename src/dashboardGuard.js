@@ -221,6 +221,12 @@ export async function proxy(request) {
     return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
   }
 
+  // Captcha helper routes: restricted to local loopback requests only
+  if (pathname.startsWith("/api/zcode/captcha")) {
+    if (isLocalRequest(request)) return NextResponse.next();
+    return NextResponse.json({ error: "Forbidden: captcha routes are local-only" }, { status: 403 });
+  }
+
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
   if (pathname.startsWith("/api/")) {
     if (isPublicApi(pathname)) return NextResponse.next();
