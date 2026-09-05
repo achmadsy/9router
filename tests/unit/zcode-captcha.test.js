@@ -246,4 +246,49 @@ describe("ZCode Captcha Integration & Retry Handling", () => {
     expect(data.success).toBe(true);
     expect(submitSpy).toHaveBeenCalledWith("token-12345");
   });
+
+  it("rejects relay proxies (Vercel/Cloudflare/Deno) with an informative error", async () => {
+    const executor = getExecutor("zcode");
+
+    await expect(
+      executor.execute({
+        credentials: { accessToken: "jwt-123" },
+        model: "glm-5.3",
+        proxyOptions: { vercelRelayUrl: "https://my-relay.vercel.app" },
+      })
+    ).rejects.toThrow("relay-based proxies");
+  });
+
+  it("passes standard forward proxy to captchaManager.getVerifyParam", async () => {
+    const executor = getExecutor("zcode");
+    const manager = getCaptchaManager();
+
+    const getVerifyParamSpy = vi
+      .spyOn(manager, "getVerifyParam")
+      .mockResolvedValue("solved-via-proxy");
+
+    vi.spyOn(DefaultExecutor.prototype, "execute").mockResolvedValue({
+      response: new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    });
+
+    await executor.execute({
+      credentials: {
+        accessToken: "jwt-123",
+        providerSpecificData: {
+          connectionProxyEnabled: true,
+          connectionProxyUrl: "http://127.0.0.1:7890",
+        },
+      },
+      model: "glm-5.3",
+      proxyOptions: {
+        connectionProxyEnabled: true,
+        connectionProxyUrl: "http://127.0.0.1:7890",
+      },
+    });
+
+    expect(getVerifyParamSpy).toHaveBeenCalledWith(
+      expect.any(Number),
+      { proxy: "http://127.0.0.1:7890" }
+    );
+  });
 });

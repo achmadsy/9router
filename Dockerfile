@@ -7,7 +7,7 @@ FROM base AS builder
 
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
-COPY package.json ./
+COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm \
   npm install
 
@@ -25,6 +25,9 @@ ENV PORT=20128
 ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATA_DIR=/app/data
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV CLOAKBROWSER_BINARY_PATH=/usr/bin/chromium-browser
+ENV CLOAKBROWSER_SUPPRESS_FONT_WARNING=1
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/static ./.next/static
@@ -44,6 +47,12 @@ COPY --from=builder /app/node_modules/@sentry ./node_modules/@sentry
 COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
 # node-machine-id is createRequire-loaded at runtime; tracing omits it.
 COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
+# Cloakbrowser and playwright-core for headless captcha solving
+COPY --from=builder /app/node_modules/cloakbrowser ./node_modules/cloakbrowser
+COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
+
+# Install chromium and required font/render dependencies for headless browser captcha solving
+RUN apk --no-cache add chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
 RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \

@@ -100,7 +100,24 @@ export class ZcodeExecutor extends DefaultExecutor {
   }
 
   async execute(params) {
-    const { credentials } = params;
+    const { credentials, proxyOptions } = params;
+
+    // Reject relay proxies (Vercel / Cloudflare / Deno edge relays)
+    // Relay proxies rewrite headers/endpoints via edge functions and cannot tunnel browser traffic.
+    const relayUrl = proxyOptions?.vercelRelayUrl || credentials?.providerSpecificData?.vercelRelayUrl;
+    if (relayUrl) {
+      throw new Error(
+        "ZCode provider does not support relay-based proxies (Vercel/Cloudflare/Deno relay). " +
+        "Please use a standard HTTP or SOCKS5 proxy so both API requests and browser captcha verification share the same exit IP."
+      );
+    }
+
+    // Resolve standard forward proxy (HTTP/HTTPS/SOCKS5) if configured on the connection or pool
+    const connectionProxyUrl =
+      (proxyOptions?.connectionProxyEnabled && proxyOptions?.connectionProxyUrl) ||
+      (credentials?.providerSpecificData?.connectionProxyEnabled && credentials?.providerSpecificData?.connectionProxyUrl) ||
+      "";
+
     const captchaManager = getCaptchaManager();
     const port = getZcodeCaptchaPort();
 
@@ -111,7 +128,7 @@ export class ZcodeExecutor extends DefaultExecutor {
       // fail-open: log and send the plain request without the param.
       let verifyParam = null;
       try {
-        verifyParam = await captchaManager.getVerifyParam(port);
+        verifyParam = await captchaManager.getVerifyParam(port, { proxy: connectionProxyUrl || null });
       } catch (err) {
         console.error(`[ZCode Captcha] Solve failed (attempt ${attempt}):`, err.message);
       }

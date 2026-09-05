@@ -6,6 +6,7 @@ const ICON_ALIASES = {
   "gitlab-duo": "gitlab",
   "vercel-ai-gateway": "vercel",
   "ollama-search": "ollama",
+  zcode: "glm",
 };
 
 // Runtime only — first 404 remembers id for the whole session

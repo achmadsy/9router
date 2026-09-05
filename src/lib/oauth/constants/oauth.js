@@ -223,4 +223,14 @@ export const PROVIDERS = {
   TRAE: "trae",
   WINDSURF: "windsurf",
   ZED: "zed",
+  ZCODE: "zcode",
 };
+
+export const ZCODE_CONFIG = {
+  name: "ZCode (Z.AI)",
+  apiBaseUrl: "https://zcode.z.ai/api/v1",
+  initUrl: "https://zcode.z.ai/api/v1/oauth/cli/init",
+  pollUrl: "https://zcode.z.ai/api/v1/oauth/cli/poll",
+  clientId: "zcode-cli",
+};
+

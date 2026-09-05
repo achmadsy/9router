@@ -47,4 +47,14 @@ describe("classifyOAuthProbeResult (grok-cli)", () => {
     const r = classifyOAuthProbeResult({ ok: false, status: 400 }, codex, "bad request");
     expect(r).toEqual({ valid: true, error: null, soft: false });
   });
+
+  it("ZCode test config probes billing endpoint with correct fingerprint headers", async () => {
+    const { OAUTH_TEST_CONFIG } = await import("../../src/app/api/providers/[id]/test/testUtils.js");
+    const zcodeConfig = OAUTH_TEST_CONFIG["zcode"];
+    expect(zcodeConfig).toBeDefined();
+    expect(zcodeConfig.url).toBe("https://zcode.z.ai/api/v1/zcode-plan/billing/current");
+    expect(zcodeConfig.method).toBe("GET");
+    expect(zcodeConfig.extraHeaders["User-Agent"]).toBe("ZCode/3.1.0");
+    expect(zcodeConfig.extraHeaders["X-ZCode-Agent"]).toBe("glm");
+  });
 });

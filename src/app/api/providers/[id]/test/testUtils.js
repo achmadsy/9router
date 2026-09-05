@@ -16,6 +16,7 @@ import {
   CLINE_CONFIG,
   KILOCODE_CONFIG,
   KIMCHI_CONFIG,
+  ZCODE_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
 
@@ -124,6 +125,21 @@ const OAUTH_TEST_CONFIG = {
     softFailMessage: {
       402: "Connected, but Grok Build credits are exhausted (spending limit). Add credits or upgrade SuperGrok.",
     },
+  },
+  zcode: {
+    url: "https://zcode.z.ai/api/v1/zcode-plan/billing/current",
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: {
+      Accept: "application/json",
+      "User-Agent": "ZCode/3.1.0",
+      "X-ZCode-App-Version": "3.1.0",
+      "X-ZCode-Agent": "glm",
+      "X-Title": "Z Code@electron",
+      "HTTP-Referer": "https://zcode.z.ai/",
+    },
+    refreshable: false,
   },
 };
 
@@ -893,3 +909,5 @@ export async function testSingleConnection(id) {
 
   return { valid: result.valid, error: result.error, refreshed: !!result.refreshed, latencyMs, testedAt: new Date().toISOString() };
 }
+
+export { OAUTH_TEST_CONFIG };

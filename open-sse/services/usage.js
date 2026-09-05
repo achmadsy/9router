@@ -24,6 +24,7 @@ import {
   getVercelAiGatewayUsage,
   getQoderUsage,
 } from "./usage/misc.js";
+import { getZcodeUsage } from "./usage/zcode.js";
 
 /**
  * Get usage data for a provider connection
@@ -58,6 +59,7 @@ const USAGE_HANDLERS = {
   deepseek: (c) => getDeepseekUsage(c.apiKey, c.proxyOptions),
   groq: (c) => getGroqUsage(c.apiKey, c.proxyOptions),
   zed: (c) => getZedUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
+  zcode: (c) => getZcodeUsage(c.accessToken || c.providerSpecificData?.zcodeJwtToken, c.proxyOptions),
 };
 
 export async function getUsageForProvider(connection, proxyOptions = null, options = {}) {

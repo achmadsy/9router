@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCaptchaManager } from "@/lib/zcode/captcha-service";
+import { getCaptchaManager } from "@/lib/zcode/captcha-service.js";
 
 export async function GET() {
   try {
