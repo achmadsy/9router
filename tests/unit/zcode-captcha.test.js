@@ -62,6 +62,80 @@ describe("ZCode Captcha Integration & Retry Handling", () => {
     expect(appliedHeaders["X-Aliyun-Captcha-Verify-Region"]).toBe("sgp");
   });
 
+  it("solves captcha BEFORE the first upstream attempt and attaches verifyParam", async () => {
+    const executor = getExecutor("zcode");
+    const manager = getCaptchaManager();
+
+    const getVerifyParamSpy = vi
+      .spyOn(manager, "getVerifyParam")
+      .mockResolvedValue("solved-param-token");
+
+    let callCount = 0;
+    const executedParams = [];
+    vi.spyOn(DefaultExecutor.prototype, "execute").mockImplementation(async (params) => {
+      callCount++;
+      executedParams.push(JSON.parse(JSON.stringify(params)));
+      return {
+        response: new Response(JSON.stringify({ choices: [{ message: { content: "Success" } }] }), {
+          status: 200,
+        }),
+      };
+    });
+
+    const result = await executor.execute({
+      credentials: {
+        accessToken: "test-jwt",
+        providerSpecificData: {},
+      },
+      model: "glm-5.3",
+    });
+
+    // Single attempt, success: getVerifyParam called exactly once, before the upstream call
+    expect(callCount).toBe(1);
+    expect(getVerifyParamSpy).toHaveBeenCalledTimes(1);
+    expect(result.response.status).toBe(200);
+
+    // First (and only) upstream attempt carries the captcha verify param
+    expect(executedParams[0]?.credentials?.providerSpecificData?._captchaVerifyParam).toBe(
+      "solved-param-token"
+    );
+  });
+
+  it("proceeds fail-open when captcha solve throws before first attempt", async () => {
+    const executor = getExecutor("zcode");
+    const manager = getCaptchaManager();
+
+    const getVerifyParamSpy = vi
+      .spyOn(manager, "getVerifyParam")
+      .mockRejectedValue(new Error("CloakBrowser not running"));
+
+    let callCount = 0;
+    const executedParams = [];
+    vi.spyOn(DefaultExecutor.prototype, "execute").mockImplementation(async (params) => {
+      callCount++;
+      executedParams.push(JSON.parse(JSON.stringify(params)));
+      return {
+        response: new Response(JSON.stringify({ choices: [{ message: { content: "Success" } }] }), {
+          status: 200,
+        }),
+      };
+    });
+
+    const result = await executor.execute({
+      credentials: {
+        accessToken: "test-jwt",
+        providerSpecificData: {},
+      },
+      model: "glm-5.3",
+    });
+
+    // Solve failed but plain request still goes out without the param
+    expect(callCount).toBe(1);
+    expect(getVerifyParamSpy).toHaveBeenCalledTimes(1);
+    expect(result.response.status).toBe(200);
+    expect(executedParams[0]?.credentials?.providerSpecificData?._captchaVerifyParam).toBeUndefined();
+  });
+
   it("retries upon 403 captcha error and uses solved verifyParam", async () => {
     const executor = getExecutor("zcode");
     const manager = getCaptchaManager();

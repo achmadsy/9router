@@ -106,13 +106,14 @@ export class ZcodeExecutor extends DefaultExecutor {
 
     let lastResult = null;
     for (let attempt = 1; attempt <= MAX_CAPTCHA_RETRIES; attempt++) {
+      // Proactively solve captcha on every attempt (incl. first) — first attempt
+      // without a verify param gets 403-challenged upstream. Solve failure is
+      // fail-open: log and send the plain request without the param.
       let verifyParam = null;
-      if (attempt > 1 || credentials?.providerSpecificData?._captchaVerifyParam) {
-        try {
-          verifyParam = await captchaManager.getVerifyParam(port);
-        } catch (err) {
-          console.error(`[ZCode Captcha] Solve failed (attempt ${attempt}):`, err.message);
-        }
+      try {
+        verifyParam = await captchaManager.getVerifyParam(port);
+      } catch (err) {
+        console.error(`[ZCode Captcha] Solve failed (attempt ${attempt}):`, err.message);
       }
 
       const credsWithCaptcha = {
@@ -129,14 +130,6 @@ export class ZcodeExecutor extends DefaultExecutor {
       if (result?.response?.status === 403 && (await isCaptchaError(result.response))) {
         console.warn(`[ZCode Captcha] 403 detected on attempt ${attempt}. Invalidating token and retrying with headless browser...`);
         captchaManager.invalidate();
-        // Force next loop iteration to fetch new verifyParam
-        if (!verifyParam) {
-          try {
-            verifyParam = await captchaManager.getVerifyParam(port);
-          } catch (err) {
-            console.error("[ZCode Captcha] Error obtaining verifyParam:", err.message);
-          }
-        }
         continue;
       }
 
