@@ -30,7 +30,13 @@ export async function launch(opts = {}) {
   const launchOpts = {
     headless,
     userDataDir: USER_DATA_DIR,
-    args: ["--no-sandbox", "--no-first-run", "--disable-default-apps"],
+    args: [
+      "--no-sandbox",
+      "--no-first-run",
+      "--disable-default-apps",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+    ],
   };
 
   if (opts.proxy) {
