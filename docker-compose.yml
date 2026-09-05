@@ -16,6 +16,7 @@ services:
       NODE_ENV: production
       HEADROOM_URL: http://headroom:8787
       SENTRY_DSN: "${SENTRY_DSN:-}"
+      DISPLAY: ":99"
     depends_on:
       - headroom
 

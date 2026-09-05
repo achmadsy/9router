@@ -112,7 +112,10 @@ export class CaptchaManager {
         new Error(
           phase === "headed"
             ? `Interactive captcha timed out after ${Math.round(timeoutMs / 1000)}s. Complete the puzzle in the browser window and retry.`
-            : `Captcha verification timed out after ${Math.round(timeoutMs / 1000)}s. Ensure CloakBrowser can reach /zcode/captcha.html and retry.`
+            : `Traceless captcha verification timed out after ${Math.round(timeoutMs / 1000)}s. ` +
+              (process.platform === "linux" && !process.env.DISPLAY
+                ? "Interactive captcha puzzle is required by upstream, but no X display is available in this environment."
+                : "Ensure CloakBrowser can reach /zcode/captcha.html and retry.")
         )
       );
     }, timeoutMs);

@@ -51,16 +51,17 @@ COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machin
 COPY --from=builder /app/node_modules/cloakbrowser ./node_modules/cloakbrowser
 COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
 
-# Install chromium and required font/render dependencies for headless browser captcha solving
-RUN apk --no-cache add chromium nss freetype harfbuzz ca-certificates ttf-freefont
+# Install chromium, xvfb, and required font/render dependencies for browser captcha solving
+RUN apk --no-cache add chromium xvfb nss freetype harfbuzz ca-certificates ttf-freefont
 
 RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
+  mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
-# Fix permissions at runtime (handles mounted volumes)
+# Fix permissions at runtime (handles mounted volumes) and launch Xvfb virtual display
 RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
-  printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
+  printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexport DISPLAY="${DISPLAY:-:99}"\nif ! pgrep -x Xvfb >/dev/null 2>&1; then\n  Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -ac >/dev/null 2>&1 &\nfi\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
 EXPOSE 20128
