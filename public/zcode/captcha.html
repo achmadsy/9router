@@ -369,13 +369,11 @@
           }
         }
 
-        window.initAliyunCaptcha({
+        const captchaOptions = {
           SceneId: config.sceneId,
-          mode: 'popup',
           region: config.region,
           prefix: config.prefix,
           element: '#captcha-div',
-          button: '#captcha-trigger-btn',
           captchaLogoImg: '',
           showErrorTip: false,
           getInstance: (instance) => {
@@ -399,9 +397,6 @@
             } else if (typeof instance.startTracelessVerification === 'function') {
               console.log('[Captcha] Running traceless silent verification...');
               instance.startTracelessVerification();
-            } else {
-              const btn = document.getElementById('captcha-trigger-btn');
-              if (btn) btn.click();
             }
           },
           captchaVerifyCallback: async (param) => {
@@ -438,7 +433,14 @@
             loader.innerHTML = '<p style="color: #ef4444; font-size: 13px;">Load error. Refresh or retry the request.</p>';
             loader.classList.remove('hidden');
           }
-        });
+        };
+
+        if (interactive) {
+          captchaOptions.mode = 'popup';
+          captchaOptions.button = '#captcha-trigger-btn';
+        }
+
+        window.initAliyunCaptcha(captchaOptions);
 
       } catch (error) {
         console.error('[Captcha] Initialization error:', error);
