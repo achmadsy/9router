@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config.js";
+import { captureException, captureMessage, matchesIssueKeyword, redactSensitiveText, scrubSensitiveData } from "@/lib/sentry.js";
 
 const consoleLevels = ["log", "info", "warn", "error", "debug"];
 
@@ -53,13 +54,18 @@ function stripAnsi(str) {
 }
 
 function formatArg(arg) {
-  if (typeof arg === "string") return stripAnsi(arg);
-  if (arg instanceof Error) return stripAnsi(arg.stack || arg.message || String(arg));
-  try {
-    return stripAnsi(JSON.stringify(arg));
-  } catch {
-    return stripAnsi(String(arg));
+  let str;
+  if (typeof arg === "string") str = stripAnsi(arg);
+  else if (arg instanceof Error) str = stripAnsi(arg.stack || arg.message || String(arg));
+  else {
+    try {
+      const scrubbed = typeof scrubSensitiveData === "function" ? scrubSensitiveData(arg) : arg;
+      str = stripAnsi(JSON.stringify(scrubbed));
+    } catch {
+      str = stripAnsi(String(arg));
+    }
   }
+  return typeof redactSensitiveText === "function" ? redactSensitiveText(str) : str;
 }
 
 function appendLine(line) {
@@ -86,8 +92,31 @@ export function initConsoleLogCapture() {
   for (const level of consoleLevels) {
     state.originals[level] = console[level];
     console[level] = (...args) => {
-      appendLine(toLogLine(level, args));
+      const line = toLogLine(level, args);
+      appendLine(line);
       state.originals[level](...args);
+
+      try {
+        if (level === "error") {
+          // Skip lines already handled by dedicated Sentry reporters (logger.js, zcode executor, etc.)
+          if (!line.includes("❌ [") && !line.includes("✗ ERROR") && !line.includes("[ZCode Captcha]")) {
+            const firstArg = args[0];
+            if (firstArg instanceof Error) {
+              captureException(firstArg, { tags: { source: "console.error" } });
+            } else {
+              captureMessage(line, "error", { tags: { source: "console.error" } });
+            }
+          }
+        } else if (level === "warn") {
+          if (!line.includes("⚠️  [") && !line.includes("[ZCode Captcha]")) {
+            if (matchesIssueKeyword(line)) {
+              captureMessage(line, "warning", { tags: { source: "console.warn" } });
+            }
+          }
+        }
+      } catch {
+        // fail-open: console capture must never break application logging
+      }
     };
   }
 

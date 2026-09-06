@@ -205,7 +205,7 @@ describe("ZCode Captcha Integration & Retry Handling", () => {
       model: "glm-5.3",
     });
 
-    expect(callCount).toBe(3); // MAX_CAPTCHA_RETRIES = 3
+    expect(callCount).toBe(2); // MAX_CAPTCHA_RETRIES = 2
     expect(result.response.status).toBe(403);
   });
 
@@ -288,7 +288,7 @@ describe("ZCode Captcha Integration & Retry Handling", () => {
 
     expect(getVerifyParamSpy).toHaveBeenCalledWith(
       expect.any(Number),
-      { proxy: "http://127.0.0.1:7890" }
+      expect.objectContaining({ proxy: "http://127.0.0.1:7890" })
     );
   });
 });

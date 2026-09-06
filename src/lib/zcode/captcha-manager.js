@@ -1,6 +1,46 @@
 import { launch as launchBrowser, close as closeBrowser } from "./browser.js";
 import config from "./config.js";
 
+let dynamicSentry = null;
+
+function getSentryBridge() {
+  if (typeof globalThis !== "undefined" && globalThis.__9router_sentry) {
+    return globalThis.__9router_sentry;
+  }
+  return dynamicSentry;
+}
+
+// Fail-open dynamic load outside Next.js bundling
+if (typeof globalThis !== "undefined" && !globalThis.__9router_sentry) {
+  import("../sentry.js")
+    .then((mod) => {
+      dynamicSentry = mod;
+    })
+    .catch(() => {
+      // Safe no-op in environments without sentry.js (standalone or runner container)
+    });
+}
+
+function captureException(err, context = {}) {
+  try {
+    const bridge = getSentryBridge();
+    if (bridge && typeof bridge.captureException === "function") {
+      return bridge.captureException(err, context);
+    }
+  } catch {}
+  return null;
+}
+
+function captureMessage(msg, level = "info", context = {}) {
+  try {
+    const bridge = getSentryBridge();
+    if (bridge && typeof bridge.captureMessage === "function") {
+      return bridge.captureMessage(msg, level, context);
+    }
+  } catch {}
+  return null;
+}
+
 export class CaptchaManager {
   constructor() {
     this.cachedVerifyParam = null;
@@ -108,16 +148,21 @@ export class CaptchaManager {
         return;
       }
 
-      this._rejectPending(
-        new Error(
-          phase === "headed"
-            ? `Interactive captcha timed out after ${Math.round(timeoutMs / 1000)}s. Complete the puzzle in the browser window and retry.`
-            : `Traceless captcha verification timed out after ${Math.round(timeoutMs / 1000)}s. ` +
-              (process.platform === "linux" && !process.env.DISPLAY
-                ? "Interactive captcha puzzle is required by upstream, but no X display is available in this environment."
-                : "Ensure CloakBrowser can reach /zcode/captcha.html and retry.")
-        )
+      const timeoutErr = new Error(
+        phase === "headed"
+          ? `Interactive captcha timed out after ${Math.round(timeoutMs / 1000)}s. Complete the puzzle in the browser window and retry.`
+          : `Traceless captcha verification timed out after ${Math.round(timeoutMs / 1000)}s. ` +
+            (process.platform === "linux" && !process.env.DISPLAY
+              ? "Interactive captcha puzzle is required by upstream, but no X display is available in this environment."
+              : "Ensure CloakBrowser can reach /zcode/captcha.html and retry.")
       );
+      try {
+        captureException(timeoutErr, {
+          tags: { provider: "zcode", stage: "captcha_timeout", phase },
+          extra: { timeoutMs },
+        });
+      } catch {}
+      this._rejectPending(timeoutErr);
     }, timeoutMs);
   }
 

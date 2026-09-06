@@ -1,6 +1,6 @@
 // Logger utility for cloud
 
-import { captureMessage } from "@/lib/sentry";
+import { captureMessage, matchesIssueKeyword } from "@/lib/sentry";
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -90,6 +90,15 @@ export function warn(tag, message, data) {
     const dataStr = data ? ` ${formatData(data)}` : "";
     console.warn(`[${formatTime()}] ⚠️  [${tag}] ${message}${dataStr}`);
   }
+  try {
+    const fullText = `${tag} ${message} ${data ? formatData(data) : ""}`;
+    if (matchesIssueKeyword(fullText) || LEVEL <= LOG_LEVELS.WARN) {
+      captureMessage(`[${tag}] ${message}`, "warning", {
+        tags: { tag, kind: "warn" },
+        extra: data ? { data } : undefined,
+      });
+    }
+  } catch { /* fail-open */ }
 }
 
 export function error(tag, message, data) {

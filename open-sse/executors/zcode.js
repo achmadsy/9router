@@ -8,6 +8,7 @@ import {
 } from "../../src/lib/zcode/captcha-service.js";
 import { applyZcodeCodingPlanHeaders } from "../../src/lib/zcode/headers.js";
 import { GLM_CODING_PLAN_MODEL_MAP } from "../../src/lib/zcode/constants.js";
+import { captureException, captureMessage } from "../rtk/sentry.js";
 
 const MAX_CAPTCHA_RETRIES = 2;
 
@@ -82,6 +83,13 @@ export class ZcodeExecutor extends DefaultExecutor {
         message.toLowerCase().includes("verify failed") ||
         code === "captcha_required"
       ) {
+        try {
+          captureMessage(
+            `[ZCode Captcha] Upstream triggered verification/captcha: ${message || code}`,
+            "error",
+            { tags: { provider: "zcode", stage: "upstream_captcha", code: String(code) } }
+          );
+        } catch {}
         return {
           status: 403,
           message:
@@ -139,6 +147,12 @@ export class ZcodeExecutor extends DefaultExecutor {
           `[ZCode Captcha] Solve failed (attempt ${attempt}${isHeadedAttempt ? " - headed" : " - headless"}):`,
           err.message,
         );
+        try {
+          captureException(err, {
+            tags: { provider: "zcode", stage: "captcha_solve", attempt: String(attempt) },
+            extra: { isHeadedAttempt, port, connectionProxyUrl },
+          });
+        } catch {}
       }
 
       const credsWithCaptcha = {
@@ -160,13 +174,25 @@ export class ZcodeExecutor extends DefaultExecutor {
         if (attempt < MAX_CAPTCHA_RETRIES) {
           const nextAttempt = attempt + 1;
           const nextMode = nextAttempt === MAX_CAPTCHA_RETRIES ? "headed browser on display :99" : "headless browser";
-          console.warn(
-            `[ZCode Captcha] Challenge (${result.response.status}) detected on attempt ${attempt}. Invalidating token and retrying with ${nextMode}...`,
-          );
+          const msg = `[ZCode Captcha] Challenge (${result.response.status}) detected on attempt ${attempt}. Invalidating token and retrying with ${nextMode}...`;
+          console.warn(msg);
+          try {
+            captureMessage(
+              msg,
+              "warning",
+              { tags: { provider: "zcode", stage: "captcha_challenge", attempt: String(attempt) } }
+            );
+          } catch {}
         } else {
-          console.warn(
-            `[ZCode Captcha] Challenge (${result.response.status}) persisted after ${attempt} attempts.`,
-          );
+          const msg = `[ZCode Captcha] Challenge (${result.response.status}) persisted after ${attempt} attempts.`;
+          console.error(msg);
+          try {
+            captureMessage(
+              msg,
+              "error",
+              { tags: { provider: "zcode", stage: "captcha_persisted", attempt: String(attempt) } }
+            );
+          } catch {}
         }
         continue;
       }

@@ -40,6 +40,7 @@ COPY --from=builder /app/src/mitm ./src/mitm
 # ZCode and OAuth executors import from src/lib at runtime outside Next.js bundling.
 COPY --from=builder /app/src/lib/zcode ./src/lib/zcode
 COPY --from=builder /app/src/lib/oauth ./src/lib/oauth
+COPY --from=builder /app/src/lib/sentry.js ./src/lib/sentry.js
 # Standalone node_modules may omit deps only required by the MITM child process.
 COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
 # Ensure `next` is available at runtime in case tracing did not include it.

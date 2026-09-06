@@ -111,10 +111,14 @@ export async function refreshAccessToken(provider, refreshToken, credentials, lo
 
     if (!response.ok) {
       const errorText = await response.text();
-      log?.error?.("TOKEN_REFRESH", `Failed to refresh token for ${provider}`, {
-        status: response.status,
-        error: errorText,
-      });
+      if (log?.error) {
+        log.error("TOKEN_REFRESH", `Failed to refresh token for ${provider}`, {
+          status: response.status,
+          error: errorText,
+        });
+      } else {
+        console.error(`[TOKEN_REFRESH] Failed to refresh token for ${provider}`, JSON.stringify({ status: response.status, error: errorText }));
+      }
       return null;
     }
 
@@ -241,14 +245,22 @@ export function classifyOAuthRefreshError(errorText = "", status = 0) {
     parsed = null;
   }
 
-  const code = parsed?.error?.code || parsed?.error || parsed?.error_code || "";
-  const description = parsed?.error_description || parsed?.message || errorText || "";
+  const code = parsed?.error?.code || parsed?.error || parsed?.error_code || parsed?.code || "";
+  const description = parsed?.error_description || parsed?.error?.message || parsed?.message || (typeof errorText === "string" ? errorText : "") || "";
   const combined = `${code} ${description}`.toLowerCase();
   const permanent = [
     "refresh_token_expired",
     "refresh_token_reused",
     "refresh_token_invalidated",
+    "refresh_token_already_used",
+    "already used",
     "invalid_grant",
+    "invalid_request",
+    "token_expired",
+    "token has been revoked",
+    "revoked",
+    "unauthorized_client",
+    "access_denied",
   ].some((marker) => combined.includes(marker));
 
   return { status, code, description, permanent };
@@ -275,10 +287,15 @@ export async function refreshCodexToken(refreshToken, log) {
         const errorText = await response.text();
         const failure = classifyOAuthRefreshError(errorText, response.status);
         if (failure.permanent) {
-          log?.error?.("TOKEN_REFRESH", "Codex refresh token already used or invalid. Re-auth required.", {
-            status: response.status,
-            code: failure.code,
-          });
+          const msg = "Codex refresh token already used or invalid. Re-auth required.";
+          if (log?.error) {
+            log.error("TOKEN_REFRESH", msg, {
+              status: response.status,
+              code: failure.code,
+            });
+          } else {
+            console.error(`[TOKEN_REFRESH] ${msg}`, JSON.stringify({ status: response.status, code: failure.code }));
+          }
           return { error: "unrecoverable_refresh_error", code: failure.code };
         }
 
