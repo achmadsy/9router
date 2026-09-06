@@ -13,6 +13,7 @@ export const ZCODE_ZAI_DEFAULT_EXPIRES_IN = 3600;
 /** Upstream model IDs for Coding Plan (case-sensitive). */
 export const GLM_CODING_PLAN_MODEL_MAP = {
   "glm-5.3": "GLM-5.3",
+  "glm-5.3-flash": "GLM-5.3-Flash",
   "glm-5.2": "GLM-5.2",
   "glm-5.1": "GLM-5.1",
   "glm-5-turbo": "GLM-5-Turbo",

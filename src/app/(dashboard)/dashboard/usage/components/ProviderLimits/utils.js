@@ -362,6 +362,7 @@ export function parseQuotaData(provider, data) {
         break;
 
       case "antigravity":
+      case "zcode":
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([modelKey, quota]) => {
             normalizedQuotas.push({
