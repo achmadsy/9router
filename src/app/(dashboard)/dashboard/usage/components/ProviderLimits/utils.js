@@ -364,10 +364,10 @@ export function parseQuotaData(provider, data) {
       case "antigravity":
       case "zcode":
         if (data.quotas) {
-          Object.entries(data.quotas).forEach(([modelKey, quota]) => {
+          Object.entries(data.quotas).forEach(([key, quota]) => {
             normalizedQuotas.push({
-              name: quota.displayName || modelKey,
-              modelKey: modelKey, // Keep modelKey for sorting
+              name: quota.displayName || key,
+              modelKey: quota.modelKey || key, // Keep modelKey for sorting
               used: quota.used || 0,
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
