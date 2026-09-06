@@ -36,6 +36,9 @@ COPY --from=builder /app/custom-server.js ./custom-server.js
 COPY --from=builder /app/open-sse ./open-sse
 # Next file tracing can omit sibling files; MITM runs server.js as a separate process.
 COPY --from=builder /app/src/mitm ./src/mitm
+# ZCode and OAuth executors import from src/lib at runtime outside Next.js bundling.
+COPY --from=builder /app/src/lib/zcode ./src/lib/zcode
+COPY --from=builder /app/src/lib/oauth ./src/lib/oauth
 # Standalone node_modules may omit deps only required by the MITM child process.
 COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
 # Ensure `next` is available at runtime in case tracing did not include it.
@@ -60,8 +63,9 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
 # Fix permissions at runtime (handles mounted volumes) and launch Xvfb virtual display
-RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
-  printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexport DISPLAY="${DISPLAY:-:99}"\nif ! pgrep -x Xvfb >/dev/null 2>&1; then\n  Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -ac >/dev/null 2>&1 &\nfi\nexec su-exec node "$@"\n' > /entrypoint.sh && \
+RUN apk --no-cache upgrade && apk --no-cache add su-exec x11vnc novnc websockify && \
+  test -f /usr/share/novnc/vnc.html && \
+  printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexport DISPLAY="${DISPLAY:-:99}"\nif ! pgrep -x Xvfb >/dev/null 2>&1; then\n  Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -ac &\nfi\nif [ "${NOVNC_ENABLED:-false}" = "true" ]; then\n  attempts=0\n  until su-exec node x11vnc -noshm -display "$DISPLAY" -localhost -rfbport 5900 -nopw -forever -shared -bg; do\n    attempts=$((attempts + 1))\n    if [ "$attempts" -ge 10 ]; then\n      printf "noVNC: failed to attach to X display; continuing without viewer\\n" >&2\n      break\n    fi\n    sleep 1\n  done\n  if [ "$attempts" -lt 10 ]; then\n    su-exec node websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 &\n  fi\nfi\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
 EXPOSE 20128

@@ -1,4 +1,4 @@
-import { launch as launchBrowser } from "./browser.js";
+import { launch as launchBrowser, close as closeBrowser } from "./browser.js";
 import config from "./config.js";
 
 export class CaptchaManager {
@@ -71,7 +71,7 @@ export class CaptchaManager {
     this._headedFallbackAttempted = false;
   }
 
-  _resolvePending(verifyParam) {
+  async _resolvePending(verifyParam) {
     this._clearVerificationTimers();
     if (this.resolveCallback) {
       this.resolveCallback(verifyParam);
@@ -81,7 +81,7 @@ export class CaptchaManager {
     this.rejectCallback = null;
     this._verificationPhase = null;
     this._headedFallbackAttempted = false;
-    this._closeCaptchaPage();
+    await this._closeCaptchaPage();
   }
 
   _armPhaseTimeout(phase) {
@@ -156,8 +156,43 @@ export class CaptchaManager {
     }
 
     const browserInstance = await launchBrowser({ headless, proxy });
-    const context = browserInstance.contexts()[0] || (await browserInstance.newContext());
+    let context;
+    if (typeof browserInstance.contexts === "function") {
+      context = browserInstance.contexts()[0];
+      if (!context) {
+        context = await browserInstance.newContext({
+          viewport: { width: 1280, height: 800 },
+          userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        });
+      }
+    } else {
+      context = browserInstance;
+    }
+
+    if (context && typeof context.addInitScript === "function") {
+      await context.addInitScript(() => {
+        try {
+          Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+        } catch {}
+      });
+    }
+
     this.captchaPage = await context.newPage();
+
+    if (proxy) {
+      try {
+        const parsed = new URL(proxy);
+        if (parsed.username && parsed.password) {
+          const auth = {
+            username: decodeURIComponent(parsed.username),
+            password: decodeURIComponent(parsed.password),
+          };
+          if (typeof this.captchaPage.authenticate === "function") {
+            await this.captchaPage.authenticate(auth);
+          }
+        }
+      } catch {}
+    }
 
     const query = interactive ? "?mode=interactive" : "";
     await this.captchaPage.goto(`http://localhost:${port}/zcode/captcha.html${query}`, {
@@ -185,6 +220,7 @@ export class CaptchaManager {
 
     this._headedFallbackAttempted = true;
     await this._closeCaptchaPage();
+    await closeBrowser();
     await this.openVerificationPage(this._activePort, { headless: false, interactive: true, proxy: this._activeProxy });
   }
 
@@ -197,7 +233,10 @@ export class CaptchaManager {
       return this.pendingPromise;
     }
 
-    this._headedFallbackAttempted = false;
+    const headless = options.headless !== false;
+    const interactive = options.interactive === true;
+
+    this._headedFallbackAttempted = !headless;
     this._activePort = port;
     this._activeProxy = options.proxy || null;
 
@@ -206,7 +245,7 @@ export class CaptchaManager {
       this.rejectCallback = reject;
     });
 
-    this.openVerificationPage(port, { headless: true, interactive: false, proxy: options.proxy || null }).catch((err) => {
+    this.openVerificationPage(port, { headless, interactive, proxy: options.proxy || null }).catch((err) => {
       this._rejectPending(new Error("Browser launch failed: " + err.message));
     });
 

@@ -6,7 +6,7 @@ export default {
   captchaHeadedFallback:
     process.env.ZCODE_CAPTCHA_HEADED_FALLBACK !== "false" &&
     (process.platform !== "linux" || Boolean(process.env.DISPLAY)),
-  captchaHeadlessTimeoutMs: parseInt(process.env.CAPTCHA_HEADLESS_TIMEOUT_MS || "45000", 10),
+  captchaHeadlessTimeoutMs: parseInt(process.env.CAPTCHA_HEADLESS_TIMEOUT_MS || "12000", 10),
   captchaInteractiveTimeoutMs: parseInt(process.env.CAPTCHA_INTERACTIVE_TIMEOUT_MS || "300000", 10),
   captchaConfigCacheTTL: parseInt(process.env.CAPTCHA_CONFIG_CACHE_TTL || "600000", 10),
   codingPlanUrl:

@@ -9,7 +9,7 @@ import {
 import { applyZcodeCodingPlanHeaders } from "../../src/lib/zcode/headers.js";
 import { GLM_CODING_PLAN_MODEL_MAP } from "../../src/lib/zcode/constants.js";
 
-const MAX_CAPTCHA_RETRIES = 3;
+const MAX_CAPTCHA_RETRIES = 2;
 
 export class ZcodeExecutor extends DefaultExecutor {
   constructor(provider = "zcode") {
@@ -76,8 +76,10 @@ export class ZcodeExecutor extends DefaultExecutor {
       }
 
       if (
+        code === "3007" ||
         message.toLowerCase().includes("captcha") ||
         message.toLowerCase().includes("verify token") ||
+        message.toLowerCase().includes("verify failed") ||
         code === "captcha_required"
       ) {
         return {
@@ -123,14 +125,20 @@ export class ZcodeExecutor extends DefaultExecutor {
 
     let lastResult = null;
     for (let attempt = 1; attempt <= MAX_CAPTCHA_RETRIES; attempt++) {
-      // Proactively solve captcha on every attempt (incl. first) — first attempt
-      // without a verify param gets 403-challenged upstream. Solve failure is
-      // fail-open: log and send the plain request without the param.
+      // Attempt 1 runs headless popup auto-trigger; attempt 2 falls back to headed browser on display :99
+      const isHeadedAttempt = attempt === MAX_CAPTCHA_RETRIES;
       let verifyParam = null;
       try {
-        verifyParam = await captchaManager.getVerifyParam(port, { proxy: connectionProxyUrl || null });
+        verifyParam = await captchaManager.getVerifyParam(port, {
+          proxy: connectionProxyUrl || null,
+          headless: !isHeadedAttempt,
+          interactive: true,
+        });
       } catch (err) {
-        console.error(`[ZCode Captcha] Solve failed (attempt ${attempt}):`, err.message);
+        console.error(
+          `[ZCode Captcha] Solve failed (attempt ${attempt}${isHeadedAttempt ? " - headed" : " - headless"}):`,
+          err.message,
+        );
       }
 
       const credsWithCaptcha = {
@@ -144,9 +152,22 @@ export class ZcodeExecutor extends DefaultExecutor {
       const result = await super.execute({ ...params, credentials: credsWithCaptcha });
       lastResult = result;
 
-      if (result?.response?.status === 403 && (await isCaptchaError(result.response))) {
-        console.warn(`[ZCode Captcha] 403 detected on attempt ${attempt}. Invalidating token and retrying with headless browser...`);
+      if (
+        (result?.response?.status === 403 || result?.response?.status === 400) &&
+        (await isCaptchaError(result.response))
+      ) {
         captchaManager.invalidate();
+        if (attempt < MAX_CAPTCHA_RETRIES) {
+          const nextAttempt = attempt + 1;
+          const nextMode = nextAttempt === MAX_CAPTCHA_RETRIES ? "headed browser on display :99" : "headless browser";
+          console.warn(
+            `[ZCode Captcha] Challenge (${result.response.status}) detected on attempt ${attempt}. Invalidating token and retrying with ${nextMode}...`,
+          );
+        } else {
+          console.warn(
+            `[ZCode Captcha] Challenge (${result.response.status}) persisted after ${attempt} attempts.`,
+          );
+        }
         continue;
       }
 

@@ -373,6 +373,8 @@
           SceneId: config.sceneId,
           region: config.region,
           prefix: config.prefix,
+          mode: 'popup',
+          button: '#captcha-trigger-btn',
           element: '#captcha-div',
           captchaLogoImg: '',
           showErrorTip: false,
@@ -381,22 +383,14 @@
             window.__captchaInstance = instance;
             loader.classList.add('hidden');
 
-            // Interactive fallback: show puzzle UI. Default: try traceless first.
-            if (interactive) {
-              console.log('[Captcha] Interactive mode — showing captcha puzzle');
-              const btn = document.getElementById('captcha-trigger-btn');
-              if (btn) {
+            const btn = document.getElementById('captcha-trigger-btn');
+            if (btn) {
+              if (interactive) {
                 btn.style.display = 'block';
                 btn.innerText = 'Click to Complete Verification';
                 btn.style.cssText = 'display:block;margin:15px auto;padding:12px 24px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;';
-                btn.click();
               }
-              if (typeof instance.startTracelessVerification === 'function') {
-                instance.startTracelessVerification();
-              }
-            } else if (typeof instance.startTracelessVerification === 'function') {
-              console.log('[Captcha] Running traceless silent verification...');
-              instance.startTracelessVerification();
+              btn.click();
             }
           },
           captchaVerifyCallback: async (param) => {
@@ -434,11 +428,6 @@
             loader.classList.remove('hidden');
           }
         };
-
-        if (interactive) {
-          captchaOptions.mode = 'popup';
-          captchaOptions.button = '#captcha-trigger-btn';
-        }
 
         window.initAliyunCaptcha(captchaOptions);
 
