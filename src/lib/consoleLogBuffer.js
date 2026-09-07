@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config.js";
 import { captureException, captureMessage, matchesIssueKeyword, redactSensitiveText, scrubSensitiveData } from "@/lib/sentry.js";
+import { isNextjsSpanWarning } from "@/lib/nextjsNoise.js";
 
 const consoleLevels = ["log", "info", "warn", "error", "debug"];
 
@@ -93,6 +94,9 @@ export function initConsoleLogCapture() {
     state.originals[level] = console[level];
     console[level] = (...args) => {
       const line = toLogLine(level, args);
+      // Drop known-harmless Next.js internal tracing warnings (vercel/next.js#91831):
+      // fetch span leaking as root span on cold start. Pure telemetry noise.
+      if (isNextjsSpanWarning(line)) return;
       appendLine(line);
       state.originals[level](...args);
 

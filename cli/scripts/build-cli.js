@@ -321,6 +321,34 @@ function buildCliPackage() {
     console.log("⏭️  No updater files found\n");
   }
 
+  // Step 7c: open-sse ships as raw ESM and imports sibling src/lib files at
+  // Node runtime (zcode executor, kiro/xai token refresh, thought-signature
+  // kv, rtk sentry fallback). Next tracing + NEXT_TRACING_ROOT_MODE=workspace
+  // skip copy-standalone-assets.mjs, so CLI must copy them itself.
+  console.log("7️⃣ c Copying open-sse runtime src/lib siblings...");
+  const runtimeSrcCopies = [
+    ["src/lib/zcode", "src/lib/zcode"],
+    ["src/lib/oauth", "src/lib/oauth"],
+    ["src/lib/sentry.js", "src/lib/sentry.js"],
+    ["src/lib/db", "src/lib/db"],
+  ];
+  for (const [rel, destRel] of runtimeSrcCopies) {
+    const src = path.join(appDir, rel);
+    const dest = path.join(cliAppDir, destRel);
+    if (!fs.existsSync(src)) {
+      console.log(`⏭️  No ${rel} found`);
+      continue;
+    }
+    if (fs.statSync(src).isDirectory()) {
+      copyRecursive(src, dest);
+    } else {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+    }
+    console.log(`✅ Copied ${rel}`);
+  }
+  console.log("");
+
   // Step 8: Build MITM server (config driven - see app/cli/scripts/buildMitm.js)
   console.log("8️⃣  Building MITM server...");
   try {

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as sentryLib from "@/lib/sentry.js";
 import * as logger from "@/sse/utils/logger.js";
-import { initConsoleLogCapture } from "@/lib/consoleLogBuffer.js";
+import { initConsoleLogCapture, getConsoleLogs } from "@/lib/consoleLogBuffer.js";
 import { ZcodeExecutor } from "open-sse/executors/zcode.js";
 import { classifyOAuthRefreshError } from "open-sse/services/tokenRefresh/providers.js";
+import { isNextjsSpanWarning } from "@/lib/nextjsNoise.js";
 
 describe("Sentry reporting gaps & issue detection", () => {
   const originalEnv = { ...process.env };
@@ -56,6 +57,40 @@ describe("Sentry reporting gaps & issue detection", () => {
           `Expected "${sample}" NOT to match issue keywords`
         ).toBe(false);
       }
+    });
+  });
+
+  describe("Next.js internal tracing noise (vercel/next.js#91831)", () => {
+    it("recognizes the root-span warning for any span type", () => {
+      expect(isNextjsSpanWarning("Unexpected root span type 'AppRender.fetch'. Please report this Next.js issue https://github.com/vercel/next.js")).toBe(true);
+      expect(isNextjsSpanWarning("Unexpected root span type 'Node.runHandler'. Please report this Next.js issue https://github.com/vercel/next.js")).toBe(true);
+    });
+
+    it("does not swallow real warnings that merely look similar", () => {
+      expect(isNextjsSpanWarning("Unexpected root span type reported by user")).toBe(false);
+      expect(isNextjsSpanWarning("Unexpected error while rendering dashboard")).toBe(false);
+      expect(isNextjsSpanWarning("")).toBe(false);
+      expect(isNextjsSpanWarning(null)).toBe(false);
+    });
+
+    it("console.warn of the root-span warning is dropped before Sentry keyword matching", () => {
+      // The warning contains no issue keyword, so even without the drop it
+      // would never reach Sentry — but assert the drop happens at capture
+      // level too, so the dashboard log buffer stays clean.
+      const warning = "Unexpected root span type 'AppRender.fetch'. Please report this Next.js issue https://github.com/vercel/next.js";
+      expect(sentryLib.matchesIssueKeyword(warning)).toBe(false);
+      expect(isNextjsSpanWarning(warning)).toBe(true);
+    });
+
+    it("patched console drops the span warning from the log buffer but keeps real warns", () => {
+      vi.spyOn(sentryLib, "isSentryReady").mockReturnValue(false);
+      initConsoleLogCapture();
+      const before = getConsoleLogs().length;
+      console.warn("Unexpected root span type 'AppRender.fetch'. Please report this Next.js issue https://github.com/vercel/next.js");
+      console.warn("rate limit hit on upstream provider");
+      const added = getConsoleLogs().slice(before);
+      expect(added.some((l) => l.includes("root span"))).toBe(false);
+      expect(added.some((l) => l.includes("rate limit hit"))).toBe(true);
     });
   });
 

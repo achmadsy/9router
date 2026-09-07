@@ -48,6 +48,25 @@ describe("standalone build assets", () => {
       .toBe("wrapper");
   });
 
+  it("copies open-sse runtime src/lib siblings that Next tracing omits", () => {
+    const projectRoot = createBuildFixture(".next");
+    mkdirSync(join(projectRoot, "src", "lib", "zcode"), { recursive: true });
+    mkdirSync(join(projectRoot, "src", "lib", "oauth"), { recursive: true });
+    mkdirSync(join(projectRoot, "src", "lib", "db", "helpers"), { recursive: true });
+    writeFileSync(join(projectRoot, "src", "lib", "zcode", "systemPrompt.js"), "zcode");
+    writeFileSync(join(projectRoot, "src", "lib", "oauth", "kiroExternalIdp.js"), "oauth");
+    writeFileSync(join(projectRoot, "src", "lib", "sentry.js"), "sentry");
+    writeFileSync(join(projectRoot, "src", "lib", "db", "helpers", "kvStore.js"), "kv");
+
+    copyStandaloneAssets({ projectRoot, distDir: ".next" });
+
+    const standalone = join(projectRoot, ".next", "standalone");
+    expect(readFileSync(join(standalone, "src", "lib", "zcode", "systemPrompt.js"), "utf8")).toBe("zcode");
+    expect(readFileSync(join(standalone, "src", "lib", "oauth", "kiroExternalIdp.js"), "utf8")).toBe("oauth");
+    expect(readFileSync(join(standalone, "src", "lib", "sentry.js"), "utf8")).toBe("sentry");
+    expect(readFileSync(join(standalone, "src", "lib", "db", "helpers", "kvStore.js"), "utf8")).toBe("kv");
+  });
+
   it("does not modify workspace-traced CLI builds", () => {
     const projectRoot = createBuildFixture(".next-cli-build");
     const previousMode = process.env.NEXT_TRACING_ROOT_MODE;
@@ -64,3 +83,4 @@ describe("standalone build assets", () => {
       .toThrow();
   });
 });
+

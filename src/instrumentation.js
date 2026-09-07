@@ -15,3 +15,24 @@ export async function register() {
     startModelCatalogSync();
   }
 }
+
+// Next.js calls this for every request-level error (render failures, route
+// handler throws, 5xx). Route them to Sentry with request context — console
+// capture alone misses these when the response is a clean 500 page.
+export function onRequestError(err, request, context) {
+  try {
+    const { captureException } = globalThis.__9router_sentry || {};
+    if (typeof captureException === "function") {
+      captureException(err, {
+        tags: { source: "nextjs.onRequestError" },
+        extra: {
+          path: request?.path,
+          method: request?.method,
+          route: context?.router?.pathname ?? context?.routePath,
+        },
+      });
+    }
+  } catch {
+    // fail-open
+  }
+}
