@@ -23,6 +23,13 @@ export default function ConsoleLogClient() {
   const [logs, setLogs] = useState([]);
   const [connected, setConnected] = useState(false);
   const logRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
+
+  const handleScroll = () => {
+    if (!logRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = logRef.current;
+    shouldAutoScrollRef.current = scrollHeight - scrollTop - clientHeight <= 4;
+  };
 
   const handleClear = async () => {
     try {
@@ -62,9 +69,9 @@ export default function ConsoleLogClient() {
     return () => es.close();
   }, []);
 
-  // Auto-scroll to bottom on new logs
+  // Auto-scroll only while the user is already at the bottom
   useEffect(() => {
-    if (!logRef.current) return;
+    if (!logRef.current || !shouldAutoScrollRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
@@ -78,6 +85,7 @@ export default function ConsoleLogClient() {
         </div>
         <div
           ref={logRef}
+          onScroll={handleScroll}
           className="bg-black rounded-b-lg p-4 text-xs font-mono h-[calc(100vh-220px)] overflow-y-auto"
         >
           {logs.length === 0 ? (
