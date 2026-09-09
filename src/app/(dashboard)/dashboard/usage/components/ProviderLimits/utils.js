@@ -415,6 +415,29 @@ export function parseQuotaData(provider, data) {
               remainingPercentage: representative.remainingPercentage,
             });
           });
+
+          // Synthesize a missing 5h/weekly sibling by cloning the observed
+          // partner's quota values (unknown windows never participate).
+          const byKey = new Map(normalizedQuotas.map((quota) => [quota.modelKey, quota]));
+          const groupNameByKey = new Map(groups.map((group) => [group.modelKey, group.name]));
+          const pairs = [
+            ["gemini-5h", "gemini-weekly"],
+            ["others-5h", "others-weekly"],
+          ];
+          for (const [firstKey, secondKey] of pairs) {
+            const first = byKey.get(firstKey);
+            const second = byKey.get(secondKey);
+            if (first && !second) {
+              byKey.set(secondKey, { ...first, modelKey: secondKey, name: groupNameByKey.get(secondKey) });
+            } else if (second && !first) {
+              byKey.set(firstKey, { ...second, modelKey: firstKey, name: groupNameByKey.get(firstKey) });
+            }
+          }
+          normalizedQuotas.length = 0;
+          for (const group of groups) {
+            const quota = byKey.get(group.modelKey);
+            if (quota) normalizedQuotas.push(quota);
+          }
         }
         break;
 
