@@ -375,59 +375,44 @@ export function parseQuotaData(provider, data) {
 
       case "antigravity":
         if (data.quotas) {
-          const entries = Object.entries(data.quotas);
-          const geminiModels = entries.filter(([k]) => k.startsWith("gemini-") && !k.includes("image"));
-          const claudeModels = entries.filter(([k]) => k.startsWith("claude-"));
-          const imageModels = entries.filter(([k]) => k.includes("image"));
-          const otherModels = entries.filter(([k]) => !k.startsWith("gemini-") && !k.startsWith("claude-") && !k.includes("image"));
+          const fiveHoursMs = 5 * 60 * 60 * 1000;
+          const now = Date.now();
+          const groups = [
+            { modelKey: "gemini-5h", name: "Gemini (5h)", models: [] },
+            { modelKey: "gemini-weekly", name: "Gemini (Weekly)", models: [] },
+            { modelKey: "others-5h", name: "Others (5h)", models: [] },
+            { modelKey: "others-weekly", name: "Others (Weekly)", models: [] },
+            { modelKey: "gemini-unknown", name: "Gemini (Unknown window)", models: [] },
+            { modelKey: "others-unknown", name: "Others (Unknown window)", models: [] },
+          ];
+          const groupMap = new Map(groups.map((group) => [group.modelKey, group]));
 
-          if (geminiModels.length > 0) {
-            const rep = geminiModels.reduce((min, cur) =>
-              (cur[1].remainingPercentage ?? 100) < (min[1].remainingPercentage ?? 100) ? cur : min
-            )[1];
-            normalizedQuotas.push({
-              name: "Gemini (Flash / Pro)",
-              modelKey: "gemini",
-              used: rep.used || 0,
-              total: rep.total || 0,
-              resetAt: rep.resetAt || null,
-              remainingPercentage: rep.remainingPercentage,
-            });
-          }
-
-          if (claudeModels.length > 0) {
-            const rep = claudeModels.reduce((min, cur) =>
-              (cur[1].remainingPercentage ?? 100) < (min[1].remainingPercentage ?? 100) ? cur : min
-            )[1];
-            normalizedQuotas.push({
-              name: "Claude (Sonnet / Opus)",
-              modelKey: "claude",
-              used: rep.used || 0,
-              total: rep.total || 0,
-              resetAt: rep.resetAt || null,
-              remainingPercentage: rep.remainingPercentage,
-            });
-          }
-
-          imageModels.forEach(([modelKey, quota]) => {
-            normalizedQuotas.push({
-              name: quota.displayName || modelKey,
-              modelKey,
-              used: quota.used || 0,
-              total: quota.total || 0,
-              resetAt: quota.resetAt || null,
-              remainingPercentage: quota.remainingPercentage,
-            });
+          Object.entries(data.quotas).forEach(([modelKey, quota]) => {
+            const resetAtMs = quota.resetAt ? new Date(quota.resetAt).getTime() : NaN;
+            const timeUntilReset = resetAtMs - now;
+            // Upstream exposes no interval metadata. Valid future reset proximity is
+            // the only window signal; a weekly reset in its final 5h remains ambiguous.
+            const window = !Number.isFinite(resetAtMs) || timeUntilReset <= 0
+              ? "unknown"
+              : timeUntilReset <= fiveHoursMs
+                ? "5h"
+                : "weekly";
+            const family = modelKey.startsWith("gemini-") ? "gemini" : "others";
+            groupMap.get(`${family}-${window}`).models.push(quota);
           });
 
-          otherModels.forEach(([modelKey, quota]) => {
+          groups.forEach((group) => {
+            if (group.models.length === 0) return;
+            const representative = group.models.reduce((lowest, quota) =>
+              (quota.remainingPercentage ?? 100) < (lowest.remainingPercentage ?? 100) ? quota : lowest
+            );
             normalizedQuotas.push({
-              name: quota.displayName || modelKey,
-              modelKey,
-              used: quota.used || 0,
-              total: quota.total || 0,
-              resetAt: quota.resetAt || null,
-              remainingPercentage: quota.remainingPercentage,
+              name: group.name,
+              modelKey: group.modelKey,
+              used: representative.used || 0,
+              total: representative.total || 0,
+              resetAt: representative.resetAt || null,
+              remainingPercentage: representative.remainingPercentage,
             });
           });
         }
