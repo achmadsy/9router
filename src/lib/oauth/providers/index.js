@@ -90,8 +90,8 @@ export async function generateAuthData(providerName, redirectUri, meta) {
     ? await provider.prepareConfig(provider.config, meta || {})
     : provider.config;
   const { codeVerifier: pkceVerifier, codeChallenge, state: pkceState } = generatePKCE(provider.pkceVerifierBytes);
-  // Trae uses loginTraceID (set by prepareConfig) as the callback matcher, not PKCE state.
-  const state = config.loginTraceID || pkceState;
+  // Some providers receive callback state from upstream during prepareConfig.
+  const state = config._zcodeState || config.loginTraceID || pkceState;
   // Zed: codeVerifier carries the encoded RSA private key (from prepareConfig), not a PKCE verifier.
   const codeVerifier = config.privateKeyVerifier || pkceVerifier;
 
@@ -114,6 +114,8 @@ export async function generateAuthData(providerName, redirectUri, meta) {
     flowType: provider.flowType,
     fixedPort: provider.fixedPort,
     callbackPath: provider.callbackPath || "/callback",
+    ...(config._zcodeFlowId ? { flowId: config._zcodeFlowId } : {}),
+    ...(config._zcodeExpiresIn ? { expiresIn: config._zcodeExpiresIn } : {}),
   };
 }
 
@@ -123,9 +125,11 @@ export async function generateAuthData(providerName, redirectUri, meta) {
  */
 export async function exchangeTokens(providerName, code, redirectUri, codeVerifier, state, meta) {
   const provider = getProvider(providerName);
-  const config = provider.prepareConfig
-    ? await provider.prepareConfig(provider.config, meta || {})
-    : provider.config;
+  const config = provider.prepareExchangeConfig
+    ? await provider.prepareExchangeConfig(provider.config, meta || {})
+    : provider.prepareConfig
+      ? await provider.prepareConfig(provider.config, meta || {})
+      : provider.config;
 
   const tokens = await provider.exchangeToken(config, code, redirectUri, codeVerifier, state, meta || {});
 
@@ -149,7 +153,7 @@ export async function requestDeviceCode(providerName, codeChallenge, options) {
 }
 
 /**
- * Poll for token (for device_code flow)
+ * Poll for token (device-code flows and explicit provider polling flows)
  * @param {string} providerName - Provider name
  * @param {string} deviceCode - Device code from requestDeviceCode
  * @param {string} codeVerifier - PKCE code verifier (optional for some providers)
@@ -157,8 +161,8 @@ export async function requestDeviceCode(providerName, codeChallenge, options) {
  */
 export async function pollForToken(providerName, deviceCode, codeVerifier, extraData) {
   const provider = getProvider(providerName);
-  if (provider.flowType !== "device_code") {
-    throw new Error(`Provider ${providerName} does not support device code flow`);
+  if (provider.flowType !== "device_code" && !provider.pollToken) {
+    throw new Error(`Provider ${providerName} does not support token polling`);
   }
 
   const result = await provider.pollToken(provider.config, deviceCode, codeVerifier, extraData);

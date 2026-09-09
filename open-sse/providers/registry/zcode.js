@@ -2,15 +2,15 @@ const zcode = {
   id: "zcode",
   alias: "zcode",
   display: {
-    name: "ZCode (Z.AI)",
-    description: "Z.AI Coding Plan via ZCode OAuth subscription",
+    name: "ZCode (Z.AI) (WIP)",
+    description: "Z.AI Start Plan via ZCode OAuth subscription",
     icon: "glm",
     color: "#3B82F6",
     textIcon: "ZC",
     docUrl: "https://z.ai",
     website: "https://z.ai",
     notice: {
-      text: "Z.AI Coding Plan (Subscription-only). Requires active ZCode membership.",
+      text: "Z.AI Start Plan (subscription-only). Requires active ZCode membership.",
       signupUrl: "https://z.ai",
     },
   },

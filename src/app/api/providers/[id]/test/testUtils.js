@@ -19,6 +19,7 @@ import {
   ZCODE_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { buildZcodeStartPlanBalanceUrl } from "@/lib/zcode/config.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -127,18 +128,10 @@ const OAUTH_TEST_CONFIG = {
     },
   },
   zcode: {
-    url: "https://zcode.z.ai/api/v1/zcode-plan/billing/current",
+    url: buildZcodeStartPlanBalanceUrl(),
     method: "GET",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
-    extraHeaders: {
-      Accept: "application/json",
-      "User-Agent": "ZCode/3.1.0",
-      "X-ZCode-App-Version": "3.1.0",
-      "X-ZCode-Agent": "glm",
-      "X-Title": "Z Code@electron",
-      "HTTP-Referer": "https://zcode.z.ai/",
-    },
     refreshable: false,
   },
 };
@@ -409,9 +402,12 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
 
   try {
     const testUrl = config.buildUrl ? config.buildUrl(accessToken) : config.url;
+    const extraHeaders = config.buildExtraHeaders
+      ? config.buildExtraHeaders(connection)
+      : config.extraHeaders;
     const headers = config.noAuth
-      ? { ...config.extraHeaders }
-      : { [config.authHeader]: `${config.authPrefix}${accessToken}`, ...config.extraHeaders };
+      ? { ...extraHeaders }
+      : { [config.authHeader]: `${config.authPrefix}${accessToken}`, ...extraHeaders };
     const fetchOpts = { method: config.method, headers };
     if (config.body) fetchOpts.body = config.body;
     const res = await fetchWithConnectionProxy(testUrl, fetchOpts, effectiveProxy);
@@ -433,9 +429,12 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
       const tokens = await refreshOAuthToken(connection);
       if (tokens) {
         const retryUrl = config.buildUrl ? config.buildUrl(tokens.accessToken) : testUrl;
+        const retryExtraHeaders = config.buildExtraHeaders
+          ? config.buildExtraHeaders({ ...connection, accessToken: tokens.accessToken })
+          : config.extraHeaders;
         const retryHeaders = config.noAuth
-          ? { ...config.extraHeaders }
-          : { [config.authHeader]: `${config.authPrefix}${tokens.accessToken}`, ...config.extraHeaders };
+          ? { ...retryExtraHeaders }
+          : { [config.authHeader]: `${config.authPrefix}${tokens.accessToken}`, ...retryExtraHeaders };
         const retryOpts = { method: config.method, headers: retryHeaders };
         if (config.body) retryOpts.body = config.body;
         const retryRes = await fetchWithConnectionProxy(retryUrl, retryOpts, effectiveProxy);

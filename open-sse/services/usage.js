@@ -61,7 +61,8 @@ const USAGE_HANDLERS = {
   deepseek: (c) => getDeepseekUsage(c.apiKey, c.proxyOptions),
   groq: (c) => getGroqUsage(c.apiKey, c.proxyOptions),
   zed: (c) => getZedUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
-  zcode: (c) => getZcodeUsage(c.accessToken || c.providerSpecificData?.zcodeJwtToken, c.proxyOptions),
+  // Billing endpoints use the raw Start Plan JWT and same source identity as chat.
+  zcode: (c) => getZcodeUsage(c, c.proxyOptions),
 };
 
 export async function getUsageForProvider(connection, proxyOptions = null, options = {}) {

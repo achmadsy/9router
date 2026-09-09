@@ -11,6 +11,12 @@ const LOG_LEVELS = {
 
 const LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase?.()] ?? LOG_LEVELS.INFO;
 
+const HEADROOM_PHANTOM_SAVINGS_WARNING = "reported token delta, but outbound JSON shrank <5%";
+
+function isSentryIgnoredWarning(tag, message) {
+  return tag === "HEADROOM" && message?.startsWith(HEADROOM_PHANTOM_SAVINGS_WARNING);
+}
+
 function formatTime() {
   return new Date().toLocaleTimeString("en-US", { hour12: false });
 }
@@ -91,6 +97,7 @@ export function warn(tag, message, data) {
     console.warn(`[${formatTime()}] ⚠️  [${tag}] ${message}${dataStr}`);
   }
   try {
+    if (isSentryIgnoredWarning(tag, message)) return;
     const fullText = `${tag} ${message} ${data ? formatData(data) : ""}`;
     if (matchesIssueKeyword(fullText) || LEVEL <= LOG_LEVELS.WARN) {
       captureMessage(`[${tag}] ${message}`, "warning", {

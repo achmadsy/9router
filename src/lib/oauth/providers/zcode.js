@@ -1,68 +1,92 @@
 import { ZCODE_CONFIG } from "../constants/oauth.js";
 
+function flattenServiceTokens(tokens) {
+  return {
+    access_token: tokens.accessToken,
+    _zaiAccessToken: tokens.zaiAccessToken,
+    _zcodeEmail: tokens.email,
+    _zcodeDisplayName: tokens.displayName,
+    _zcodeJwtToken: tokens.providerSpecificData.zcodeJwtToken,
+    _zcodeUserId: tokens.providerSpecificData.zcodeUserId,
+    _zcodeFlowId: tokens.providerSpecificData.flowId,
+    ...(tokens.expiresIn ? { expires_in: tokens.expiresIn } : {}),
+  };
+}
+
 const zcode = {
   config: ZCODE_CONFIG,
-  flowType: "device_code",
+  flowType: "authorization_code",
 
-  requestDeviceCode: async () => {
+  prepareConfig: async () => {
     const { ZcodeAuthService } = await import("../services/zcode.js");
-    const svc = new ZcodeAuthService();
-    const { flowId, authorizeUrl } = await svc.initFlow();
-
+    const service = new ZcodeAuthService();
+    const { flowId, authorizeUrl, state, expiresIn } = await service.initFlow();
     return {
-      device_code: flowId,
-      user_code: flowId.slice(0, 8).toUpperCase(),
-      verification_uri: authorizeUrl,
-      verification_uri_complete: authorizeUrl,
-      expires_in: 600,
-      interval: 2,
+      ...ZCODE_CONFIG,
+      _zcodeAuthorizeUrl: authorizeUrl,
+      _zcodeState: state,
+      _zcodeFlowId: flowId,
+      _zcodeExpiresIn: expiresIn,
     };
   },
 
-  pollToken: async (config, deviceCode) => {
+  // Exchange must reuse pending state created during /authorize, never start another init flow.
+  prepareExchangeConfig: async () => ZCODE_CONFIG,
+
+  buildAuthUrl: (config) => config._zcodeAuthorizeUrl,
+
+  exchangeToken: async (config, callbackUrl) => {
     const { ZcodeAuthService } = await import("../services/zcode.js");
-    const svc = new ZcodeAuthService();
-    const result = await svc.pollFlow(deviceCode);
-
-    if (result.status === "pending") {
-      return { ok: false, data: { error: "authorization_pending" } };
+    const service = new ZcodeAuthService();
+    const result = await service.exchangeCallback(callbackUrl);
+    if (result.status !== "ready" || !result.tokens) {
+      throw new Error(result.error || "ZCode OAuth exchange failed");
     }
 
-    if (result.status === "failed") {
-      return { ok: false, data: { error: "access_denied", error_description: result.error } };
-    }
+    return flattenServiceTokens(result.tokens);
+  },
 
-    if (result.status === "expired") {
-      return { ok: false, data: { error: "expired_token", error_description: result.error } };
-    }
-
+  pollToken: async (config, flowId) => {
+    const { ZcodeAuthService } = await import("../services/zcode.js");
+    const service = new ZcodeAuthService();
+    const result = await service.pollFlow(flowId);
     if (result.status === "ready" && result.tokens) {
+      return { ok: true, data: flattenServiceTokens(result.tokens) };
+    }
+    if (result.status === "pending") {
       return {
         ok: true,
         data: {
-          access_token: result.tokens.accessToken,
-          expires_in: result.tokens.expiresIn,
-          _zcodeEmail: result.tokens.email,
-          _zcodeJwtToken: result.tokens.providerSpecificData.zcodeJwtToken,
-          _zcodeFlowId: result.tokens.providerSpecificData.flowId,
+          error: "authorization_pending",
+          error_description: "Authorization is not ready yet",
+          retry_after: result.retryAfter,
         },
       };
     }
-
-    return { ok: false, data: { error: "unknown_status" } };
+    return {
+      ok: false,
+      data: {
+        error: result.status === "expired" ? "expired_token" : "access_denied",
+        error_description: result.error || "ZCode OAuth failed",
+      },
+    };
   },
 
+  // Start Plan inference uses raw ZCode JWT. Nested Z.AI account token remains
+  // OAuth metadata; it is not an API key and must not enter signing v4.
   mapTokens: (tokens) => {
     const email = tokens._zcodeEmail || null;
     return {
-      accessToken: tokens.access_token,
-      expiresIn: tokens.expires_in,
+      accessToken: tokens._zcodeJwtToken || tokens.access_token,
       email,
-      displayName: email,
+      displayName: tokens._zcodeDisplayName || email,
+      ...(tokens.expires_in ? { expiresIn: tokens.expires_in } : {}),
       providerSpecificData: {
         authMethod: "zcode_oauth",
-        useCodingPlan: true,
+        useStartPlan: true,
         zcodeJwtToken: tokens._zcodeJwtToken || tokens.access_token,
+        zaiAccessToken: tokens._zaiAccessToken,
+        zaiUserId: tokens._zcodeUserId,
         flowId: tokens._zcodeFlowId,
       },
     };

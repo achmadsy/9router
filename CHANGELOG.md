@@ -1,6 +1,10 @@
 # v0.5.69 (2026-09-05)
 
 ## Features
+- **ZCode**: mint a reusable Z.AI Coding Plan API key during OAuth and route it through the standard Anthropic endpoint, while preserving legacy Bearer/captcha connections
+
+## Unreleased
+- **ZCode (WIP)**: align OAuth with ZCode 3.11.2 Start Plan — login uses official CLI init and user-triggered `/oauth/cli/poll/{flowId}` completion with server-tracked state; direct `/oauth/token` exchange remains limited to genuine `zcode://` deep-link callbacks because final HTTPS bridge codes may already be consumed. Raw ZCode JWT requests use Anthropic-compatible `/api/v1/zcode-plan/anthropic/v1/messages` with official source/attribution headers and `metadata.user_id` device/session binding, GLM-5.3 and GLM-5.3-Flash priority models, captcha handling, and busy retries. Dashboard quota and connection tests use official `GET /billing/balance?app_version=3.11.2` with authorization-only explicit headers; unproven `billing/current` probes are removed, and unavailable state replaces fabricated 100%-remaining entitlements. Nested Z.AI token remains account metadata and never enters API-key signing v4
 - **Codex**: add GPT 6.0 Astra (`gpt-6-astra`) with vision, thinking and search capabilities
 - **Usage**: add Claude Fable quota tracker support with weekly window normalization (`weekly fable (7d)`)
 - **Dashboard**: group Antigravity Gemini and Claude quotas in Quota Tracker, prune stale hidden keys

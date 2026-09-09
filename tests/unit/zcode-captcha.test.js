@@ -5,8 +5,8 @@ import {
   isCaptchaError,
 } from "../../src/lib/zcode/captcha-service.js";
 import {
-  buildZcodeCodingPlanHeaders,
-  applyZcodeCodingPlanHeaders,
+  buildZcodeStartPlanHeaders,
+  applyZcodeStartPlanHeaders,
 } from "../../src/lib/zcode/headers.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
 
@@ -51,13 +51,15 @@ describe("ZCode Captcha Integration & Retry Handling", () => {
       },
     };
 
-    const headers = buildZcodeCodingPlanHeaders(credentials);
+    const headers = buildZcodeStartPlanHeaders(credentials);
     expect(headers["X-Aliyun-Captcha-Verify-Param"]).toBe("sample-verify-token-xyz");
     expect(headers["X-Aliyun-Captcha-Verify-Region"]).toBe("sgp");
     expect(headers["Authorization"]).toBe("Bearer zcode-jwt-12345");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(headers["x-zcode-session-type"]).toBe("other");
 
     const appliedHeaders = {};
-    applyZcodeCodingPlanHeaders(appliedHeaders, credentials);
+    applyZcodeStartPlanHeaders(appliedHeaders, credentials);
     expect(appliedHeaders["X-Aliyun-Captcha-Verify-Param"]).toBe("sample-verify-token-xyz");
     expect(appliedHeaders["X-Aliyun-Captcha-Verify-Region"]).toBe("sgp");
   });
@@ -247,7 +249,33 @@ describe("ZCode Captcha Integration & Retry Handling", () => {
     expect(submitSpy).toHaveBeenCalledWith("token-12345");
   });
 
-  it("rejects relay proxies (Vercel/Cloudflare/Deno) with an informative error", async () => {
+  it("runs captcha flow for Start Plan JWT connections retaining Z.AI metadata", async () => {
+    const executor = getExecutor("zcode");
+    const manager = getCaptchaManager();
+    const getVerifyParamSpy = vi
+      .spyOn(manager, "getVerifyParam")
+      .mockResolvedValue("solved-param-token");
+    const executeSpy = vi.spyOn(DefaultExecutor.prototype, "execute").mockResolvedValue({
+      response: new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    });
+
+    const result = await executor.execute({
+      credentials: {
+        accessToken: "raw-zcode-jwt",
+        providerSpecificData: {
+          zcodeJwtToken: "raw-zcode-jwt",
+          zaiAccessToken: "zai-account-token",
+        },
+      },
+      model: "glm-5.3",
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(executeSpy).toHaveBeenCalledTimes(1);
+    expect(getVerifyParamSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects relay proxies for Start Plan bearer connections", async () => {
     const executor = getExecutor("zcode");
 
     await expect(

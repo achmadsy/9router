@@ -31,14 +31,25 @@ const CLAUDE_CODE_SYSTEM_MARKERS = [
   "Anthropic's official CLI for Claude",
 ];
 
+function textFromContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => typeof part === "string" ? part : part?.text || "")
+    .join("\n");
+}
+
 function textFromSystemBlock(block) {
   if (!block || typeof block !== "object") return "";
   return typeof block.text === "string" ? block.text : "";
 }
 
-function isClaudeCodeSystemBlock(block) {
-  const text = textFromSystemBlock(block);
+function isClaudeCodeText(text) {
   return CLAUDE_CODE_SYSTEM_MARKERS.some((marker) => text.includes(marker));
+}
+
+function isClaudeCodeSystemBlock(block) {
+  return isClaudeCodeText(textFromSystemBlock(block));
 }
 
 function hasZcodeSystemMarker(system) {
@@ -46,9 +57,7 @@ function hasZcodeSystemMarker(system) {
   return blocks.some((block) => textFromSystemBlock(block).includes(ZCODE_SYSTEM_IDENTITY_MARKER));
 }
 
-/**
- * Build the ZCode environment block (matches ZCode app shape; paths are resolved at request time).
- */
+/** Build ZCode environment text using request-time platform values. */
 export function buildZcodeEnvironmentBlock({
   modelRef = "builtin:zai-start-plan/GLM-5.2",
   workingDirectory = process.cwd(),
@@ -82,32 +91,56 @@ function zcodeSystemBlocks({ modelRef, workingDirectory } = {}) {
   ];
 }
 
+function zcodeSystemText(options) {
+  return zcodeSystemBlocks(options).map((block) => block.text).join("\n\n");
+}
+
+function injectOpenAiSystemPrompt(next, options) {
+  const existing = Array.isArray(next.messages) ? [...next.messages] : [];
+  const hasMarker = existing.some(
+    (message) => message?.role === "system" &&
+      textFromContent(message.content).includes(ZCODE_SYSTEM_IDENTITY_MARKER),
+  );
+  if (hasMarker) return next;
+
+  const preserved = existing.filter(
+    (message) => message?.role !== "system" || !isClaudeCodeText(textFromContent(message.content)),
+  );
+  next.messages = [
+    {
+      role: "system",
+      content: zcodeSystemText(options),
+    },
+    ...preserved,
+  ];
+  return next;
+}
+
 /**
- * Replace Claude Code default system prompt with ZCode blocks for Coding Plan upstream.
- * Preserves caller-provided system text (non-Claude-Code blocks).
+ * Inject ZCode identity into OpenAI messages or Claude system blocks.
+ * Existing user system content remains; recognized Claude Code identity blocks are replaced.
  */
 export function injectZcodeSystemPrompt(body, options = {}) {
   if (!body || typeof body !== "object") return body;
 
   const next = { ...body };
-  const existing = Array.isArray(next.system) ? [...next.system] : [];
-
-  if (hasZcodeSystemMarker(existing)) {
-    return next;
-  }
-
-  const preserved = existing.filter((block) => !isClaudeCodeSystemBlock(block));
   const modelName =
     typeof next.model === "string" && next.model.length > 0 ? next.model : "GLM-5.2";
-  const modelRef = options.modelRef || `builtin:zai-start-plan/${modelName}`;
+  const promptOptions = {
+    modelRef: options.modelRef || `builtin:zai-start-plan/${modelName}`,
+    workingDirectory: options.workingDirectory,
+  };
+
+  if (!Array.isArray(next.system) && Array.isArray(next.messages)) {
+    return injectOpenAiSystemPrompt(next, promptOptions);
+  }
+
+  const existing = Array.isArray(next.system) ? [...next.system] : [];
+  if (hasZcodeSystemMarker(existing)) return next;
 
   next.system = [
-    ...zcodeSystemBlocks({
-      modelRef,
-      workingDirectory: options.workingDirectory,
-    }),
-    ...preserved,
+    ...zcodeSystemBlocks(promptOptions),
+    ...existing.filter((block) => !isClaudeCodeSystemBlock(block)),
   ];
-
   return next;
 }

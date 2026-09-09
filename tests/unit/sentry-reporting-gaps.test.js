@@ -143,6 +143,34 @@ describe("Sentry reporting gaps & issue detection", () => {
       );
     });
 
+    it("keeps HEADROOM phantom-savings warning local", () => {
+      const captureSpy = vi.spyOn(sentryLib, "captureMessage").mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      logger.warn(
+        "HEADROOM",
+        "reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload | 1200→1190 chars (0.8%)"
+      );
+
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("[HEADROOM] reported token delta"));
+      expect(captureSpy).not.toHaveBeenCalled();
+    });
+
+    it("still forwards other HEADROOM warnings to Sentry", () => {
+      const captureSpy = vi.spyOn(sentryLib, "captureMessage").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      logger.warn("HEADROOM", "compression failed: upstream timeout");
+
+      expect(captureSpy).toHaveBeenCalledWith(
+        "[HEADROOM] compression failed: upstream timeout",
+        "warning",
+        expect.objectContaining({
+          tags: expect.objectContaining({ tag: "HEADROOM", kind: "warn" }),
+        })
+      );
+    });
+
     it("forwards logger.error to Sentry for invalid token errors", () => {
       const captureSpy = vi.spyOn(sentryLib, "captureMessage").mockImplementation(() => {});
       vi.spyOn(sentryLib, "isSentryReady").mockReturnValue(true);

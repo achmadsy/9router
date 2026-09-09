@@ -439,10 +439,13 @@ export function parseQuotaData(provider, data) {
             normalizedQuotas.push({
               name: quota.displayName || key,
               modelKey: quota.modelKey || key, // Keep modelKey for sorting
-              used: quota.used || 0,
-              total: quota.total || 0,
+              used: quota.used ?? null,
+              total: quota.total ?? null,
+              remaining: quota.remaining ?? null,
               resetAt: quota.resetAt || null,
-              remainingPercentage: quota.remainingPercentage,
+              remainingPercentage: quota.remainingPercentage ?? null,
+              packageName: quota.packageName,
+              unit: quota.unit,
             });
           });
         }
