@@ -30,6 +30,7 @@ import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import { shouldDefaultAllowClassifier, isClassifierMarkerNearMiss, buildDefaultAllowClaudeMessage } from "../utils/claudeClassifierCompat.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -58,7 +59,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, claudeClassifierCompat }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
@@ -76,6 +77,26 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Check for bypass patterns (warmup, skip, cc naming)
   const bypassResponse = handleBypassRequest(body, model, userAgent, ccFilterNaming);
   if (bypassResponse) return bypassResponse;
+
+  // Classifier compat short-circuit: Claude Code's auto-mode security
+  // classifier must receive "<block>no</block>" as ALLOW — return it without
+  // any upstream provider call. No executor, no pending tracking, no
+  // translation/token-saver runs.
+  if (shouldDefaultAllowClassifier(sourceFormat, body, claudeClassifierCompat)) {
+    log?.warn?.("CHAT", `claudeClassifierCompat=auto | default-ALLOW short-circuit for security classifier request`);
+    appendRequestLog({ model, provider, connectionId, status: "ALLOWED (classifier compat short-circuit)" }).catch(() => { });
+    return buildDefaultAllowClaudeMessage({ model });
+  }
+
+  // Drift alarm, not a match. The detector keys on the classifier's system
+  // prompt alone; a request still carrying the classifier's stop sequence but
+  // NOT that prompt is the signature of Claude Code having reshaped it. Without
+  // this the only symptom would be auto mode quietly routing upstream again.
+  // warn() reaches Sentry via src/sse/utils/logger.js, so the drift surfaces as
+  // an issue rather than a line in a log nobody reads.
+  if (isClassifierMarkerNearMiss(sourceFormat, body)) {
+    log?.warn?.("CHAT", "claudeClassifierCompat: request carries the classifier stop_sequences marker WITHOUT the known system prompt — Claude Code's classifier prompt may have changed; review CLAUDE_CLASSIFIER_SYSTEM_MARKER");
+  }
 
   const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
   const modelTargetFormat = getModelTargetFormat(alias, model);

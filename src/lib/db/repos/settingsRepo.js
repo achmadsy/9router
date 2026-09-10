@@ -64,7 +64,12 @@ const DEFAULT_SETTINGS = {
   pxpipeAutoInstall: true,
   pxpipeMinChars: 25000,
   pxpipeTimeoutMs: 15000,
+  claudeClassifierCompat: "off",
 };
+
+// Valid values for claudeClassifierCompat. Legacy/unknown stored values
+// (e.g. "always" from an older build) normalize fail-closed to "off".
+const CLAUDE_CLASSIFIER_COMPAT_VALUES = new Set(["off", "auto"]);
 
 async function readRaw() {
   const db = await getAdapter();
@@ -87,6 +92,9 @@ export function mergeWithDefaults(raw) {
         merged[key] = defVal;
       }
     }
+  }
+  if (!CLAUDE_CLASSIFIER_COMPAT_VALUES.has(merged.claudeClassifierCompat)) {
+    merged.claudeClassifierCompat = "off";
   }
   return merged;
 }
