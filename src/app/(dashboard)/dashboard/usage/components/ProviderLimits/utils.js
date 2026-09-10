@@ -390,14 +390,21 @@ export function parseQuotaData(provider, data) {
           Object.entries(data.quotas).forEach(([modelKey, quota]) => {
             const resetAtMs = quota.resetAt ? new Date(quota.resetAt).getTime() : NaN;
             const timeUntilReset = resetAtMs - now;
-            // Upstream exposes no interval metadata. Valid future reset proximity is
-            // the only window signal; a weekly reset in its final 5h remains ambiguous.
-            const window = !Number.isFinite(resetAtMs) || timeUntilReset <= 0
-              ? "unknown"
-              : timeUntilReset <= fiveHoursMs
-                ? "5h"
-                : "weekly";
-            const family = modelKey.startsWith("gemini-") ? "gemini" : "others";
+            // Weekly summary keys carry explicit window metadata and should not be
+            // reclassified by reset proximity as their reset approaches.
+            const explicitWeekly = modelKey === "gemini_weekly" || modelKey === "claude_gpt_weekly";
+            // Per-model entries expose no interval metadata. Valid future reset proximity
+            // is the only window signal; a weekly reset in its final 5h remains ambiguous.
+            const window = explicitWeekly
+              ? "weekly"
+              : !Number.isFinite(resetAtMs) || timeUntilReset <= 0
+                ? "unknown"
+                : timeUntilReset <= fiveHoursMs
+                  ? "5h"
+                  : "weekly";
+            const family = modelKey.startsWith("gemini-") || modelKey === "gemini_weekly"
+              ? "gemini"
+              : "others";
             groupMap.get(`${family}-${window}`).models.push(quota);
           });
 

@@ -15,7 +15,8 @@ import {
   generateRequestId,
   generateSessionId,
   generateProjectId,
-  cleanJSONSchemaForAntigravity
+  cleanJSONSchemaForAntigravity,
+  normalizeGeminiContents
 } from "../formats/gemini.js";
 import { deriveSessionId, toNumericSessionId } from "../../utils/sessionManager.js";
 import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
@@ -35,15 +36,6 @@ function sanitizeGeminiFunctionName(name) {
   return sanitized.substring(0, 64);
 }
 
-// Gemini-family upstreams require strict user/model alternation and reject
-// requests whose contents end with a "model" turn ("Requests ending model turn
-// are not supported." HTTP 400). A trailing model turn can appear when a client
-// sends a trailing assistant message (prefill) or an unanswered tool call, or
-// when a compression round-trip drops a tool response. Repair both here:
-//  - drop trailing model turns entirely (upstream has nothing to respond to);
-//  - drop orphaned functionCall parts that lack a matching functionResponse
-//    in a later turn (unanswered calls cannot precede a new user turn).
-
 const INSTRUCTIONS_REGEX = /<instructions>([\s\S]*?)<\/instructions>/gi;
 
 // Extract <instructions>...</instructions> blocks from text.
@@ -60,39 +52,40 @@ function extractInstructionsFromText(text) {
   }).trim();
   return { instructions, cleanText };
 }
-function normalizeGeminiContents(contents) {
-  // First pass: collect functionResponse ids available anywhere in the conversation.
+
+// Apply shared role normalization, then remove unanswered calls and trailing model
+// turns that Gemini-family APIs reject.
+function normalizeGeminiRequestContents(contents) {
+  const normalized = normalizeGeminiContents(contents);
   const answeredIds = new Set();
-  for (const c of contents || []) {
-    for (const part of c?.parts || []) {
+  for (const content of normalized) {
+    for (const part of content.parts) {
+      if (part.functionResponse?._placeholder) continue;
       if (part.functionResponse?.id) answeredIds.add(part.functionResponse.id);
       else if (part.functionResponse?.name) answeredIds.add(`call_${part.functionResponse.name}`);
     }
   }
 
   const out = [];
-  for (const c of contents || []) {
-    if (!c?.role || !Array.isArray(c.parts) || c.parts.length === 0) continue;
-    let parts = c.parts;
-    if (c.role === GEMINI_ROLE.MODEL) {
-      const kept = parts.filter(part => {
+  for (const content of normalized) {
+    let parts = content.parts;
+    if (content.role === GEMINI_ROLE.MODEL) {
+      parts = parts.filter((part) => {
         if (!part.functionCall) return true;
         const id = part.functionCall.id || `call_${part.functionCall.name}`;
         return answeredIds.has(id);
       });
-      if (kept.length !== parts.length) parts = kept;
-      // Turns left with no meaningful parts (empty text/signature-only) are dropped
-      if (parts.length === 0 || parts.every(p => p.text === "" && !p.functionCall)) continue;
+      if (parts.length === 0 || parts.every((part) => part.text === "" && !part.functionCall)) continue;
+    } else {
+      parts = parts.filter((part) => !part.functionResponse?._placeholder);
+      if (parts.length === 0) continue;
     }
     const last = out.at(-1);
-    if (last?.role === c.role) last.parts.push(...parts);
-    else out.push({ ...c, parts: [...parts] });
+    if (last?.role === content.role) last.parts.push(...parts);
+    else out.push({ ...content, parts: [...parts] });
   }
 
-  // Second pass: a trailing model turn gives the API nothing to respond to.
-  while (out.length > 0 && out.at(-1).role === GEMINI_ROLE.MODEL) {
-    out.pop();
-  }
+  while (out.length > 0 && out.at(-1).role === GEMINI_ROLE.MODEL) out.pop();
   return out;
 }
 
@@ -251,12 +244,15 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
           }
 
           // Check if there are actual tool responses in the next messages
-          const hasActualResponses = toolCallIds.some(fid => toolResponses[fid]);
+          const isIntermediate = i < body.messages.length - 1;
+          const hasActualResponses = toolCallIds.some(fid => toolResponses[fid] !== undefined);
 
-          if (hasActualResponses) {
+          if (hasActualResponses || isIntermediate) {
             const toolParts = [];
             for (const fid of toolCallIds) {
-              if (!toolResponses[fid]) continue;
+              let resp = toolResponses[fid];
+              const isPlaceholder = resp === undefined;
+              if (isPlaceholder) resp = "";
 
               let name = tcID2Name[fid];
               if (!name) {
@@ -268,7 +264,6 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
                 }
               }
 
-              let resp = toolResponses[fid];
               let parsedResp = tryParseJSON(resp);
               if (parsedResp === null) {
                 parsedResp = { result: resp };
@@ -280,7 +275,8 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
                 functionResponse: {
                   id: fid,
                   name: sanitizeGeminiFunctionName(name),
-                  response: { result: parsedResp }
+                  response: { result: parsedResp },
+                  ...(isPlaceholder && { _placeholder: true })
                 }
               });
             }
@@ -325,7 +321,7 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
     }
   }
 
-  result.contents = normalizeGeminiContents(result.contents);
+  result.contents = normalizeGeminiRequestContents(result.contents);
   return result;
 }
 
@@ -538,7 +534,7 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
     envelope.request.systemInstruction = { role: GEMINI_ROLE.USER, parts: systemParts };
   }
 
-  envelope.request.contents = normalizeGeminiContents(envelope.request.contents);
+  envelope.request.contents = normalizeGeminiRequestContents(envelope.request.contents);
   return envelope;
 }
 
