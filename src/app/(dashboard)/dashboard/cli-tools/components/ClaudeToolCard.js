@@ -52,9 +52,6 @@ export default function ClaudeToolCard({
   const [ccFilterNaming, setCcFilterNaming] = useState(false);
   const [exaMcpEnabled, setExaMcpEnabled] = useState(false);
   const [maxContextTokens, setMaxContextTokens] = useState("");
-  // Claude auto-mode classifier compat moved to Dashboard → Client Settings
-  // (/dashboard/client-settings): it is a gateway-wide setting, not something
-  // tied to this card's local CLI install.
   const hasInitializedModels = useRef(false);
 
   const currentBaseUrl = claudeStatus?.settings?.env?.ANTHROPIC_BASE_URL || "";
@@ -413,7 +410,6 @@ export default function ClaudeToolCard({
                     </Tooltip>
                   </label>
                 </div>
-
               </div>
 
               {message && (
@@ -436,7 +432,6 @@ export default function ClaudeToolCard({
               </div>
             </>
           )}
-
         </div>
       )}
 
@@ -450,7 +445,6 @@ export default function ClaudeToolCard({
         title="Claude CLI - Manual Configuration"
         configs={getManualConfigs()}
       />
-
     </Card>
   );
 }

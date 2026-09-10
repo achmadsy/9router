@@ -12,7 +12,6 @@
 - **Providers & Models**: align CodeBuddy-CN catalog/capabilities with server config; add GPT-5.6 Sol, Terra, Luna image aliases on Codex (#3806); refresh Qoder catalog with capability mapping and image pass-through
 - **CLI tools**: replace Copilot MITM with VS Code extension setup guide
 - **Gemini**: persist and replay `thoughtSignature` scoped by session namespace
-- **Claude**: optional auto-mode classifier compat (`claudeClassifierCompat=auto`) short-circuits Claude Code security-classifier requests with a synthetic `<block>no</block>` ALLOW, skipping the upstream call. Default `off`. Toggle lives in Dashboard → Client Settings. No `always` mode. Matches on the classifier system prompt only; a request carrying the classifier stop sequence without that prompt raises a Sentry-routed drift warning.
 
 ## Fixes
 - **Claude**: normalize adaptive auto effort (`output_config.effort`) (#3792)

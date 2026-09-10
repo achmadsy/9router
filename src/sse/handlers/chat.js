@@ -11,13 +11,6 @@ import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../service
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
-import {
-  CLAUDE_CLASSIFIER_COMPAT_MODES,
-  normalizeClassifierCompatMode,
-  isClaudeClassifierRequest,
-  isClassifierMarkerNearMiss,
-  buildDefaultAllowClaudeMessage,
-} from "open-sse/utils/claudeClassifierCompat.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
 import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
@@ -27,7 +20,6 @@ import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActi
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
-import { detectFormat } from "open-sse/services/provider.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
@@ -97,38 +89,6 @@ export async function handleChat(request, clientRawRequest = null) {
   const userAgent = request?.headers?.get("user-agent") || "";
   const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
   if (bypassResponse) return bypassResponse.response || bypassResponse;
-
-  // Classifier-compat short-circuit — MUST run before combo expansion and
-  // account selection. Producing the synthetic ALLOW verdict needs no provider
-  // account, so gating it behind getProviderCredentials() (inside
-  // handleSingleModelChat) would (a) fail with "No active credentials" for a
-  // request that never needed credentials, and (b) let checkAndRefreshToken()
-  // make a live OAuth refresh call upstream before answering locally. Sitting
-  // here it also applies once for a combo name instead of once per member, so
-  // the combo machinery never sees a classifying request at all.
-  //
-  // Mode is tested first: the request fingerprint below costs a URL parse plus a
-  // body scan, and this runs on every chat request. With the default ("off") the
-  // whole block is a string comparison.
-  if (normalizeClassifierCompatMode(settings.claudeClassifierCompat) === CLAUDE_CLASSIFIER_COMPAT_MODES.AUTO) {
-    const classifierSourceFormat = request?.url
-      ? (detectFormatByEndpoint(new URL(request.url).pathname, body) || detectFormat(body))
-      : detectFormat(body);
-    if (isClaudeClassifierRequest(classifierSourceFormat, body)) {
-      log.warn("CHAT", `[${modelStr}] claudeClassifierCompat=auto | default-ALLOW classifier short-circuit (no upstream call)`);
-      // `.response` unwraps the chatCore success shape: handleChat returns a Response.
-      return buildDefaultAllowClaudeMessage({ model: modelStr }).response;
-    }
-    // Drift alarm, not a match. The detector keys on the classifier's system
-    // prompt; a request still carrying the classifier's stop sequence without
-    // that prompt is the signature of Claude Code having reshaped it — which
-    // would otherwise show up only as auto mode silently routing upstream again.
-    // warn() reaches Sentry via src/sse/utils/logger.js, and captureMessage
-    // normalizes + dedups, so one drift is one issue rather than one per request.
-    if (isClassifierMarkerNearMiss(classifierSourceFormat, body)) {
-      log.warn("CHAT", "claudeClassifierCompat: request carries the classifier stop_sequences marker WITHOUT the known system prompt — Claude Code's classifier prompt may have changed; review CLAUDE_CLASSIFIER_SYSTEM_MARKER");
-    }
-  }
 
   const requiredCapabilities = detectRequiredCapabilities(body);
 
@@ -305,10 +265,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     // Use shared chatCore
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
-    // No classifier-compat check here: the gate in handleChat already returned
-    // for every classifying request, so this point is only reached by traffic
-    // that must run the normal pipeline. (open-sse/handlers/chatCore.js keeps its
-    // own interceptor for callers that bypass this app-side entry.)
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
@@ -333,15 +289,10 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       pxpipeEnabled: !!chatSettings.pxpipeEnabled,
       pxpipeMinChars: chatSettings.pxpipeMinChars,
       pxpipeTimeoutMs: chatSettings.pxpipeTimeoutMs,
-      // Lazily warms the in-process module on first use; null when not installed (fail-open).
-      // No classifier-compat carve-out needed: those requests already returned
-      // from the gate above, so this point is only reached by normal traffic.
-      pxpipeTransform: chatSettings.pxpipeEnabled
-        ? await getPxpipeTransform()
-        : null,
+      // Lazily warms the in-process module on first use; null when not installed (fail-open)
+      pxpipeTransform: chatSettings.pxpipeEnabled ? await getPxpipeTransform() : null,
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
-      claudeClassifierCompat: normalizeClassifierCompatMode(chatSettings.claudeClassifierCompat),
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {

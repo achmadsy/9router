@@ -25,15 +25,6 @@ logs
 .env.test.local
 .env.production.local
 
-# Agent tooling: .claude/worktrees holds full repo copies (nested .git included)
-# that nothing in the image build reads. Sending them makes the build context
-# ~150M of dead weight.
-.claude
-**/.claude
-
-# Test runner: not referenced by `npm run build`
-tests
-
 # Debug logs
 npm-debug.log*
 yarn-debug.log*

@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, Button, Input, Modal, Toggle, ConfirmModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { getCurrentLocale, onLocaleChange } from "@/i18n/runtime";
-import useSettingsStore from "@/store/settingsStore";
 import {
   WENYAN_LOCALES,
   CAVEMAN_LEVELS,
@@ -13,68 +12,9 @@ import {
   HEADROOM_PROTECT_RECENTS,
 } from "../endpoint/endpointConstants";
 
-// A toggle whose server value has not been read renders as an explicit
-// "unknown" chip rather than a Toggle in the off position. The difference
-// matters: an unread `rtkEnabled` drawn as an empty switch asserts "disabled"
-// about a server that may have it enabled. The chip asserts nothing, and the
-// control only becomes real once a read has established the value.
-//
-// It reads the store directly rather than taking the state as a prop, so there
-// is exactly one source for "is this server value known" and no call site can
-// pass a confident default by accident. While a write is in flight the store is
-// `loading`, and the control stays disabled so a second write cannot overlap an
-// unconfirmed one.
-function ServerToggle(props) {
-  const settings = useSettingsStore((s) => s.settings);
-  const pending = useSettingsStore((s) => s.loading);
-
-  if (settings === null) {
-    return (
-      <span
-        className="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-600 font-mono cursor-help"
-        title="Not read from the server yet — this control stays unavailable until the value is known."
-        role="status"
-      >
-        unknown
-      </span>
-    );
-  }
-  return <Toggle {...props} disabled={props.disabled || pending} />;
-}
-
 export default function TokenSaverClient() {
-  // Server-backed state comes from the shared settings store, never from a
-  // confident local default. `settings === null` means the server's values have
-  // not been established, so every toggle below is unavailable and renders the
-  // unknown chip. The store only ever commits settings from a completed read —
-  // including the readback after a write — so a displayed value is always one
-  // the server actually reported.
-  const settings = useSettingsStore((s) => s.settings);
-  const settingsLoading = useSettingsStore((s) => s.loading);
-  const settingsError = useSettingsStore((s) => s.error);
-  const fetchSettings = useSettingsStore((s) => s.fetchSettings);
-  const patchSettings = useSettingsStore((s) => s.patchSettings);
-
-  // A failed read leaves `settings` null, which renders every ServerToggle as
-  // the unknown chip with no way back. Offer the same recovery the Client
-  // Settings page has, so an unread value is not a dead end short of a reload.
-  //
-  // `error` is required, not just `settings === null`: on the first paint no
-  // read has been attempted yet, and announcing "could not be read" before the
-  // request is even sent would be a false claim shown on every page load. The
-  // store only sets `error` when a read actually failed.
-  const settingsUnavailable = settings === null && !settingsLoading && settingsError !== null;
-
-  // Derived, not stored: a missing key reads as false, and there is no local
-  // copy that could drift from the confirmed server value.
-  const rtkEnabled = settings?.rtkEnabled !== false;
-  const headroomEnabled = settings?.headroomEnabled === true;
-  const codeAware = settings?.headroomCodeAware === true;
-  const kompress = settings?.headroomKompress !== false;
-  const cavemanEnabled = settings?.cavemanEnabled === true;
-  const ponytailEnabled = settings?.ponytailEnabled === true;
-  const pxpipeEnabled = settings?.pxpipeEnabled === true;
-
+  const [rtkEnabled, setRtkEnabledState] = useState(true);
+  const [headroomEnabled, setHeadroomEnabled] = useState(false);
   const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
   const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(15000);
   const [headroomMode, setHeadroomMode] = useState("");
@@ -101,10 +41,15 @@ export default function TokenSaverClient() {
   const [removingExtra, setRemovingExtra] = useState(null);
   const [installLog, setInstallLog] = useState("");
   const [extrasConfirm, setExtrasConfirm] = useState(null);
+  const [codeAware, setCodeAware] = useState(false);
+  const [kompress, setKompress] = useState(true);
   const [restartingProxy, setRestartingProxy] = useState(false);
   const logPollRef = useRef(null);
+  const [cavemanEnabled, setCavemanEnabled] = useState(false);
   const [cavemanLevel, setCavemanLevel] = useState("full");
+  const [ponytailEnabled, setPonytailEnabled] = useState(false);
   const [ponytailLevel, setPonytailLevel] = useState("full");
+  const [pxpipeEnabled, setPxpipeEnabled] = useState(false);
   const [pxpipeMinChars, setPxpipeMinChars] = useState(25000);
   const [pxpipeStatus, setPxpipeStatus] = useState({
     installed: false,
@@ -131,51 +76,66 @@ export default function TokenSaverClient() {
     ? CAVEMAN_LEVELS
     : CAVEMAN_LEVELS.filter((lvl) => !lvl.wenyan);
 
-  // Every write goes through the store, which PATCHes then reads back. Nothing
-  // here sets a boolean from the value it asked for: a toggle that displays its
-  // own request is how the UI ends up showing a state the server never took.
-  //
-  // Memoized on the store's action (stable for the store's lifetime) so the
-  // effects and callbacks below can list it as a dependency honestly instead of
-  // going stale or re-running on every render.
-  const patchSetting = useCallback((patch) => patchSettings(patch), [patchSettings]);
-
-  // Declared after patchSetting: this effect calls it, and a `const` arrow is
-  // not hoisted — referencing it from an effect defined above would be a TDZ
-  // error the moment the effect body runs.
   useEffect(() => {
     const current = CAVEMAN_LEVELS.find((lvl) => lvl.id === cavemanLevel);
     if (current?.wenyan && !isWenyanLocale) {
       setCavemanLevel("ultra");
       patchSetting({ cavemanLevel: "ultra" });
     }
-  }, [isWenyanLocale, cavemanLevel, patchSetting]);
+  }, [isWenyanLocale, cavemanLevel]);
 
-  const handleRtkEnabled = (value) => patchSettings({ rtkEnabled: value });
+  const patchSetting = async (patch) => {
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+    } catch (error) {
+      console.log("Error updating setting:", error);
+    }
+  };
 
-  const handleCavemanEnabled = (value) => patchSettings({ cavemanEnabled: value });
+  const handleRtkEnabled = async (value) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rtkEnabled: value }),
+      });
+      if (res.ok) setRtkEnabledState(value);
+    } catch (error) {
+      console.log("Error updating rtkEnabled:", error);
+    }
+  };
+
+  const handleCavemanEnabled = (value) => {
+    setCavemanEnabled(value);
+    patchSetting({ cavemanEnabled: value });
+  };
 
   const handleHeadroomEnabled = (value) => {
     const nextUrl = headroomUrl.trim() || "http://localhost:8787";
     setHeadroomUrl(nextUrl);
-    patchSettings({ headroomEnabled: value, headroomUrl: nextUrl });
+    setHeadroomEnabled(value);
+    patchSetting({ headroomEnabled: value, headroomUrl: nextUrl });
   };
 
   const handleHeadroomUrlBlur = async () => {
     const next = headroomUrl.trim() || "http://localhost:8787";
     setHeadroomUrl(next);
-    await patchSettings({ headroomUrl: next });
+    await patchSetting({ headroomUrl: next });
     refreshHeadroomStatus();
   };
 
   const handleHeadroomMode = (mode) => {
     setHeadroomMode(mode);
-    patchSettings({ headroomMode: mode });
+    patchSetting({ headroomMode: mode });
   };
 
   const handleHeadroomProtectRecent = (value) => {
     setHeadroomProtectRecent(value);
-    patchSettings({ headroomProtectRecent: value });
+    patchSetting({ headroomProtectRecent: value });
   };
 
   const refreshHeadroomStatus = useCallback(async () => {
@@ -375,8 +335,8 @@ export default function TokenSaverClient() {
   // the new --code-aware / --disable-kompress flags take effect.
   const toggleExtraActive = useCallback(async (extra, value) => {
     setExtrasActionError("");
-    // No local set here: the store's readback is what publishes the new value,
-    // so the extra's active state can never outrun the server.
+    if (extra === "code") setCodeAware(value);
+    if (extra === "ml") setKompress(value);
     const key = extra === "code" ? "headroomCodeAware" : "headroomKompress";
     await patchSetting({ [key]: value });
     if (!headroomStatus.running) return;
@@ -391,14 +351,17 @@ export default function TokenSaverClient() {
     } finally {
       setRestartingProxy(false);
     }
-  }, [headroomStatus.running, refreshHeadroomStatus, patchSetting]);
+  }, [headroomStatus.running, refreshHeadroomStatus]);
 
   const handleCavemanLevel = (level) => {
     setCavemanLevel(level);
     patchSetting({ cavemanLevel: level });
   };
 
-  const handlePonytailEnabled = (value) => patchSettings({ ponytailEnabled: value });
+  const handlePonytailEnabled = (value) => {
+    setPonytailEnabled(value);
+    patchSetting({ ponytailEnabled: value });
+  };
 
   const handlePonytailLevel = (level) => {
     setPonytailLevel(level);
@@ -447,7 +410,10 @@ export default function TokenSaverClient() {
     [refreshPxpipeStatus, runPxpipeHealth]
   );
 
-  const handlePxpipeEnabled = (value) => patchSettings({ pxpipeEnabled: value });
+  const handlePxpipeEnabled = (value) => {
+    setPxpipeEnabled(value);
+    patchSetting({ pxpipeEnabled: value });
+  };
 
   const handlePxpipeMinCharsBlur = () => {
     const next = Math.max(0, Number(pxpipeMinChars) || 25000);
@@ -462,38 +428,34 @@ export default function TokenSaverClient() {
     patchSetting({ headroomTimeoutMs: next });
   };
 
-  // One forced read per mount. Forced because the seven server-backed booleans
-  // below are gated on it: a value served from the store's TTL cache could
-  // disagree with the server, and the whole point of the unknown chip is that a
-  // displayed position is one the server just confirmed. The store drops a read
-  // superseded by a newer one, so a mount racing a write cannot commit a stale
-  // snapshot.
-  //
-  // The non-boolean fields keep local state: they are text/number inputs whose
-  // effects are not an unrepresentable-security-state problem, and they are only
-  // applied once the read has actually landed (a failed read must not overwrite
-  // the input defaults with nothing).
   useEffect(() => {
-    let cancelled = false;
     const loadSettings = async () => {
-      const data = await fetchSettings({ force: true });
-      if (!data || cancelled) return;
-      setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
-      if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(data.headroomTimeoutMs);
-      if (typeof data.headroomMode === "string") setHeadroomMode(data.headroomMode);
-      if (typeof data.headroomProtectRecent === "number") setHeadroomProtectRecent(data.headroomProtectRecent);
-      if (typeof data.cavemanLevel === "string") setCavemanLevel(data.cavemanLevel);
-      if (typeof data.ponytailLevel === "string") setPonytailLevel(data.ponytailLevel);
-      if (typeof data.pxpipeMinChars === "number") setPxpipeMinChars(data.pxpipeMinChars);
-      refreshHeadroomStatus();
-      // PRD: run the PXPIPE health check automatically when the page opens
-      refreshPxpipeStatus().then(runPxpipeHealth);
+      try {
+        const res = await fetch("/api/settings");
+        if (res.ok) {
+          const data = await res.json();
+          setRtkEnabledState(data.rtkEnabled !== false);
+          setHeadroomEnabled(!!data.headroomEnabled);
+          setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
+          if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(data.headroomTimeoutMs);
+          if (typeof data.headroomMode === "string") setHeadroomMode(data.headroomMode);
+          if (typeof data.headroomProtectRecent === "number") setHeadroomProtectRecent(data.headroomProtectRecent);
+          setCodeAware(data.headroomCodeAware === true);
+          setKompress(data.headroomKompress !== false);
+          setCavemanEnabled(!!data.cavemanEnabled);
+          setCavemanLevel(data.cavemanLevel || "full");
+          setPonytailEnabled(!!data.ponytailEnabled);
+          setPonytailLevel(data.ponytailLevel || "full");
+          setPxpipeEnabled(!!data.pxpipeEnabled);
+          if (typeof data.pxpipeMinChars === "number") setPxpipeMinChars(data.pxpipeMinChars);
+          refreshHeadroomStatus();
+          // PRD: run the PXPIPE health check automatically when the page opens
+          refreshPxpipeStatus().then(runPxpipeHealth);
+        }
+      } catch {}
     };
     loadSettings();
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchSettings, refreshHeadroomStatus, refreshPxpipeStatus, runPxpipeHealth]);
+  }, [refreshHeadroomStatus, refreshPxpipeStatus, runPxpipeHealth]);
 
   const headroomRunning = !!headroomStatus.running;
   const headroomStatusLabel = headroomStatus.loading
@@ -529,28 +491,6 @@ export default function TokenSaverClient() {
 
   return (
     <div className="space-y-6 p-6">
-      {/* Recovery for the unknown state below: a failed settings read leaves
-          every ServerToggle as the chip, and without this the only way out is a
-          full page reload. */}
-      {settingsUnavailable && (
-        <div
-          className="flex items-center gap-3 rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2"
-          role="status"
-        >
-          <span className="text-xs font-semibold text-amber-600">
-            Server settings could not be read — the switches below show
-            &ldquo;unknown&rdquo; instead of a state, and stay disabled.
-          </span>
-          <button
-            type="button"
-            onClick={() => fetchSettings({ force: true })}
-            className="w-fit rounded border border-border px-2 py-1 text-xs font-semibold text-text-main hover:bg-surface-2 transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
       <Card id="rtk">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -577,8 +517,7 @@ export default function TokenSaverClient() {
               git/grep/ls/tree/logs → 60-90% fewer input tokens
             </p>
           </div>
-          <ServerToggle
-
+          <Toggle
             checked={rtkEnabled}
             onChange={() => handleRtkEnabled(!rtkEnabled)}
           />
@@ -614,8 +553,7 @@ export default function TokenSaverClient() {
               Compress prompts via /v1/compress before routing to the model
             </p>
           </div>
-          <ServerToggle
-
+          <Toggle
             checked={headroomEnabled}
             onChange={() => handleHeadroomEnabled(!headroomEnabled)}
           />
@@ -695,8 +633,7 @@ export default function TokenSaverClient() {
                       className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-success/40 bg-success/5 text-text"
                       title={extraTitle}
                     >
-                      <ServerToggle
-
+                      <Toggle
                         size="sm"
                         checked={active}
                         disabled={restartingProxy}
@@ -815,8 +752,7 @@ export default function TokenSaverClient() {
                 </p>
               </div>
             )}
-            <ServerToggle
-
+            <Toggle
               checked={cavemanEnabled}
               onChange={() => handleCavemanEnabled(!cavemanEnabled)}
             />
@@ -867,8 +803,7 @@ export default function TokenSaverClient() {
                 </p>
               </div>
             )}
-            <ServerToggle
-
+            <Toggle
               checked={ponytailEnabled}
               onChange={() => handlePonytailEnabled(!ponytailEnabled)}
             />
@@ -913,8 +848,7 @@ export default function TokenSaverClient() {
               conversations.
             </p>
           </div>
-          <ServerToggle
-
+          <Toggle
             checked={pxpipeEnabled}
             disabled={!pxpipeStatus.installed}
             onChange={() => handlePxpipeEnabled(!pxpipeEnabled)}

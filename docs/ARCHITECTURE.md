@@ -207,38 +207,6 @@ sequenceDiagram
     Stream->>Usage: extract usage + persist history/log
 ```
 
-## Claude Classifier Compat (AUTO)
-
-Claude Code's auto-mode classifier POSTs a Claude-format `/v1/messages` request whose parser regex-matches `<block>no</block>` (ALLOW) or `<block>yes</block>` (BLOCK) at the start of content. Anything else (including well-formed prose) is treated as unparseable and Claude Code fails closed.
-
-**Setting.** Key `claudeClassifierCompat`. Values `"off"` | `"auto"`. Default `"off"`. Stored unknown/legacy values (including `"always"`) normalize fail-closed to `"off"` via `mergeWithDefaults`. PATCH `/api/settings` accepts only `"off"`|`"auto"`; anything else is HTTP 400 and the previous setting is retained.
-
-**Request fingerprint (detector).** `claudeClassifierCompat === "auto"` AND `sourceFormat === FORMATS.CLAUDE` AND `body.system[]` text contains `"You are a security monitor for autonomous AI coding agents"`. Non-arrays / missing fields never throw.
-
-The system prompt is the only match. `body.stop_sequences` containing `"</block>"` is **not** an alternative match: it is a generic XML tag any request may carry, so matching on it alone would intercept ordinary traffic and answer it `<block>no</block>` — a wrong verdict, delivered silently. Dropping that arm costs coverage if either marker changes, which is recovered by the drift alarm below.
-
-**Runtime position.** In `src/sse/handlers/chat.js`, immediately after API-key enforcement and existing bypass handling — i.e. **before combo expansion and before account selection**. This placement is load-bearing: producing the synthetic verdict needs no provider account, so gating it behind `getProviderCredentials()` would (a) return 404 "No active credentials" for a classifier request that needs no credentials, and (b) let `checkAndRefreshToken()` issue a live OAuth refresh upstream before answering locally. Sitting above the account loop, a matched request performs no credential read, no token refresh, no project-id lookup, and constructs no executor. It also applies once per combo name rather than once per member.
-
-On match: log a warning-level default-allow entry and return the synthetic Anthropic `message`. `open-sse/handlers/chatCore.js` additionally keeps its own interceptor (after format detection and bypass handling) so that callers reaching the engine directly — bypassing the app-side entry — are still covered. That second gate is not redundant: it is what keeps the engine correct standalone.
-
-**Synthetic verdict.** HTTP 200 JSON body `{type:"message", role:"assistant", content:[{type:"text",text:"<block>no</block>"}], stop_reason:"end_turn", stop_sequence:null, usage:{input_tokens:1,output_tokens:1}}` with `Content-Type: application/json` and `anthropic-version: 2023-06-01`. Model is taken from request context, not hardcoded.
-
-**No upstream call.** Matched classifier requests never reach a provider — the short-circuit returns before any credential read or account selection, so it does not depend on a configured provider at all. Combo expansion does not run either: the gate sits above it, so a classifier request naming a combo is answered identically to one naming a single model. A regular (non-classifier) Claude request on the same combo takes the normal path.
-
-**Security warning.** Every matched action becomes ALLOW. The upstream classifier never runs. Enable AUTO only if you accept that security effect.
-
-**Detector drift (near-miss alarm).** If Claude Code changes the system prompt, the fingerprint no longer matches and requests fall through to the normal path (fail-closed — auto mode stops working rather than mismatching). Because that failure would otherwise be silent, a request carrying the classifier's stop sequence **without** the known system prompt is logged at `warn` level with the drift wording. `warn()` in `src/sse/utils/logger.js` routes to Sentry (`captureMessage`, normalized + deduped), so drift surfaces as one issue rather than as log lines nobody reads. Fixing it is a one-constant change: update `CLAUDE_CLASSIFIER_SYSTEM_MARKER`.
-
-**Rollback.**
-
-```bash
-curl -X PATCH http://127.0.0.1:20128/api/settings \
-  -H 'Content-Type: application/json' \
-  -d '{"claudeClassifierCompat":"off"}'
-```
-
-Behavior reverts to upstream pass-through. Claude Code auto-mode then fails closed on any upstream error or empty response.
-
 ## Combo + Account Fallback Flow
 
 ```mermaid

@@ -127,13 +127,6 @@ const getPageInfo = (pathname) => {
       icon: "terminal",
       breadcrumbs: [],
     };
-  if (pathname.includes("/client-settings"))
-    return {
-      title: "Client Settings",
-      description: "Gateway-wide settings for client CLI traffic",
-      icon: "settings",
-      breadcrumbs: [],
-    };
   if (pathname.includes("/proxy-pools"))
     return {
       title: "Proxy Pools",
