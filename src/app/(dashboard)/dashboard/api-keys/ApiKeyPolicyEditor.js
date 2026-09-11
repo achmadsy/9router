@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import StatusAlert from "../../endpoint/components/StatusAlert";
-import Tooltip from "../../endpoint/components/Tooltip";
+import StatusAlert from "../endpoint/components/StatusAlert";
+import Tooltip from "../endpoint/components/Tooltip";
 
 /**
  * Model/combo multi-select for a restricted API key.
