@@ -55,6 +55,12 @@ function normalizeOpencodeReasoning(model, body) {
   const cleanModel = baseModelId(model || body.model);
   const supportedLevels = getThinkingLevels("opencode", cleanModel);
   let effort = requestedEffort.toLowerCase().trim();
+  // Responses rejects effort:"none"/"off" — omit reasoning so upstream default applies.
+  if (effort === "none" || effort === "off") {
+    delete body.reasoning;
+    delete body.reasoning_effort;
+    return;
+  }
   if ((effort === "max" || effort === "ultra") && supportedLevels?.length && !supportedLevels.includes(effort)) {
     if (effort === "ultra" && supportedLevels.includes("max")) effort = "max";
     else if (supportedLevels.includes("xhigh")) effort = "xhigh";

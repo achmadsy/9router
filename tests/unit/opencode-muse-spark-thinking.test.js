@@ -63,6 +63,26 @@ describe("OpenCode Free Muse Spark thinking", () => {
     expect(out.max_tokens).toBeUndefined();
   });
 
+  it("strips reasoning.effort none/off so Responses does not 400", () => {
+    const cases = [
+      { reasoning_effort: "none" },
+      { reasoning_effort: "off" },
+      { reasoning: { effort: "none", summary: "auto" } },
+    ];
+
+    for (const extra of cases) {
+      const out = new OpenCodeExecutor().transformRequest(MODEL, {
+        input,
+        max_tokens: 2048,
+        ...extra,
+      }, true, { connectionId: "opencode-muse-spark-none-test" });
+
+      expect(out.reasoning).toBeUndefined();
+      expect(out.reasoning_effort).toBeUndefined();
+      expect(out.max_output_tokens).toBe(2048);
+    }
+  });
+
   it("leaves the other free models on Chat Completions", () => {
     const executor = new OpenCodeExecutor();
     const body = { messages: [{ role: "user", content: "hi" }], max_tokens: 1024 };
