@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { UsageStats, RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/components";
 import RequestDetailsTab from "./components/RequestDetailsTab";
@@ -26,6 +26,23 @@ function UsageContent() {
   const router = useRouter();
 
   const [period, setPeriod] = useState("today");
+  const [apiKeyId, setApiKeyId] = useState("");
+  const [apiKeys, setApiKeys] = useState([]);
+
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/keys");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!ignore) setApiKeys(data.keys || []);
+      } catch {
+        if (!ignore) setApiKeys([]);
+      }
+    })();
+    return () => { ignore = true; };
+  }, []);
 
   const tabFromUrl = searchParams.get("tab");
   const activeTab = tabFromUrl && ["overview", "logs", "details"].includes(tabFromUrl)
@@ -41,7 +58,7 @@ function UsageContent() {
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      {/* Tabs + period selector on same row */}
+      {/* Tabs + period + API key — key filter scopes the whole page */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <SegmentedControl
           options={[
@@ -52,6 +69,23 @@ function UsageContent() {
           onChange={handleTabChange}
           className="w-full sm:w-auto"
         />
+        <div className="order-first sm:order-none sm:mx-auto sm:w-auto">
+          <label htmlFor="usage-api-key" className="sr-only">API Key</label>
+          <select
+            id="usage-api-key"
+            value={apiKeyId}
+            onChange={(e) => setApiKeyId(e.target.value)}
+            className="w-full min-w-[12rem] rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
+            style={{ colorScheme: "auto" }}
+          >
+            <option value="">All API Keys</option>
+            {apiKeys.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.name || k.keyHint || k.id}
+              </option>
+            ))}
+          </select>
+        </div>
         {activeTab === "overview" && (
           <SegmentedControl
             options={PERIODS}
@@ -65,11 +99,16 @@ function UsageContent() {
 
       {activeTab === "overview" && (
         <Suspense fallback={<CardSkeleton />}>
-          <UsageStats period={period} setPeriod={setPeriod} hidePeriodSelector />
+          <UsageStats
+            period={period}
+            setPeriod={setPeriod}
+            hidePeriodSelector
+            apiKeyId={apiKeyId}
+          />
         </Suspense>
       )}
       {activeTab === "logs" && <RequestLogger />}
-      {activeTab === "details" && <RequestDetailsTab />}
+      {activeTab === "details" && <RequestDetailsTab apiKeyId={apiKeyId} />}
     </div>
   );
 }

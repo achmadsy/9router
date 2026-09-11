@@ -200,7 +200,7 @@ const PERIODS = [
   { value: "60d", label: "60D" },
 ];
 
-export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false } = {}) {
+export default function UsageStats({ period: periodProp, setPeriod: setPeriodProp, hidePeriodSelector = false, apiKeyId = "" } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -261,7 +261,10 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       setFetching(true);
     }
 
-    fetch(`/api/usage/stats?period=${period}`)
+    const params = new URLSearchParams({ period });
+    if (apiKeyId) params.set("apiKeyId", apiKeyId);
+
+    fetch(`/api/usage/stats?${params}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (data) {
@@ -274,10 +277,13 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         setLoading(false);
         setFetching(false);
       });
-  }, [period]);
+  }, [period, apiKeyId]);
 
-  // SSE connection - real-time updates for activeRequests + recentRequests only
+  // SSE connection - real-time updates for activeRequests + recentRequests only.
+  // Key-filtered pages skip SSE so unscoped rows cannot overwrite REST stats.
   useEffect(() => {
+    if (apiKeyId) return undefined;
+
     const es = new EventSource("/api/usage/stream");
 
     es.onmessage = (e) => {
@@ -303,7 +309,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     es.onerror = () => setLoading(false);
 
     return () => es.close();
-  }, []);
+  }, [apiKeyId]);
 
   const toggleSort = useCallback((tableType, field) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -481,7 +487,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       )}
 
       {/* Token / Cost chart - sync period */}
-      {loading ? spinner : <UsageChart period={period} />}
+      {loading ? spinner : <UsageChart period={period} apiKeyId={apiKeyId} />}
 
       {/* Table with dropdown selector */}
       <div className="flex flex-col gap-3">

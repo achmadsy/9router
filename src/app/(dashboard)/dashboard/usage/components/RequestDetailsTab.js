@@ -99,7 +99,7 @@ function getInputTokens(tokens) {
   return prompt < cache ? cache : prompt;
 }
 
-export default function RequestDetailsTab() {
+export default function RequestDetailsTab({ apiKeyId = "" } = {}) {
   const [details, setDetails] = useState([]);
   const [pagination, setPagination] = useState({
     page: 1,
@@ -141,6 +141,7 @@ export default function RequestDetailsTab() {
       if (filters.provider) params.append("provider", filters.provider);
       if (filters.startDate) params.append("startDate", filters.startDate);
       if (filters.endDate) params.append("endDate", filters.endDate);
+      if (apiKeyId) params.append("apiKeyId", apiKeyId);
 
       const res = await fetch(`/api/usage/request-details?${params}`);
       const data = await res.json();
@@ -152,7 +153,7 @@ export default function RequestDetailsTab() {
     } finally {
       setLoading(false);
     }
-  }, [pagination.page, pagination.pageSize, filters]);
+  }, [pagination.page, pagination.pageSize, filters, apiKeyId]);
 
   useEffect(() => {
     fetchProviders();
