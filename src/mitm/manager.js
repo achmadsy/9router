@@ -50,6 +50,9 @@ const MITM_RESTART_RESET_MS = 60000;
 let mitmRestartCount = 0;
 let mitmLastStartTime = 0;
 let mitmIsRestarting = false;
+// Last child auth material for auto-restart. Prefer CLI token; never invent sk-9r.
+let mitmLastApiKey = "";
+let mitmLastCliToken = "";
 
 function resolveBundledServerPath() {
   if (process.env.MITM_SERVER_PATH) return process.env.MITM_SERVER_PATH;
@@ -399,7 +402,7 @@ async function getMitmStatus() {
   return { running, pid, certExists, certTrusted, dnsStatus };
 }
 
-async function scheduleMitmRestart(apiKey) {
+async function scheduleMitmRestart(apiKey = mitmLastApiKey, cliToken = mitmLastCliToken) {
   if (mitmIsRestarting) return;
   // Set guard synchronously before any await to prevent concurrent calls
   // from passing the check above.
@@ -434,7 +437,7 @@ async function scheduleMitmRestart(apiKey) {
       mitmIsRestarting = false;
       return;
     }
-    await startServer(apiKey, password);
+    await startServer(apiKey, password, false, cliToken);
     log("🔄 Restarted successfully");
     mitmRestartCount = 0;
     mitmIsRestarting = false;
@@ -442,7 +445,7 @@ async function scheduleMitmRestart(apiKey) {
     err(`Restart attempt ${mitmRestartCount}/${MITM_MAX_RESTARTS} failed: ${e.message}`);
     mitmIsRestarting = false;
     // Schedule next retry
-    scheduleMitmRestart(apiKey);
+    scheduleMitmRestart(apiKey, cliToken);
   }
 }
 
@@ -468,7 +471,9 @@ async function killPort443Owner(owner, sudoPassword) {
   await new Promise(r => setTimeout(r, 800));
 }
 
-async function startServer(apiKey, sudoPassword, forceKillPort443 = false) {
+async function startServer(apiKey, sudoPassword, forceKillPort443 = false, cliToken = "") {
+  mitmLastApiKey = apiKey || "";
+  mitmLastCliToken = cliToken || process.env.ROUTER_CLI_TOKEN || "";
   if (!serverProcess || serverProcess.killed) {
     try {
       if (fs.existsSync(PID_FILE)) {
@@ -610,7 +615,8 @@ async function startServer(apiKey, sudoPassword, forceKillPort443 = false) {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
-          ROUTER_API_KEY: apiKey,
+          ROUTER_API_KEY: apiKey || "",
+          ROUTER_CLI_TOKEN: cliToken || process.env.ROUTER_CLI_TOKEN || "",
           NODE_ENV: "production",
           MITM_ROUTER_BASE: mitmRouterBase,
         },
@@ -623,7 +629,8 @@ async function startServer(apiKey, sudoPassword, forceKillPort443 = false) {
     // instead of /root when sudo resets the environment.
     const inlineCmd = [
       `HOME=${shellQuoteSingle(os.homedir())}`,
-      `ROUTER_API_KEY=${shellQuoteSingle(apiKey)}`,
+      `ROUTER_API_KEY=${shellQuoteSingle(apiKey || "")}`,
+      `ROUTER_CLI_TOKEN=${shellQuoteSingle(cliToken || process.env.ROUTER_CLI_TOKEN || "")}`,
       `MITM_ROUTER_BASE=${shellQuoteSingle(mitmRouterBase)}`,
       "NODE_ENV=production",
       shellQuoteSingle(process.execPath),
@@ -644,7 +651,8 @@ async function startServer(apiKey, sudoPassword, forceKillPort443 = false) {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
-        ROUTER_API_KEY: apiKey,
+        ROUTER_API_KEY: apiKey || "",
+        ROUTER_CLI_TOKEN: cliToken || process.env.ROUTER_CLI_TOKEN || "",
         NODE_ENV: "production",
         MITM_ROUTER_BASE: mitmRouterBase,
       },
@@ -703,7 +711,7 @@ async function startServer(apiKey, sudoPassword, forceKillPort443 = false) {
       try { fs.unlinkSync(PID_FILE); } catch { /* ignore */ }
       try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
       // Auto-restart on unexpected exit
-      if (code !== 0 && !mitmIsRestarting) scheduleMitmRestart(apiKey);
+      if (code !== 0 && !mitmIsRestarting) scheduleMitmRestart(mitmLastApiKey, mitmLastCliToken);
     });
   }
 

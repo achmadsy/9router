@@ -2,10 +2,12 @@ import { handleChat } from "@/sse/handlers/chat.js";
 import {
   clearAccountError,
   getProviderCredentials,
-  isValidApiKey,
   markAccountUnavailable,
 } from "@/sse/services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import {
+  resolveApiKeyContext,
+  authorizeOriginalResource,
+} from "@/sse/services/apiKeyPolicy.js";
 import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 import { initTranslators } from "open-sse/translator/index.js";
@@ -123,17 +125,6 @@ export async function POST(request, { params }) {
   }
 }
 
-function extractGeminiClientApiKey(request) {
-  const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
-
-  const googleApiKey = request.headers.get("x-goog-api-key");
-  if (googleApiKey) return googleApiKey;
-
-  const url = new URL(request.url);
-  return url.searchParams.get("key");
-}
-
 function normalizeGeminiNativeModel(model) {
   return String(model || "")
     .replace(/^models\//, "")
@@ -177,20 +168,24 @@ function buildGeminiNativeUrl(requestUrl, model, action) {
   return upstreamUrl.toString();
 }
 
-async function validateGeminiNativeClientKey(request) {
-  const settings = await getSettings();
-  if (!settings.requireApiKey) return null;
-
-  const apiKey = extractGeminiClientApiKey(request);
-  if (!apiKey) {
-    return Response.json({ error: { message: "Missing API key" } }, { status: 401 });
+/**
+ * Shared auth + ACL for native Gemini TTS (and other native forwards).
+ * Invalid/paused presented keys → 401 even when requireApiKey is false.
+ * Restricted keys are authorized against the ORIGINAL exposed model id.
+ */
+async function validateGeminiNativeClientKey(request, model) {
+  const { keyRow, errorResponse } = await resolveApiKeyContext(request);
+  if (errorResponse) return errorResponse;
+  if (keyRow) {
+    // Catalog policy ids are `gemini/${model}`; native path uses the bare model name.
+    // Try both forms before denying — short-circuit on first denial would 403
+    // restricted keys that only grant the catalog policy id.
+    const deniedBare = await authorizeOriginalResource(keyRow, model);
+    const deniedCatalog = await authorizeOriginalResource(keyRow, `gemini/${normalizeGeminiNativeModel(model)}`);
+    // Allowed if either form is in policy (bare native name OR catalog `gemini/<model>`).
+    const denied = deniedBare && deniedCatalog;
+    if (denied) return denied;
   }
-
-  const valid = await isValidApiKey(apiKey);
-  if (!valid) {
-    return Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
-  }
-
   return null;
 }
 
@@ -236,7 +231,7 @@ function getSafeGeminiNativeErrorText(error) {
 }
 
 async function forwardGeminiNativeRequest(request, body, model, action) {
-  const authError = await validateGeminiNativeClientKey(request);
+  const authError = await validateGeminiNativeClientKey(request, model);
   if (authError) return authError;
 
   const modelId = normalizeGeminiNativeModel(model);

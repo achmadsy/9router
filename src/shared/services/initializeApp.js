@@ -2,7 +2,8 @@ import os from "os";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { existsSync } from "fs";
-import { cleanupProviderConnections, getSettings, updateSettings, getApiKeys } from "@/lib/localDb";
+import { cleanupProviderConnections, getSettings, updateSettings } from "@/lib/localDb";
+import { getConsistentMachineId } from "@/shared/utils/machineId";
 import {
   enableTunnel, enableTailscale,
   isTunnelManuallyDisabled, isTunnelReconnecting, isTailscaleReconnecting,
@@ -139,11 +140,19 @@ async function autoStartMitm(settings) {
       return;
     }
 
-    const keys = await getApiKeys();
-    const activeKey = keys.find(k => k.isActive !== false);
+    // Never invent or reuse a plaintext API key. MITM self-calls authenticate via
+    // the trusted local CLI token (x-9r-cli-token), not a stored sk-9r secret.
+    const cliToken = await getConsistentMachineId("9r-cli-auth");
+    if (!cliToken) {
+      console.log(
+        "[InitApp] MITM auto-start disabled: no machine CLI token available for trusted local calls. " +
+        "Start MITM from the dashboard after creating an API key, or re-run setup on this machine."
+      );
+      return;
+    }
 
     console.log("[InitApp] MITM was enabled, auto-starting...");
-    await startMitm(activeKey?.key || "sk_9router", password);
+    await startMitm("", password, false, cliToken);
     console.log("[InitApp] MITM auto-started");
     try {
       await restoreToolDNS(password);

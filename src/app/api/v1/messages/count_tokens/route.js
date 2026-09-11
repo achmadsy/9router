@@ -1,3 +1,5 @@
+import { resolveApiKeyContext, authorizeOriginalResource } from "@/sse/services/apiKeyPolicy.js";
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -71,6 +73,7 @@ export function estimateAnthropicInputTokens(body = {}) {
 
 /**
  * POST /v1/messages/count_tokens - Mock token count response
+ * Auth: honor requireApiKey + optional body.model policy (fail-closed).
  */
 export async function POST(request) {
   let body;
@@ -83,6 +86,18 @@ export async function POST(request) {
     });
   }
 
+  const keyCtx = await resolveApiKeyContext(request);
+  if (keyCtx.errorResponse) {
+    return keyCtx.errorResponse;
+  }
+
+  // Optional model on the count request: enforce the key's policy before work.
+  const modelId = typeof body?.model === "string" ? body.model.trim() : "";
+  if (modelId) {
+    const denied = await authorizeOriginalResource(keyCtx.keyRow, modelId);
+    if (denied) return denied;
+  }
+
   const inputTokens = estimateAnthropicInputTokens(body);
 
   return new Response(JSON.stringify({
@@ -91,4 +106,3 @@ export async function POST(request) {
     headers: { "Content-Type": "application/json", ...CORS_HEADERS }
   });
 }
-

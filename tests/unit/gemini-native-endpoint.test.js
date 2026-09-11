@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   handleChat: vi.fn(),
   getSettings: vi.fn(),
-  isValidApiKey: vi.fn(),
+  authenticateApiKey: vi.fn(),
   getProviderCredentials: vi.fn(),
   markAccountUnavailable: vi.fn(),
   clearAccountError: vi.fn(),
+  getConsistentMachineId: vi.fn().mockResolvedValue("cli-token-abc"),
 }));
 
 vi.mock("@/sse/handlers/chat.js", () => ({
@@ -15,13 +16,25 @@ vi.mock("@/sse/handlers/chat.js", () => ({
 
 vi.mock("@/sse/services/auth.js", () => ({
   getProviderCredentials: mocks.getProviderCredentials,
-  isValidApiKey: mocks.isValidApiKey,
   markAccountUnavailable: mocks.markAccountUnavailable,
   clearAccountError: mocks.clearAccountError,
+  extractApiKey: (request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+    return request.headers.get("x-api-key") || request.headers.get("x-goog-api-key") || null;
+  },
 }));
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: mocks.getSettings,
+}));
+
+vi.mock("@/lib/db/index.js", () => ({
+  authenticateApiKey: mocks.authenticateApiKey,
+}));
+
+vi.mock("@/shared/utils/machineId", () => ({
+  getConsistentMachineId: mocks.getConsistentMachineId,
 }));
 
 const { GET } = await import("../../src/app/api/v1beta/models/route.js");
@@ -60,7 +73,7 @@ describe("Gemini native v1beta endpoint", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSettings.mockResolvedValue({ requireApiKey: true });
-    mocks.isValidApiKey.mockResolvedValue(true);
+    mocks.authenticateApiKey.mockResolvedValue({ id: "ak-1", name: "client", accessMode: "all", targets: [] });
     mocks.getProviderCredentials.mockResolvedValue({
       apiKey: "real-gemini-key",
       connectionId: "gemini-conn",
@@ -80,7 +93,9 @@ describe("Gemini native v1beta endpoint", () => {
   });
 
   it("lists Gemini TTS models using standard Google model names", async () => {
-    const response = await GET();
+    const response = await GET(new Request("https://router.test/v1beta/models", {
+      headers: { Authorization: "Bearer router-client-key" },
+    }));
     const body = await response.json();
     const names = body.models.map((model) => model.name);
 
@@ -122,9 +137,55 @@ describe("Gemini native v1beta endpoint", () => {
       params: Promise.resolve({ path: ["gemini-2.5-flash-preview-tts:generateContent"] }),
     });
 
-    expect(mocks.isValidApiKey).toHaveBeenCalledWith("client-router-key");
+    expect(mocks.authenticateApiKey).toHaveBeenCalledWith("client-router-key");
     expect(global.fetch.mock.calls[0][1].headers["x-goog-api-key"]).toBe("real-gemini-key");
     expect(global.fetch.mock.calls[0][1].headers["x-goog-api-key"]).not.toBe("client-router-key");
+  });
+
+  it("rejects invalid/paused client keys with 401 even when requireApiKey is false", async () => {
+    mocks.getSettings.mockResolvedValue({ requireApiKey: false });
+    mocks.authenticateApiKey.mockResolvedValue(null);
+
+    const response = await POST(makeGeminiRequest("gemini-3.1-flash-tts-preview:generateContent", audioBody()), {
+      params: Promise.resolve({ path: ["gemini-3.1-flash-tts-preview:generateContent"] }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for restricted keys without the original model in policy", async () => {
+    mocks.authenticateApiKey.mockResolvedValue({
+      id: "ak-2",
+      name: "restricted",
+      accessMode: "restricted",
+      targets: [{ targetType: "model", targetId: "openai/gpt-4o" }],
+    });
+
+    const response = await POST(makeGeminiRequest("gemini-3.1-flash-tts-preview:generateContent", audioBody()), {
+      params: Promise.resolve({ path: ["gemini-3.1-flash-tts-preview:generateContent"] }),
+    });
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error?.code || body.code).toBe("model_not_allowed");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("allows restricted keys that grant the catalog policy id gemini/<model>", async () => {
+    mocks.authenticateApiKey.mockResolvedValue({
+      id: "ak-3",
+      name: "tts-only",
+      accessMode: "restricted",
+      targets: [{ targetType: "model", targetId: "gemini/gemini-3.1-flash-tts-preview" }],
+    });
+
+    const response = await POST(makeGeminiRequest("gemini-3.1-flash-tts-preview:generateContent", audioBody()), {
+      params: Promise.resolve({ path: ["gemini-3.1-flash-tts-preview:generateContent"] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("does not forward stale compression headers from native upstream responses", async () => {

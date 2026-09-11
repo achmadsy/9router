@@ -11,6 +11,7 @@ import { handleVideoProxyCore, getVideoConfig, sanitizeSecrets } from "open-sse/
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
+import { resolveApiKeyContext, authorizeOriginalResource } from "../services/apiKeyPolicy.js";
 import * as log from "../utils/logger.js";
 
 // Video generation is xAI-only today; requests without a provider prefix
@@ -42,14 +43,9 @@ const CREATE_ROTATION_STATUSES = new Set([
 ]);
 
 async function requireValidApiKey(request) {
-  const apiKey = extractApiKey(request);
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-  }
-  return null;
+  const keyCtx = await resolveApiKeyContext(request);
+  if (keyCtx.errorResponse) return { errorResponse: keyCtx.errorResponse };
+  return { keyRow: keyCtx.keyRow };
 }
 
 /**
@@ -107,8 +103,9 @@ function withConnectionHeader(response, connectionId) {
  * POST /v1/videos/{generations|edits|extensions} — async job creation proxy.
  */
 export async function handleVideoCreate(request, action) {
-  const authError = await requireValidApiKey(request);
-  if (authError) return authError;
+  const auth = await requireValidApiKey(request);
+  if (auth?.errorResponse) return auth.errorResponse;
+  const keyRow = auth?.keyRow || null;
 
   const bodyInfo = await readForwardableBody(request);
   if (bodyInfo.error) return bodyInfo.error;
@@ -116,6 +113,12 @@ export async function handleVideoCreate(request, action) {
   const resolved = await resolveVideoProvider(bodyInfo.parsed);
   if (resolved.error) return resolved.error;
   const { provider, model } = resolved;
+
+  // Early authorization against original exposed model id (before provider resolution effects).
+  if (keyRow && bodyInfo.parsed?.model) {
+    const denied = await authorizeOriginalResource(keyRow, bodyInfo.parsed.model);
+    if (denied) return denied;
+  }
 
   // Strip the provider prefix (e.g. "xai/grok-imagine-video") before forwarding;
   // otherwise forward the original bytes untouched.
@@ -195,8 +198,13 @@ export async function handleVideoCreate(request, action) {
  * caller pins the creating account via `x-connection-id` (returned on create).
  */
 export async function handleVideoGet(request, requestId) {
-  const authError = await requireValidApiKey(request);
-  if (authError) return authError;
+  // Auth only — no model ACL on polling.
+  const auth = await requireValidApiKey(request);
+  if (auth?.errorResponse) return auth.errorResponse;
+  return await handleVideoPollInternal(request, requestId);
+}
+
+async function handleVideoPollInternal(request, requestId) {
 
   if (!requestId) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing video request id");
 

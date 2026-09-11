@@ -5,6 +5,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
+import { resolveApiKeyContext, authorizeOriginalResource } from "../services/apiKeyPolicy.js";
 import { getSettings, getCombos } from "@/lib/localDb";
 import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js";
 import { handleSearchCore } from "open-sse/handlers/search/index.js";
@@ -44,23 +45,21 @@ export async function handleSearch(request) {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
+  // Enforce API key if enabled in settings. Presented-but-invalid keys always 401.
   const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-    }
-  }
+  const keyCtx = await resolveApiKeyContext(request);
+  if (keyCtx.errorResponse) return keyCtx.errorResponse;
+  const keyRow = keyCtx.keyRow;
 
   if (!providerInput || typeof providerInput !== "string") {
     log.warn("SEARCH", "Missing provider/model");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: provider (or model)");
+  }
+
+  // Early authorization against original exposed provider/model/combo — BEFORE combo expansion.
+  if (keyRow && providerInput) {
+    const denied = await authorizeOriginalResource(keyRow, providerInput);
+    if (denied) return denied;
   }
 
   if (!query || typeof query !== "string" || !query.trim()) {

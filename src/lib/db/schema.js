@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -78,13 +78,35 @@ export const TABLES = {
   apiKeys: {
     columns: {
       id: "TEXT PRIMARY KEY",
-      key: "TEXT UNIQUE NOT NULL",
-      name: "TEXT",
+      keyHash: "TEXT UNIQUE NOT NULL",
+      keyHint: "TEXT NOT NULL",
+      hashVersion: "INTEGER NOT NULL",
+      name: "TEXT NOT NULL",
       machineId: "TEXT",
+      accessMode: "TEXT NOT NULL",
       isActive: "INTEGER DEFAULT 1",
       createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+      rerolledAt: "TEXT",
     },
-    indexes: ["CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)"],
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_ak_key_hash ON apiKeys(keyHash)",
+      "CREATE INDEX IF NOT EXISTS idx_ak_active ON apiKeys(isActive)",
+    ],
+  },
+  apiKeyAccessTargets: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      apiKeyId: "TEXT NOT NULL",
+      targetType: "TEXT NOT NULL",
+      targetId: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_akat_unique ON apiKeyAccessTargets(apiKeyId, targetType, targetId)",
+      "CREATE INDEX IF NOT EXISTS idx_akat_apiKeyId ON apiKeyAccessTargets(apiKeyId)",
+      "CREATE INDEX IF NOT EXISTS idx_akat_target ON apiKeyAccessTargets(targetType, targetId)",
+    ],
   },
   combos: {
     columns: {
@@ -114,6 +136,8 @@ export const TABLES = {
       model: "TEXT",
       connectionId: "TEXT",
       apiKey: "TEXT",
+      apiKeyId: "TEXT",
+      apiKeyNameSnapshot: "TEXT",
       endpoint: "TEXT",
       promptTokens: "INTEGER DEFAULT 0",
       completionTokens: "INTEGER DEFAULT 0",

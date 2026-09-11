@@ -77,7 +77,9 @@ describe("Schema migrations", () => {
 
     const keys = db.all(`SELECT * FROM apiKeys`);
     expect(keys).toHaveLength(1);
-    expect(keys[0].key).toBe("abc");
+    // Legacy plaintext is hashed; no `key` column remains after migration 002
+    expect(keys[0].keyHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(keys[0].name).toBe("test");
 
     const aliases = db.all(`SELECT * FROM kv WHERE scope='modelAliases'`);
     expect(aliases).toHaveLength(1);

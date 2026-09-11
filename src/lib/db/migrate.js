@@ -3,6 +3,7 @@ import path from "node:path";
 import { LEGACY_FILES, DB_DIR } from "./paths.js";
 import { TABLES, buildCreateTableSql, SCHEMA_VERSION } from "./schema.js";
 import { MIGRATIONS, latestVersion } from "./migrations/index.js";
+import m002 from "./migrations/002-api-key-policies.js";
 import { getMetaSync, setMetaSync } from "./helpers/metaStore.js";
 import { makeBackupDir, backupFile, backupDbLite, pruneOldBackups } from "./backup.js";
 import { getAppVersion } from "./version.js";
@@ -140,9 +141,13 @@ function importLegacyMain(adapter, data) {
     );
   }, (p) => ({ id: p.id ?? null }));
 
-  importWithAssertion(adapter, "apiKeys", data.apiKeys || [], (k) => {
+  // Staging table for plaintext API keys — hashed into apiKeys by migration 002.
+  adapter.exec(`CREATE TABLE IF NOT EXISTS _legacy_api_keys (id TEXT PRIMARY KEY, key TEXT, name TEXT, machineId TEXT, isActive INTEGER, createdAt TEXT)`);
+  importWithAssertion(adapter, "_legacy_api_keys", data.apiKeys || [], (k) => {
+    // Legacy JSON holds plaintext keys; keep them in a staging table so migration
+    // 002 can hash them. The final apiKeys table never stores plaintext.
     adapter.run(
-      `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO _legacy_api_keys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
       [k.id, k.key, k.name || null, k.machineId || null, k.isActive === false ? 0 : 1, k.createdAt || new Date().toISOString()]
     );
   }, (k) => ({ id: k.id ?? null, name: k.name ?? null }));
@@ -271,6 +276,13 @@ export async function runMigrationOnce(adapter) {
         importLegacyUsage(adapter, legacyUsage);
         importLegacyDisabled(adapter, legacyDisabled);
         importLegacyDetails(adapter, legacyDetails);
+        // Legacy import staged plaintext keys into _legacy_api_keys after migration
+        // 002 already ran on the empty table — re-apply 002 to hash them now.
+        try {
+          if (adapter.get(`SELECT COUNT(*) as c FROM _legacy_api_keys`)?.c > 0) {
+            m002.up(adapter);
+          }
+        } catch { /* no staged keys */ }
         setMetaSync(adapter, "appVersion", getAppVersion());
         setMetaSync(adapter, "backupSchemaVersion", SCHEMA_VERSION);
         setMetaSync(adapter, "migratedAt", new Date().toISOString());

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { getProviderConnections } from "@/lib/localDb";
+import { getProviderConnections, getApiKeyById } from "@/lib/localDb";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
 import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { resolveQuotaScope, connectionInScope } from "@/lib/apiKeys/quotaScope.js";
 
 const SAFE_FIELDS = [
   "id", "provider", "authType", "name", "email", "displayName",
@@ -86,7 +87,20 @@ export async function GET(request) {
     const pageSize = Math.min(parsePositiveInt(searchParams.get("pageSize"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
 
     const allConnections = await getProviderConnections();
-    const eligibleConnections = allConnections.filter(isUsageEligible);
+    let eligibleConnections = allConnections.filter(isUsageEligible);
+
+    // Optional Quota Tracker filter by API key: restrict connections to the key's policy scope.
+    const apiKeyId = searchParams.get("apiKeyId");
+    let quotaScope = null;
+    if (apiKeyId) {
+      const keyRow = await getApiKeyById(apiKeyId);
+      if (!keyRow) {
+        return NextResponse.json({ error: "API key not found" }, { status: 404 });
+      }
+      quotaScope = await resolveQuotaScope(keyRow);
+      eligibleConnections = eligibleConnections.filter((conn) => connectionInScope(quotaScope, conn));
+    }
+
     const providerOptions = Array.from(new Set(eligibleConnections.map((conn) => conn.provider))).sort();
 
     const providerFilteredConnections = eligibleConnections.filter((conn) => (

@@ -1,4 +1,3 @@
-import { getApiKeys } from "@/lib/localDb";
 import { resolveProviderId } from "@/shared/constants/providers.js";
 import { unwrapClineEnvelope } from "open-sse/shared/clineEnvelope.js";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
@@ -40,14 +39,9 @@ function createSilentWavFile() {
 }
 
 async function getInternalHeaders() {
-  let apiKey = null;
-  try {
-    const keys = await getApiKeys();
-    apiKey = keys.find((k) => k.isActive !== false)?.key || null;
-  } catch {}
-
+  // Plaintext API keys are never stored (HMAC digests only). Internal model pings
+  // authenticate via x-9r-cli-token (dashboardGuard accepts CLI token).
   const headers = { "Content-Type": "application/json" };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   headers["x-9r-cli-token"] = await getConsistentMachineId(CLI_TOKEN_SALT);
   return headers;
 }

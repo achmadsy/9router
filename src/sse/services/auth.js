@@ -352,6 +352,12 @@ export function extractApiKey(request) {
     return xApiKey;
   }
 
+  // Gemini native API key header
+  const googleApiKey = request.headers.get("x-goog-api-key");
+  if (googleApiKey) {
+    return googleApiKey;
+  }
+
   return null;
 }
 

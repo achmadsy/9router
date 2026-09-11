@@ -1,4 +1,6 @@
 import { buildModelsList } from "../route.js";
+import { isModelAllowed, loadCombosForPolicy } from "@/lib/apiKeys/policy.js";
+import { resolveApiKeyContext } from "@/sse/services/apiKeyPolicy.js";
 
 // URL slug → service kind(s). `web` covers both webSearch and webFetch.
 const KIND_SLUG_MAP = {
@@ -37,16 +39,39 @@ function json(data, options = {}) {
  * GET /v1/models/{provider}/{model} - OpenAI-compatible single model lookup.
  * Supported kinds: image, tts, stt, embedding, image-to-text, web.
  */
-export async function GET(_request, { params }) {
+export async function GET(request, { params }) {
   try {
     const { model } = await params;
     const path = Array.isArray(model) ? model : [model];
     const identifier = path.filter(Boolean).join("/");
     const kindFilter = path.length === 1 ? KIND_SLUG_MAP[identifier] : null;
 
+    // Invalid/paused presented keys → 401 even when requireApiKey is false.
+    const keyCtx = await resolveApiKeyContext(request);
+    if (keyCtx.errorResponse) return keyCtx.errorResponse;
+    const keyRow = keyCtx.keyRow;
+
     if (kindFilter) {
       const data = await buildModelsList(kindFilter);
-      return json({ object: "list", data });
+      const { filterCatalogByPolicy } = await import("@/lib/apiKeys/policy.js");
+      return json({
+        object: "list",
+        data: filterCatalogByPolicy(keyRow, data, { combos: await loadCombosForPolicy() }),
+      });
+    }
+
+    // Forbidden model → 404 with the same wording as unknown models.
+    if (keyRow && !(await isModelAllowed(keyRow, identifier, { getCombos: loadCombosForPolicy }))) {
+      return json(
+        {
+          error: {
+            message: `The model '${identifier}' does not exist or you do not have access to it.`,
+            type: "invalid_request_error",
+            code: "model_not_found",
+          },
+        },
+        { status: 404 },
+      );
     }
 
     // Match the same LLM catalog exposed by GET /v1/models. A catch-all

@@ -69,25 +69,46 @@ function writeJsonFile(sessionPath, filename, data) {
   }
 }
 
-// Mask sensitive data in headers (DISABLED - keep full token for testing)
+// Mask sensitive data in headers
+const SENSITIVE_HEADER_KEYS = [
+  "authorization",
+  "x-api-key",
+  "x-goog-api-key",
+  "cookie",
+  "set-cookie",
+  "proxy-authorization",
+  "token",
+];
+
+function isSensitiveHeaderName(lowerKey) {
+  return SENSITIVE_HEADER_KEYS.some((sk) => lowerKey === sk || lowerKey.includes(sk));
+}
+
 function maskSensitiveHeaders(headers) {
-  if (!headers) return {};
-  return { ...headers };
-  
-  // Old masking code (disabled):
-  // const masked = { ...headers };
-  // const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token"];
-  // 
-  // for (const key of Object.keys(masked)) {
-  //   const lowerKey = key.toLowerCase();
-  //   if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
-  //     const value = masked[key];
-  //     if (value && value.length > 20) {
-  //       masked[key] = value.slice(0, 10) + "..." + value.slice(-5);
-  //     }
-  //   }
-  // }
-  // return masked;
+  if (!headers || typeof headers !== "object") return {};
+  const masked = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = String(key).toLowerCase();
+    masked[key] = isSensitiveHeaderName(lowerKey) ? "[REDACTED]" : value;
+  }
+  return masked;
+}
+
+// Strip credential query params (e.g. ?key=...) before logging a URL.
+function sanitizeLoggedUrl(url) {
+  if (!url) return url;
+  try {
+    const u = url instanceof URL ? url : new URL(String(url));
+    for (const param of [...u.searchParams.keys()]) {
+      const lower = param.toLowerCase();
+      if (lower === "key" || lower.includes("key") || lower.includes("token") || lower === "access_token") {
+        u.searchParams.set(param, "[REDACTED]");
+      }
+    }
+    return u.toString();
+  } catch {
+    return String(url).replace(/([?&](?:key|token|access_token|api_key)=)[^&]*/gi, "$1[REDACTED]");
+  }
 }
 
 // No-op logger when logging is disabled
@@ -130,7 +151,7 @@ export async function createRequestLogger(sourceFormat, targetFormat, model) {
     logClientRawRequest(endpoint, body, headers = {}) {
       writeJsonFile(sessionPath, "1_req_client.json", {
         timestamp: new Date().toISOString(),
-        endpoint,
+        endpoint: sanitizeLoggedUrl(endpoint),
         headers: maskSensitiveHeaders(headers),
         body
       });
@@ -157,7 +178,7 @@ export async function createRequestLogger(sourceFormat, targetFormat, model) {
     logTargetRequest(url, headers, body) {
       writeJsonFile(sessionPath, "4_req_target.json", {
         timestamp: new Date().toISOString(),
-        url,
+        url: sanitizeLoggedUrl(url),
         headers: maskSensitiveHeaders(headers),
         body
       });
@@ -166,11 +187,14 @@ export async function createRequestLogger(sourceFormat, targetFormat, model) {
     // 5. Log provider response (for non-streaming or error)
     logProviderResponse(status, statusText, headers, body) {
       const filename = "5_res_provider.json";
+      const rawHeaders = headers
+        ? (typeof headers.entries === "function" ? Object.fromEntries(headers.entries()) : headers)
+        : {};
       writeJsonFile(sessionPath, filename, {
         timestamp: new Date().toISOString(),
         status,
         statusText,
-        headers: headers ? (typeof headers.entries === "function" ? Object.fromEntries(headers.entries()) : headers) : {},
+        headers: maskSensitiveHeaders(rawHeaders),
         body
       });
     },

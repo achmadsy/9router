@@ -147,6 +147,8 @@ export default function ProviderLimits() {
   const [proxyPools, setProxyPools] = useState([]);
   const [providerFilter, setProviderFilter] = useState("all");
   const [providerOptions, setProviderOptions] = useState([]);
+  const [apiKeyFilter, setApiKeyFilter] = useState("all");
+  const [apiKeyOptions, setApiKeyOptions] = useState([]);
   const [accountFilter, setAccountFilter] = useState("all");
   const [quotaSortMode, setQuotaSortMode] = useState("default");
   const [quotaVisibility, setQuotaVisibility] = useState({});
@@ -172,9 +174,40 @@ export default function ProviderLimits() {
   const intervalRef = useRef(null);
   const countdownRef = useRef(null);
   const tickCountRef = useRef(0);
+  const connectionsAbortRef = useRef(null);
+  const apiKeyOptionsLoadedRef = useRef(false);
+
+  // Load API-key options once for the Quota Tracker key filter.
+  useEffect(() => {
+    if (apiKeyOptionsLoadedRef.current) return;
+    apiKeyOptionsLoadedRef.current = true;
+    let ignore = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/keys");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!ignore) setApiKeyOptions(data.keys || []);
+      } catch { /* empty options */ }
+    })();
+    return () => { ignore = true; };
+  }, []);
+
+  // If the selected API key was deleted, reset filter to All API Keys.
+  useEffect(() => {
+    if (apiKeyFilter === "all") return;
+    if (!apiKeyOptionsLoadedRef.current) return;
+    if (apiKeyOptions.length === 0) return;
+    if (!apiKeyOptions.some((k) => k.id === apiKeyFilter)) {
+      setApiKeyFilter("all");
+    }
+  }, [apiKeyFilter, apiKeyOptions]);
 
   const fetchConnections = useCallback(
     async (targetPage = page) => {
+      connectionsAbortRef.current?.abort();
+      const controller = new AbortController();
+      connectionsAbortRef.current = controller;
       try {
         const params = new URLSearchParams({
           page: String(targetPage),
@@ -186,11 +219,22 @@ export default function ProviderLimits() {
         if (providerFilter !== "all") {
           params.set("provider", providerFilter);
         }
+        if (apiKeyFilter !== "all") {
+          params.set("apiKeyId", apiKeyFilter);
+        }
 
         const response = await fetch(
           `/api/providers/client?${params.toString()}`,
+          { signal: controller.signal },
         );
-        if (!response.ok) throw new Error("Failed to fetch connections");
+        if (!response.ok) {
+          // Selected API key was deleted → reset filter and fall back to All API Keys.
+          if (response.status === 404 && apiKeyFilter !== "all") {
+            setApiKeyFilter("all");
+            return [];
+          }
+          throw new Error("Failed to fetch connections");
+        }
 
         const data = await response.json();
         const connectionList = data.connections || [];
@@ -204,6 +248,7 @@ export default function ProviderLimits() {
         setPage(getPaginationPageValue(data.pagination, targetPage));
         return connectionList;
       } catch (error) {
+        if (error?.name === "AbortError") return [];
         console.error("Error fetching connections:", error);
         setConnections([]);
         setProviderOptions([]);
@@ -212,7 +257,7 @@ export default function ProviderLimits() {
         return [];
       }
     },
-    [accountFilter, expiringFirst, page, pageSize, providerFilter],
+    [accountFilter, apiKeyFilter, expiringFirst, page, pageSize, providerFilter],
   );
 
   // Fetch quota for a specific connection
@@ -224,7 +269,11 @@ export default function ProviderLimits() {
       console.log(
         `[ProviderLimits] Fetching quota for ${provider} (${connectionId})`,
       );
-      const url = `/api/usage/${connectionId}${force ? "?force=1" : ""}`;
+      const usageParams = new URLSearchParams();
+      if (force) usageParams.set("force", "1");
+      if (apiKeyFilter !== "all") usageParams.set("apiKeyId", apiKeyFilter);
+      const qs = usageParams.toString();
+      const url = `/api/usage/${connectionId}${qs ? `?${qs}` : ""}`;
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -291,7 +340,7 @@ export default function ProviderLimits() {
     } finally {
       setLoading((prev) => ({ ...prev, [connectionId]: false }));
     }
-  }, []);
+  }, [apiKeyFilter]);
 
   // Refresh quota for a specific provider
   const refreshProvider = useCallback(
@@ -768,6 +817,10 @@ export default function ProviderLimits() {
 
   const selectedProviderLabel =
     providerFilter === "all" ? "All providers" : providerFilter;
+  const selectedApiKeyLabel =
+    apiKeyFilter === "all"
+      ? "All API Keys"
+      : apiKeyOptions.find((k) => k.id === apiKeyFilter)?.name || "All API Keys";
   const hasEligibleConnections = totals.eligibleConnections > 0;
   const hasVisibleConnections = sortedConnections.length > 0;
   const emptyState = getConnectionsEmptyMessage(
@@ -799,6 +852,49 @@ export default function ProviderLimits() {
   }
 
   if (!connectionsLoading && !hasVisibleConnections) {
+    // Keep the API-key filter reachable so an empty scoped view is recoverable.
+    if (apiKeyFilter !== "all") {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end">
+            <select
+              value={apiKeyFilter}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (shouldResetPage(apiKeyFilter, nextValue)) {
+                  setPage(1);
+                }
+                setApiKeyFilter(nextValue);
+              }}
+              className="h-8 rounded-lg border border-black/10 bg-black/[0.02] px-2 text-xs text-text-primary outline-none transition-colors hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/10"
+              aria-label="Filter quota by API key"
+              title="Quota is reported for shared upstream accounts, not per-key allocations."
+            >
+              <option value="all">All API Keys</option>
+              {apiKeyOptions.map((key) => (
+                <option key={key.id} value={key.id}>
+                  {key.name}
+                  {key.isActive === false ? " (paused)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Card padding="lg">
+            <div className="text-center py-12">
+              <span className="material-symbols-outlined text-[64px] text-text-muted opacity-20">
+                key_off
+              </span>
+              <h3 className="mt-4 text-lg font-semibold text-text-primary">
+                No Accounts In API Key Scope
+              </h3>
+              <p className="mt-2 text-sm text-text-muted max-w-md mx-auto">
+                {`No upstream accounts are accessible to "${selectedApiKeyLabel}". Quota shows shared upstream accounts, not per-key allocations. Adjust the key policy or switch to All API Keys.`}
+              </p>
+            </div>
+          </Card>
+        </div>
+      );
+    }
     return (
       <Card padding="lg">
         <div className="text-center py-12">
@@ -821,6 +917,28 @@ export default function ProviderLimits() {
       {/* Header Controls */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end">
         <div className="flex flex-wrap items-center gap-1.5">
+          <select
+            value={apiKeyFilter}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              if (shouldResetPage(apiKeyFilter, nextValue)) {
+                setPage(1);
+              }
+              setApiKeyFilter(nextValue);
+            }}
+            className="h-8 rounded-lg border border-black/10 bg-black/[0.02] px-2 text-xs text-text-primary outline-none transition-colors hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/10"
+            aria-label="Filter quota by API key"
+            title="Quota is reported for shared upstream accounts, not per-key allocations."
+          >
+            <option value="all">All API Keys</option>
+            {apiKeyOptions.map((key) => (
+              <option key={key.id} value={key.id}>
+                {key.name}
+                {key.isActive === false ? " (paused)" : ""}
+              </option>
+            ))}
+          </select>
+
           <div className="relative">
             <button
               type="button"

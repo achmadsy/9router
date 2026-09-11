@@ -1,7 +1,8 @@
 // Ensure proxyFetch is loaded to patch globalThis.fetch
 import "open-sse/index.js";
 
-import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { getProviderConnectionById, updateProviderConnection, getApiKeyById } from "@/lib/localDb";
+import { resolveQuotaScope, connectionInScope } from "@/lib/apiKeys/quotaScope.js";
 import { getUsageForProvider } from "open-sse/services/usage.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -123,13 +124,24 @@ export async function GET(request, { params }) {
   let connection;
   try {
     const { connectionId } = await params;
-    const force = new URL(request.url).searchParams.get("force") === "1";
-
+    const url = new URL(request.url);
+    const force = url.searchParams.get("force") === "1";
+    const apiKeyId = url.searchParams.get("apiKeyId");
 
     // Get connection from database
     connection = await getProviderConnectionById(connectionId);
     if (!connection) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
+    }
+
+    // Quota Tracker scoped by API key: out-of-scope connections → 404.
+    if (apiKeyId) {
+      const keyRow = await getApiKeyById(apiKeyId);
+      if (!keyRow) return Response.json({ error: "API key not found" }, { status: 404 });
+      const scope = await resolveQuotaScope(keyRow);
+      if (!connectionInScope(scope, connection)) {
+        return Response.json({ error: "Connection not found" }, { status: 404 });
+      }
     }
 
     // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)

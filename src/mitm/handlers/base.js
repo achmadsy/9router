@@ -5,11 +5,14 @@ const ROUTER_BASE = String(process.env.MITM_ROUTER_BASE || DEFAULT_LOCAL_ROUTER)
   .trim()
   .replace(/\/+$/, "") || DEFAULT_LOCAL_ROUTER;
 const API_KEY = process.env.ROUTER_API_KEY;
+// Trusted local/CLI-token self-call to the router. Prefer this over inventing a
+// plaintext API key when MITM is auto-started without a one-time secret.
+const CLI_TOKEN = process.env.ROUTER_CLI_TOKEN;
 
 // Headers that must not be forwarded to 9Router
 const STRIP_HEADERS = new Set([
   "host", "content-length", "connection", "transfer-encoding",
-  "content-type", "authorization"
+  "content-type", "authorization", "x-9r-cli-token"
 ]);
 
 /**
@@ -27,7 +30,8 @@ async function fetchRouter(openaiBody, path = "/v1/chat/completions", clientHead
     headers: {
       ...forwarded,
       "Content-Type": "application/json",
-      ...(API_KEY && { "Authorization": `Bearer ${API_KEY}` })
+      ...(API_KEY && { "Authorization": `Bearer ${API_KEY}` }),
+      ...(CLI_TOKEN && { "x-9r-cli-token": CLI_TOKEN })
     },
     body: JSON.stringify(openaiBody)
   });
