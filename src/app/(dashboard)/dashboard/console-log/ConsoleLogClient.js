@@ -1,8 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { Card, Button } from "@/shared/components";
 import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config";
+import {
+  captureScrollAnchor,
+  isAtBottom,
+  reconcileInitEntries,
+  restoreScrollAnchor,
+} from "./scrollAnchor";
 
 const LOG_LEVEL_COLORS = {
   LOG: "text-green-400",
@@ -19,16 +25,27 @@ function colorLine(line) {
   return <span className={color}>{line}</span>;
 }
 
+let nextLogId = 1;
+
+function toLogEntries(lines) {
+  const list = Array.isArray(lines) ? lines : [lines];
+  return list.map((text) => ({ id: nextLogId++, text }));
+}
+
+function trimToMax(entries) {
+  return entries.length > CONSOLE_LOG_CONFIG.maxLines ? entries.slice(-CONSOLE_LOG_CONFIG.maxLines) : entries;
+}
+
 export default function ConsoleLogClient() {
   const [logs, setLogs] = useState([]);
   const [connected, setConnected] = useState(false);
   const logRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
+  const pendingAnchorRef = useRef(null);
 
   const handleScroll = () => {
     if (!logRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = logRef.current;
-    shouldAutoScrollRef.current = scrollHeight - scrollTop - clientHeight <= 4;
+    shouldAutoScrollRef.current = isAtBottom(logRef.current);
   };
 
   const handleClear = async () => {
@@ -48,17 +65,25 @@ export default function ConsoleLogClient() {
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === "init") {
-        setLogs(msg.logs.slice(-CONSOLE_LOG_CONFIG.maxLines));
+        // Reconnect replays the full server ring with new ids. Do not remount:
+        // keep current entries (stable ids), append only lines missed while
+        // disconnected. First paint hydrates; no-overlap restart falls back to
+        // hydrate inside reconcileInitEntries.
+        setLogs((prev) => {
+          const next = reconcileInitEntries(prev, msg.logs, toLogEntries, trimToMax);
+          if (next === prev) return prev;
+          pendingAnchorRef.current = shouldAutoScrollRef.current
+            ? null
+            : captureScrollAnchor(logRef.current);
+          return next;
+        });
       } else if (msg.type === "line") {
-        setLogs((prev) => {
-          const next = [...prev, msg.line];
-          return next.length > CONSOLE_LOG_CONFIG.maxLines ? next.slice(-CONSOLE_LOG_CONFIG.maxLines) : next;
-        });
+        // Capture anchor before list mutates so a non-autoscroll reader stays put.
+        pendingAnchorRef.current = shouldAutoScrollRef.current ? null : captureScrollAnchor(logRef.current);
+        setLogs((prev) => trimToMax([...prev, ...toLogEntries(msg.line)]));
       } else if (msg.type === "lines") {
-        setLogs((prev) => {
-          const next = [...prev, ...msg.lines];
-          return next.length > CONSOLE_LOG_CONFIG.maxLines ? next.slice(-CONSOLE_LOG_CONFIG.maxLines) : next;
-        });
+        pendingAnchorRef.current = shouldAutoScrollRef.current ? null : captureScrollAnchor(logRef.current);
+        setLogs((prev) => trimToMax([...prev, ...toLogEntries(msg.lines)]));
       } else if (msg.type === "clear") {
         setLogs([]);
       }
@@ -69,10 +94,17 @@ export default function ConsoleLogClient() {
     return () => es.close();
   }, []);
 
-  // Auto-scroll only while the user is already at the bottom
-  useEffect(() => {
-    if (!logRef.current || !shouldAutoScrollRef.current) return;
-    logRef.current.scrollTop = logRef.current.scrollHeight;
+  // After paint: stick to bottom if autoscrolling, else restore reading position.
+  useLayoutEffect(() => {
+    const el = logRef.current;
+    if (!el) return;
+
+    if (shouldAutoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+    } else if (pendingAnchorRef.current) {
+      restoreScrollAnchor(el, pendingAnchorRef.current);
+    }
+    pendingAnchorRef.current = null;
   }, [logs]);
 
   return (
@@ -92,8 +124,10 @@ export default function ConsoleLogClient() {
             <span className="text-text-muted">No console logs yet.</span>
           ) : (
             <div className="space-y-0.5">
-              {logs.map((line, i) => (
-                <div key={i}>{colorLine(line)}</div>
+              {logs.map((entry) => (
+                <div key={entry.id} data-log-line={entry.id}>
+                  {colorLine(entry.text)}
+                </div>
               ))}
             </div>
           )}

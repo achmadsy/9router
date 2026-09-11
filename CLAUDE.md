@@ -69,6 +69,10 @@ Two authoritative docs already exist — read them before working in these areas
 - Translators **self-register** via `register(from, to, reqFn, resFn)` as an import side effect — a new translator file MUST be imported in `open-sse/translator/index.js` or it never runs.
 - Never hardcode role/block/model strings — use `open-sse/translator/schema/` and `open-sse/config/` constants. Config-driven and DRY is enforced by convention here.
 
+### Next.js App Router gotchas
+- **Never put `"use server"` on `src/app/**/route.js`** — those files are HTTP Route Handlers, not Server Actions. The directive makes Next register exports as Server Actions (IDs must be exactly 42 chars); a bad lookup throws `The Server Reference ID did not match the expected format` (E1442), which `consoleLogBuffer` captures and the Console Log page displays. Regression covered by `tests/unit/api-route-no-use-server.test.js`.
+- Console Log ring-buffer UI (`src/app/(dashboard)/dashboard/console-log/`): when not autoscrolling, new lines + top-trim must preserve the reader's position via stable line ids and `scrollAnchor.js` — do not use index keys (`key={i}`) with `slice(-maxLines)`.
+
 ### Provider registry (`open-sse/providers/registry/*`)
 - One file per provider. `providers/registry/index.js` is an **auto-generated** static import list — regenerate it with `scripts/migrate-registry.mjs` / `injectDisplayToRegistry.mjs`, don't hand-edit.
 - Add a provider: copy `providers/REGISTRY_TEMPLATE.js`, add models to `config/providerModels.js`. Only add an executor for non-OpenAI-compatible upstreams.
