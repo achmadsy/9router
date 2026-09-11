@@ -10,18 +10,25 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
  * The weekly quota endpoint lives on the account service domain and is authorized
  * by an account session cookie, NOT the sk- API key. Acquiring that cookie mirrors
  * MiMo Desktop: a passToken (persisted in Desktop's cookie store) is exchanged via
- * the passportapi SSO, then authorized for the `mimopc` service, and finally stamped
- * by the mimo-server /api/sts callback into a `serviceToken` cookie.
+ * the passportapi SSO, then authorized for the account service scope, and finally
+ * stamped by that service's /api/sts callback into a `serviceToken` cookie.
  *
- * Flow (verified against MiMo Desktop traffic):
- *   1. GET  {api}/api/user/xiaomi/me           -> 302 to account SSO (sid=mimopc)
+ * The account service is REGIONAL — Desktop picks China (`mimopc`, host
+ * mimo-server-cn) or Singapore (`mimosgp`, host mimo-server-sgp) at sign-in, and each
+ * region holds its own membership. Every request below goes to/through the region
+ * resolved for this connection; see shared/mimoRegions.js.
+ *
+ * Flow (verified against MiMo Desktop traffic, CN region):
+ *   1. GET  {api}/api/user/xiaomi/me           -> 302 to account SSO (sid={region})
  *   2. GET  account /pass/serviceLogin?sid=passportapi&_json=true   -> nonce/ssecurity
  *   3. GET  {location}&clientSign=...          -> account-level serviceToken
- *   4. GET  account /pass/serviceLogin?sid=mimopc&callback=<sts>&_json=true
- *   5. GET  {api}/api/sts?...&ticket...        -> Set-Cookie: serviceToken (mimopc scope)
+ *   4. GET  account /pass/serviceLogin?sid={region}&callback=<sts>&_json=true
+ *   5. GET  {api}/api/sts?...&ticket...        -> Set-Cookie: serviceToken (region scope)
  */
 
-const API_BASE = "https://mimo-server-cn.xiaomimimo.com";
+import { resolveMimoAccount, parseRegionFromStateCookie, scopedCookieNames } from "./mimoRegions.js";
+
+const DEFAULT_API_BASE = "https://mimo-server-cn.xiaomimimo.com";
 const ACCOUNT_HOST = "account.xiaomi.com";
 const API_UA =
   "miNative PC/Normal Windows_NT/10.0.19045 SDKV/1.0.0 DEVT/PC DEVS/Windows APP/miaccount_desktop APPV/0.1.0";
@@ -93,6 +100,20 @@ export async function readDesktopPassToken() {
   }
 }
 
+/**
+ * Read the region Desktop signed in against, from its `state` cookie.
+ * Exported so callers can resolve the right account service for a mounted cookie DB.
+ * @returns {Promise<{host:string|null, sid:string|null}|null>}
+ */
+export async function readDesktopAccountRegion() {
+  try {
+    const jar = await readDesktopAccountCookies();
+    return parseRegionFromStateCookie(jar?.state);
+  } catch {
+    return null;
+  }
+}
+
 function signatureClientSign(nonce, ssecurity) {
   const input = `nonce=${nonce}` + (ssecurity && ssecurity.trim() ? `&${ssecurity}` : "");
   return encodeURIComponent(crypto.createHash("sha1").update(input).digest("base64"));
@@ -116,13 +137,14 @@ function cookieHeader(jar) {
  * Exchange a passToken for a mimo-server service session cookie.
  * @returns {Promise<string|null>} Cookie header value, or null on failure.
  */
-async function acquireServiceCookie(passJar, proxyOptions) {
+async function acquireServiceCookie(passJar, account, proxyOptions) {
   const jar = { ...passJar };
   const ck = () => cookieHeader(jar);
+  const apiBase = `https://${account.host}`;
 
-  // 1. Unauthenticated API call -> 302 carrying the sts callback (sid=mimopc)
+  // 1. Unauthenticated API call -> 302 carrying the sts callback (sid={region})
   const r1 = await proxyAwareFetch(
-    `${API_BASE}/api/user/xiaomi/me`,
+    `${apiBase}/api/user/xiaomi/me`,
     { redirect: "manual", headers: { "User-Agent": API_UA, Cookie: ck() } },
     proxyOptions,
   );
@@ -149,9 +171,9 @@ async function acquireServiceCookie(passJar, proxyOptions) {
   );
   absorbSetCookie(jar, sso2);
 
-  // 4. mimopc SSO -> sts callback carrying a ticket
+  // 4. regional SSO -> sts callback carrying a ticket
   const sso3 = await proxyAwareFetch(
-    `https://${ACCOUNT_HOST}/pass/serviceLogin?sid=mimopc&callback=${encodeURIComponent(stsCallback)}&_json=true`,
+    `https://${ACCOUNT_HOST}/pass/serviceLogin?sid=${account.sid}&callback=${encodeURIComponent(stsCallback)}&_json=true`,
     { headers: { Cookie: ck(), "User-Agent": SSO_UA, Accept: "application/json" } },
     proxyOptions,
   );
@@ -159,7 +181,7 @@ async function acquireServiceCookie(passJar, proxyOptions) {
   absorbSetCookie(jar, sso3);
   if (!j3?.location || !/\/api\/sts/.test(j3.location)) return null;
 
-  // 5. sts callback -> Set-Cookie: serviceToken (mimopc scope)
+  // 5. sts callback -> Set-Cookie: serviceToken (regional scope)
   const sts = await proxyAwareFetch(
     j3.location,
     { redirect: "manual", headers: { "User-Agent": API_UA, Cookie: ck() } },
@@ -167,7 +189,7 @@ async function acquireServiceCookie(passJar, proxyOptions) {
   );
   absorbSetCookie(jar, sts);
 
-  const needed = ["serviceToken", "mimopc_ph", "mimopc_slh", "userId"];
+  const needed = ["serviceToken", ...scopedCookieNames(account.sid), "userId"];
   if (!jar.serviceToken) return null;
   const out = {};
   for (const k of needed) if (jar[k]) out[k] = jar[k];
@@ -184,8 +206,18 @@ async function getServiceCookie(providerSpecificData, proxyOptions) {
     : await readDesktopAccountCookies();
   if (!passJar) return { cookie: null, reason: "no-pass-token" };
 
-  // One cached session per passToken — accounts/connections rotate independently.
-  const key = crypto.createHash("sha256").update(passJar.passToken).digest("hex");
+  // CN and SGP hold separate entitlements, so region is part of session identity:
+  // a per-connection override wins, else whatever Desktop signed in for. A pinned
+  // passToken carries no `state` cookie, so fall back to reading the Desktop store.
+  const detected = parseRegionFromStateCookie(passJar.state) || (await readDesktopAccountRegion());
+  const account = resolveMimoAccount(providerSpecificData, detected);
+
+  // One cached session per (passToken, region) — accounts/connections rotate
+  // independently, and a CN session must never be reused for an SGP request.
+  const key = crypto
+    .createHash("sha256")
+    .update(`${passJar.passToken}|${account.id}`)
+    .digest("hex");
 
   const cached = _cache.get(key);
   if (cached && Date.now() - cached.at < COOKIE_TTL_MS) {
@@ -202,7 +234,7 @@ async function getServiceCookie(providerSpecificData, proxyOptions) {
 
   const promise = (async () => {
     try {
-      return await acquireServiceCookie(passJar, proxyOptions);
+      return await acquireServiceCookie(passJar, account, proxyOptions);
     } catch {
       return null; // network/parse failure — callers degrade, never throw
     } finally {
@@ -222,9 +254,24 @@ export function invalidateMimoAccountCookieCache() {
   _cache.clear();
 }
 
-/** mimo-server account API base + the User-Agent its backend expects. */
-export const MIMO_API_BASE = API_BASE;
+/**
+ * Account-service origin for this connection — the CN host unless a region override
+ * or the Desktop cookie store says otherwise. Preview calls must use this, not a
+ * hardcoded host, or they land on a region that holds no membership for the account.
+ * @returns {Promise<string>} e.g. "https://mimo-server-sgp.xiaomimimo.com"
+ */
+export async function getMimoAccountBaseUrl(providerSpecificData = null) {
+  // A pinned passToken has no `state` cookie of its own, so the Desktop store is the
+  // only place the region can come from in a container/host migration.
+  const detected = await readDesktopAccountRegion();
+  return `https://${resolveMimoAccount(providerSpecificData, detected).host}`;
+}
+
+/** User-Agent the account backend expects. */
 export const MIMO_API_UA = API_UA;
+
+/** Default (China) account API base. Prefer getMimoAccountBaseUrl() per connection. */
+export const MIMO_API_BASE = DEFAULT_API_BASE;
 
 /**
  * Resolve the mimo-server account-session cookie, for upstream /api/route/* calls.
@@ -248,9 +295,11 @@ export async function getMimoAccountUsage(providerSpecificData = null, proxyOpti
   if (!cookie) {
     return { error: reason === "no-pass-token" ? "no-session" : "session-failed" };
   }
+  // Quota lives on the same regional account service the session was minted for.
+  const baseUrl = await getMimoAccountBaseUrl(providerSpecificData);
   try {
     const res = await proxyAwareFetch(
-      `${API_BASE}/api/user/usage`,
+      `${baseUrl}/api/user/usage`,
       { headers: { "User-Agent": API_UA, Cookie: cookie, Accept: "application/json" }, signal: AbortSignal.timeout(10000) },
       proxyOptions,
     );

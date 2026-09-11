@@ -10,7 +10,7 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { apiKey, uid, baseUrl, mimoPassToken, mimoUserId, mimoCUserId } = await request.json();
+    const { apiKey, uid, baseUrl, mimoPassToken, mimoUserId, mimoCUserId, mimoRegion } = await request.json();
 
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       return NextResponse.json(
@@ -74,6 +74,7 @@ export async function POST(request) {
           mimoPassToken: mimoPassToken || existing.providerSpecificData?.mimoPassToken || null,
           mimoUserId: mimoUserId || existing.providerSpecificData?.mimoUserId || null,
           mimoCUserId: mimoCUserId || existing.providerSpecificData?.mimoCUserId || null,
+          mimoRegion: mimoRegion || existing.providerSpecificData?.mimoRegion || null,
           modelCount,
         },
         testStatus: validated ? "active" : existing.testStatus,
@@ -111,6 +112,9 @@ export async function POST(request) {
         mimoPassToken: mimoPassToken || null,
         mimoUserId: mimoUserId || null,
         mimoCUserId: mimoCUserId || null,
+        // Pins the regional account service for Preview models when it can't be
+        // detected from a local Desktop cookie store (e.g. a container).
+        mimoRegion: mimoRegion || null,
       },
       testStatus: validated ? "active" : "untested",
     });

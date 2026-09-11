@@ -8,7 +8,8 @@ import {
   pollForToken
 } from "@/lib/oauth/providers";
 import { createProviderConnection } from "@/models";
-import { readDesktopPassToken } from "open-sse/shared/mimoAccount.js";
+import { readDesktopPassToken, readDesktopAccountRegion } from "open-sse/shared/mimoAccount.js";
+import { resolveMimoAccount } from "open-sse/shared/mimoRegions.js";
 import {
   startCodexProxy,
   stopCodexProxy,
@@ -337,8 +338,13 @@ export async function POST(request, { params }) {
         // passToken, which only lives in MiMo Desktop's cookie store — attach it
         // to the connection so those models work right after OAuth.
         let passToken = null;
+        let mimoRegion = null;
         try {
           passToken = await readDesktopPassToken();
+          // Region the Desktop session belongs to (cn | sgp). Preview models and the
+          // weekly quota are regional, and each region holds its own membership.
+          const detected = await readDesktopAccountRegion();
+          if (detected) mimoRegion = resolveMimoAccount(null, detected).id;
         } catch {
           // Desktop not installed / cookie DB locked — preview models stay unavailable.
         }
@@ -359,6 +365,7 @@ export async function POST(request, { params }) {
               mimoPassToken: passToken?.passToken || null,
               mimoUserId: passToken?.userId || null,
               mimoCUserId: passToken?.cUserId || null,
+              mimoRegion,
             },
             testStatus: "active",
           });

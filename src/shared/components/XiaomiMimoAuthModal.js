@@ -70,6 +70,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
           mimoPassToken: detectResult.mimoPassToken || null,
           mimoUserId: detectResult.mimoUserId || null,
           mimoCUserId: detectResult.mimoCUserId || null,
+          mimoRegion: detectResult.mimoRegion || null,
         }),
       });
       const data = await res.json();

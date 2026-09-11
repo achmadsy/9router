@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { readFile, access, constants } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
-import { readDesktopPassToken } from "open-sse/shared/mimoAccount.js";
+import { readDesktopPassToken, readDesktopAccountRegion } from "open-sse/shared/mimoAccount.js";
+import { resolveMimoAccount } from "open-sse/shared/mimoRegions.js";
 
 /**
  * GET /api/oauth/xiaomi-mimo/auto-import
@@ -109,6 +110,7 @@ export async function GET() {
     let mimoPassToken = null;
     let mimoUserId = null;
     let mimoCUserId = null;
+    let mimoRegion = null;
     try {
       const pt = await readDesktopPassToken();
       if (pt) {
@@ -116,6 +118,13 @@ export async function GET() {
         mimoUserId = pt.userId;
         mimoCUserId = pt.cUserId;
       }
+      // The account service Desktop signed in against (cn | sgp). Preview models are
+      // served per region and each region holds its own membership, so this is what
+      // keeps the request off a backend that would reject the account. Stored only
+      // when the cookie store actually identified a region — otherwise stay null and
+      // let the resolver fall back to its default.
+      const detected = await readDesktopAccountRegion();
+      if (detected) mimoRegion = resolveMimoAccount(null, detected).id;
     } catch (e) {
       console.log("[xiaomi-mimo] passToken read failed (non-fatal):", e.message);
     }
@@ -129,6 +138,7 @@ export async function GET() {
       mimoPassToken,
       mimoUserId,
       mimoCUserId,
+      mimoRegion,
     });
   } catch (error) {
     console.log("Xiaomi MiMo auto-import error:", error);

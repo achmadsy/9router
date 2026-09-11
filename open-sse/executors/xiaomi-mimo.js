@@ -1,5 +1,5 @@
 import { DefaultExecutor } from "./default.js";
-import { getMimoAccountCookie, invalidateMimoAccountCookieCache, MIMO_API_BASE, MIMO_API_UA } from "../shared/mimoAccount.js";
+import { getMimoAccountCookie, getMimoAccountBaseUrl, invalidateMimoAccountCookieCache, MIMO_API_BASE, MIMO_API_UA } from "../shared/mimoAccount.js";
 
 // Desktop-exclusive Preview models. These are served by the account service's
 // /api/route proxy, authorized by the Xiaomi account session (NOT the sk- key).
@@ -10,6 +10,10 @@ const PREVIEW_MODELS = new Set(["mimo-x-pro-preview", "mimo-x-flash-preview"]);
 // (sync — BaseExecutor.execute does not await it). Carried on the per-request
 // credentials object, same as runtimeTransport.
 const COOKIE_KEY = "__mimoAccountCookie";
+
+// Request-scoped account-service origin, resolved in execute() alongside the cookie.
+// buildUrl() is sync, so it reads the resolved value back off credentials.
+const BASE_URL_KEY = "__mimoAccountBaseUrl";
 
 // Upstream calls may hand us either the bare id or a `provider/model` ref.
 function bareModel(model) {
@@ -30,8 +34,11 @@ export class XiaomiMimoExecutor extends DefaultExecutor {
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
     // Preview models live on the account-service route, which is not one of the
     // declared transports — resolve it before the default runtimeTransport path.
+    // The host is regional: execute() resolves it per connection and stashes it on
+    // credentials, since this method has to stay synchronous.
     if (XiaomiMimoExecutor.isPreviewModel(model)) {
-      return `${MIMO_API_BASE}/api/route/chat/completions`;
+      const base = credentials?.[BASE_URL_KEY] || MIMO_API_BASE;
+      return `${base}/api/route/chat/completions`;
     }
     // Cloud API models keep default handling, so a Claude-format client reaches
     // the /anthropic/v1/messages transport.
@@ -79,6 +86,9 @@ export class XiaomiMimoExecutor extends DefaultExecutor {
       );
     }
     credentials[COOKIE_KEY] = cookie;
+    // Pin the regional host for buildUrl() — the session was minted for this region,
+    // so the call must go there too.
+    credentials[BASE_URL_KEY] = await getMimoAccountBaseUrl(credentials?.providerSpecificData);
     const result = await super.execute(args);
 
     // A cached session can expire early — drop it and retry once with a fresh one.
@@ -94,6 +104,6 @@ export class XiaomiMimoExecutor extends DefaultExecutor {
   }
 }
 
-export const __test__ = { PREVIEW_MODELS, bareModel, COOKIE_KEY };
+export const __test__ = { PREVIEW_MODELS, bareModel, COOKIE_KEY, BASE_URL_KEY };
 
 export default XiaomiMimoExecutor;

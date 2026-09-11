@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { XiaomiMimoExecutor, __test__ } from "../../open-sse/executors/xiaomi-mimo.js";
 import { getExecutor } from "../../open-sse/executors/index.js";
 
-const { bareModel, COOKIE_KEY } = __test__;
+const { bareModel, COOKIE_KEY, BASE_URL_KEY } = __test__;
 
 const OPENAI_T = { runtimeTransport: { format: "openai", baseUrl: "https://api.xiaomimimo.com/v1/chat/completions" } };
 const CLAUDE_T = { runtimeTransport: { format: "claude", baseUrl: "https://api.xiaomimimo.com/anthropic/v1/messages" } };
@@ -17,12 +17,22 @@ describe("xiaomi-mimo executor", () => {
     expect(getExecutor("xiaomi-mimo")).toBeInstanceOf(XiaomiMimoExecutor);
   });
 
-  it("routes Preview models to the account-service route regardless of transport", () => {
+  it("routes Preview models to the China account-service route by default", () => {
     const expected = "https://mimo-server-cn.xiaomimimo.com/api/route/chat/completions";
     expect(ex.buildUrl("mimo-x-pro-preview", true, 0, OPENAI_T)).toBe(expected);
     expect(ex.buildUrl("mimo-x-pro-preview", true, 0, CLAUDE_T)).toBe(expected);
     // body.model arrives as `xiaomi/<id>` via upstreamModelId
     expect(ex.buildUrl("xiaomi/mimo-x-flash-preview", true, 0, OPENAI_T)).toBe(expected);
+  });
+
+  it("routes Preview models to the region resolved for the connection", () => {
+    // execute() resolves the host per connection and stashes it for the sync buildUrl.
+    const sgp = { ...OPENAI_T, [BASE_URL_KEY]: "https://mimo-server-sgp.xiaomimimo.com" };
+    expect(ex.buildUrl("mimo-x-pro-preview", true, 0, sgp)).toBe(
+      "https://mimo-server-sgp.xiaomimimo.com/api/route/chat/completions",
+    );
+    // Region pinning must not leak into cloud models.
+    expect(ex.buildUrl("mimo-v2.5-pro", true, 0, sgp)).toBe(OPENAI_T.runtimeTransport.baseUrl);
   });
 
   it("keeps the sourceFormat-matched endpoint for cloud models", () => {
