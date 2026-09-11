@@ -1,9 +1,5 @@
 import { claudeToOpenAIRequest } from "../translator/request/claude-to-openai.js";
 import { openaiToClaudeRequest } from "../translator/request/openai-to-claude.js";
-import {
-  openaiResponsesToOpenAIRequest,
-  openaiToOpenAIResponsesRequest,
-} from "../translator/request/openai-responses.js";
 import { antigravityToOpenAIRequest } from "../translator/request/antigravity-to-openai.js";
 import {
   openaiToAntigravityRequest,
@@ -12,6 +8,7 @@ import {
 } from "../translator/request/openai-to-gemini.js";
 import { geminiToOpenAIRequest } from "../translator/request/gemini-to-openai.js";
 import { openaiToVertexRequest } from "../translator/request/openai-to-vertex.js";
+import { ROLE, RESPONSES_ITEM } from "../translator/schema/index.js";
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
@@ -101,12 +98,88 @@ function maskEndpoint(endpoint) {
   }
 }
 
-function hasUnsafeResponsesInputForCompression(body) {
-  if (!Array.isArray(body?.input)) return false;
-  return body.input.some((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-    return typeof item.type === "string" && item.type !== "message";
-  });
+// Project only compressible plain-text message parts out of a Responses
+// body.input. function_call*, reasoning (encrypted_content), images and other
+// structural items must stay in body.input verbatim — the OpenAI-bridge
+// round-trip loses call_ids / encrypted continuity blobs and the proxy may
+// rewrite tool arguments (apply_patch etc.). (#1998 / #2132)
+function collectResponsesHeadroomMessages(body) {
+  // String-form body.input is valid Responses (normalizeResponsesInput accepts
+  // string). Compress it as a single user message and write back in place —
+  // applyResponsesHeadroomMessages's key-target path handles the rewrite.
+  if (typeof body?.input === "string") {
+    if (!body.input.trim()) return null;
+    return {
+      messages: [{ role: ROLE.USER, content: body.input }],
+      targets: [{ item: body, key: "input" }],
+    };
+  }
+  if (!Array.isArray(body?.input)) return null;
+
+  const messages = [];
+  const targets = [];
+
+  const addTextTarget = (role, text, target) => {
+    messages.push({ role, content: text });
+    targets.push(target);
+  };
+
+  for (const item of body.input) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    // Droid CLI and friends send role-only items without a type field.
+    const itemType = item.type || (item.role ? RESPONSES_ITEM.MESSAGE : null);
+    if (itemType !== RESPONSES_ITEM.MESSAGE) continue;
+
+    if (Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+        const isTextPart = part.type === RESPONSES_ITEM.INPUT_TEXT
+          || part.type === RESPONSES_ITEM.OUTPUT_TEXT
+          || (part.type === undefined && typeof part.text === "string");
+        if (!isTextPart) continue;
+        if (typeof part.text !== "string" || !part.text.trim()) continue;
+        addTextTarget(item.role || ROLE.USER, part.text, { part });
+      }
+      continue;
+    }
+
+    // Non-spec string content shape — project the whole string as one message.
+    if (typeof item.content === "string" && item.content.trim()) {
+      addTextTarget(item.role || ROLE.USER, item.content, { item, key: "content" });
+    }
+  }
+
+  return messages.length > 0 ? { messages, targets } : null;
+}
+
+function applyResponsesHeadroomMessages(projection, compressedMessages, diagnostics) {
+  if (!Array.isArray(compressedMessages) || compressedMessages.length !== projection.messages.length) {
+    setDiagnostic(diagnostics, "proxy response did not match openai-responses message count");
+    return false;
+  }
+
+  const updates = [];
+  for (let i = 0; i < projection.messages.length; i++) {
+    const expected = projection.messages[i];
+    const actual = compressedMessages[i];
+    if (!actual || actual.role !== expected.role) {
+      setDiagnostic(diagnostics, "proxy response did not preserve openai-responses message order");
+      return false;
+    }
+
+    const text = textFromHeadroomMessage(actual);
+    if (text === null) {
+      setDiagnostic(diagnostics, "proxy response missing openai-responses text content");
+      return false;
+    }
+    updates.push({ target: projection.targets[i], text });
+  }
+
+  for (const update of updates) {
+    if (update.target.key) update.target.item[update.target.key] = update.text;
+    else update.target.part.text = update.text;
+  }
+  return true;
 }
 
 function collectKiroHeadroomMessages(body) {
@@ -298,29 +371,20 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
       return data;
     }
 
-    // OpenAI Responses shape (Codex): body.input holds Responses items, NOT OpenAI
-    // messages. Translate input -> OpenAI -> compress -> translate back to input so
-    // body.input keeps the Responses contract (the proxy only understands OpenAI). (#1998)
+    // OpenAI Responses shape (Codex): body.input holds Responses items, NOT
+    // OpenAI messages. Project only message-item text to the proxy, then write
+    // compressed text back in place — function_call/function_call_output/
+    // reasoning items (call_ids, encrypted_content, patch args) never leave the
+    // body so they cannot be rewritten or dropped. (#1998 / #2132)
     if (format === "openai-responses") {
-      if (hasUnsafeResponsesInputForCompression(body)) {
-        setDiagnostic(diagnostics, "skipped: openai-responses tool/reasoning input is not safe to compress");
+      const projection = collectResponsesHeadroomMessages(body);
+      if (!projection) {
+        setDiagnostic(diagnostics, "openai-responses has no compressible message text (tool/reasoning-only input left intact)");
         return null;
       }
-      const oai = openaiResponsesToOpenAIRequest(model, body, false);
-      if (!Array.isArray(oai?.messages)) {
-        setDiagnostic(diagnostics, "openai-responses request did not translate to messages[]");
-        return null;
-      }
-      const data = await callCompress(url, oai.messages, model, timeoutMs, compressUserMessages, diagnostics || {}, compressOpts);
+      const data = await callCompress(url, projection.messages, model, timeoutMs, compressUserMessages, diagnostics || {}, compressOpts);
       if (!data) return null;
-      // input: undefined so the translator rebuilds input from the compressed
-      // messages instead of returning the original input unchanged.
-      const responsesBody = openaiToOpenAIResponsesRequest(
-        model,
-        { ...oai, input: undefined, messages: data.messages },
-        false
-      );
-      if (Array.isArray(responsesBody?.input)) body.input = responsesBody.input;
+      if (!applyResponsesHeadroomMessages(projection, data.messages, diagnostics)) return null;
       if (diagnostics) diagnostics.after = captureSizeSnapshot(body);
       return data;
     }
