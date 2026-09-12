@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
+const { AsyncLocalStorage } = require("async_hooks");
 
 // Initialize Sentry early if configured in environment
 if (process.env.SENTRY_DSN) {
@@ -29,6 +30,12 @@ if (process.env.SENTRY_DSN) {
 }
 
 const origCreate = http.createServer.bind(http);
+
+// Shared with ESM (src/lib/requestContext.js) via globalThis so Sentry captures
+// during a request can attach the stamped client IP without an explicit call site.
+if (!globalThis.__9router_request_als) {
+  globalThis.__9router_request_als = new AsyncLocalStorage();
+}
 
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
 // A bare `next start` / `next dev` never loads this file, so it cannot produce a matching
@@ -94,7 +101,8 @@ http.createServer = (...args) => {
     req.headers["x-9r-real-ip"] = ip;
     req.headers["x-9r-peer-token"] = PEER_TOKEN;
     if (viaProxy) req.headers["x-9r-via-proxy"] = "1";
-    return handler(req, res);
+    // ALS store for Sentry / async capture during this request tree
+    return globalThis.__9router_request_als.run({ clientIp: ip || null }, () => handler(req, res));
   };
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {

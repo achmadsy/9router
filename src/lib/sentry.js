@@ -2,6 +2,7 @@
 // Fail-open: if SENTRY_DSN is not configured, all calls no-op safely.
 
 import * as Sentry from "@sentry/node";
+import { getRequestIp, normalizeClientIp } from "@/lib/requestContext";
 
 let initialized = false;
 
@@ -391,8 +392,15 @@ export function captureException(err, context = {}) {
     if (!context.force && isDuplicate(dedupKey)) return null;
 
     const scrubbedExtra = context.extra ? scrubSensitiveData(context.extra) : undefined;
+    const clientIp =
+      normalizeClientIp(context.clientIp || context.ip || getRequestIp()) || undefined;
 
     Sentry.withScope((scope) => {
+      if (clientIp) {
+        // Standard Sentry user.ip_address — shows under User on each event.
+        scope.setUser({ ip_address: clientIp });
+        scope.setTag("client_ip", clientIp);
+      }
       if (context.tags) {
         for (const [k, v] of Object.entries(context.tags)) {
           if (v !== undefined && v !== null) scope.setTag(k, String(v));
@@ -405,6 +413,9 @@ export function captureException(err, context = {}) {
         for (const [k, v] of Object.entries(scrubbedExtra)) {
           if (v !== undefined) scope.setExtra(k, v);
         }
+      }
+      if (clientIp) {
+        scope.setExtra("client_ip", clientIp);
       }
       if (context.level) scope.setLevel(context.level);
       // Attach caller file/line so Sentry issues point at the real origin
@@ -445,9 +456,15 @@ export function captureMessage(msg, level = "info", context = {}) {
     if (!context.force && isDuplicate(dedupKey)) return null;
 
     const scrubbedExtra = context.extra ? scrubSensitiveData(context.extra) : undefined;
+    const clientIp =
+      normalizeClientIp(context.clientIp || context.ip || getRequestIp()) || undefined;
 
     Sentry.withScope((scope) => {
       scope.setLevel(level);
+      if (clientIp) {
+        scope.setUser({ ip_address: clientIp });
+        scope.setTag("client_ip", clientIp);
+      }
       if (context.tags) {
         for (const [k, v] of Object.entries(context.tags)) {
           if (v !== undefined && v !== null) scope.setTag(k, String(v));
@@ -460,6 +477,9 @@ export function captureMessage(msg, level = "info", context = {}) {
         for (const [k, v] of Object.entries(scrubbedExtra)) {
           if (v !== undefined) scope.setExtra(k, v);
         }
+      }
+      if (clientIp) {
+        scope.setExtra("client_ip", clientIp);
       }
       // Attach caller file/line so Sentry issues point at the real origin
       // (skips wrapper frames: logger, console buffer, bridge, SDK internals),
