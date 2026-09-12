@@ -1,4 +1,5 @@
 import { getProxyPoolById } from "@/models";
+import { makeKv } from "@/lib/db/helpers/kvStore.js";
 
 // Safely normalize any value into a trimmed string.
 function normalizeString(value) {
@@ -6,24 +7,56 @@ function normalizeString(value) {
   return String(value).trim();
 }
 
-// ─── Proxy pool rotation state (in-memory) ─────────────────────────
-const rotateState = new Map(); // providerId → { index }
+// ─── Proxy pool rotation state ─────────────────────────────────────
+// Hot path uses RAM; round-robin cursor also lands in the kv table so a
+// process restart resumes the cycle instead of always starting at pool[0].
+// kv scope: providerId → { index }
+const rotationKv = makeKv("proxyPoolRotation");
+const rotateCache = new Map(); // providerId → { index }
+
+async function loadRotationIndex(providerId) {
+  const cached = rotateCache.get(providerId);
+  if (cached) return cached.index;
+  try {
+    const stored = await rotationKv.get(providerId);
+    const index = Number.isInteger(stored?.index) ? stored.index : -1;
+    rotateCache.set(providerId, { index });
+    return index;
+  } catch {
+    // Fail-open: missing DB must not break proxy selection.
+    return -1;
+  }
+}
+
+async function saveRotationIndex(providerId, index) {
+  rotateCache.set(providerId, { index });
+  try {
+    await rotationKv.set(providerId, { index });
+  } catch {
+    // Fail-open: keep RAM cursor even if the write fails.
+  }
+}
+
+/** Test/debug helper — drop RAM cache (does not clear kv). */
+export function clearProxyPoolRotationCache() {
+  rotateCache.clear();
+}
 
 /**
  * Pick one proxy pool ID from a list based on strategy.
- * round-robin: cycle sequentially (in-memory, resets on restart)
+ * round-robin: cycle sequentially (cursor persisted in SQLite kv)
  * random:      uniform random pick
  * none/single: return first entry
  */
-export function pickProxyPoolId(poolIds, strategy, providerId) {
+export async function pickProxyPoolId(poolIds, strategy, providerId) {
   if (!poolIds || poolIds.length === 0) return null;
   if (poolIds.length === 1) return poolIds[0];
 
   if (strategy === "round-robin") {
-    const state = rotateState.get(providerId) || { index: -1 };
-    state.index = (state.index + 1) % poolIds.length;
-    rotateState.set(providerId, state);
-    return poolIds[state.index];
+    const prev = await loadRotationIndex(providerId);
+    const index = (prev + 1) % poolIds.length;
+    await saveRotationIndex(providerId, index);
+    return poolIds[index];
   }
 
   if (strategy === "random") {

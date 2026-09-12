@@ -146,7 +146,7 @@ export default function NoAuthProxyCard({ providerId }) {
             ? `Need at least 2 active proxy pools for rotation.`
             : isRotation
               ? rotateStrategy === "round-robin"
-                ? `Rotating through ${selectedRotatePoolCount} selected pool(s) in list order. State is in-memory (resets on restart).`
+                ? `Rotating through ${selectedRotatePoolCount} selected pool(s) in list order. Position is saved and survives restarts.`
                 : `Picking a random pool from ${selectedRotatePoolCount} selected pool(s) each request.`
               : `Uses the selected pool above. Set to Round-robin or Random to rotate across selected pools.`}
         </p>

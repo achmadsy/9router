@@ -94,15 +94,15 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           poolIds = eligible;
           if (pickedId && !eligible.includes(pickedId)) pickedId = null;
           if (strategy === "single" && !pickedId) {
-            pickedId = pickProxyPoolId(eligible, "random", providerId);
+            pickedId = await pickProxyPoolId(eligible, "random", providerId);
           } else if (strategy !== "none" && !pickedId) {
-            pickedId = pickProxyPoolId(eligible, strategy, providerId);
+            pickedId = await pickProxyPoolId(eligible, strategy, providerId);
           }
         } else if (!pickedId && strategy === "none") {
           pickedId = null; // direct — only when no pools configured
         }
       } else if (strategy !== "none") {
-        pickedId = pickProxyPoolId(poolIds, strategy, providerId);
+        pickedId = await pickProxyPoolId(poolIds, strategy, providerId);
       }
 
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
