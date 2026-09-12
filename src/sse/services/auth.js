@@ -56,7 +56,12 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       let poolIds = [];
       if (strategy !== "none") {
         const allPools = await getProxyPools({ isActive: true });
-        poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
+        const withUrl = allPools.filter(p => p.proxyUrl).map(p => p.id);
+        // Optional subset from NoAuthProxyCard (empty/missing → all active)
+        const selected = Array.isArray(override.rotatePoolIds)
+          ? override.rotatePoolIds.filter(id => withUrl.includes(id))
+          : [];
+        poolIds = selected.length > 0 ? selected : withUrl;
       } else if (pickedId) {
         poolIds = [pickedId];
       }

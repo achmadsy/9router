@@ -65,9 +65,11 @@ export default function ProviderDetailPage() {
   const [showAddCustomModel, setShowAddCustomModel] = useState(false);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState("__none__");
+  const [bulkRotatePoolIds, setBulkRotatePoolIds] = useState([]);
   const [bulkUpdatingProxy, setBulkUpdatingProxy] = useState(false);
   const [providerStrategy, setProviderStrategy] = useState(null);
   const [providerStickyLimit, setProviderStickyLimit] = useState("");
+  const [savedRotatePoolIds, setSavedRotatePoolIds] = useState([]);
   const [thinkingMode, setThinkingMode] = useState("auto");
   const [autoPing, setAutoPing] = useState({ enabled: false, connections: {} });
   const [suggestedModels, setSuggestedModels] = useState([]);
@@ -344,6 +346,8 @@ export default function ProviderDetailPage() {
       const override = (settingsData.providerStrategies || {})[providerId] || {};
       setProviderStrategy(override.fallbackStrategy || null);
       setProviderStickyLimit(override.stickyRoundRobinLimit != null ? String(override.stickyRoundRobinLimit) : "1");
+      // Saved rotation-pool subset (NoAuthProxyCard); used as one-to-one default
+      setSavedRotatePoolIds(Array.isArray(override.rotatePoolIds) ? override.rotatePoolIds : []);
       // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
@@ -960,10 +964,16 @@ export default function ProviderDetailPage() {
     return "Selected connections have mixed proxy bindings";
   })();
 
+  const activePools = proxyPools.filter((p) => p.isActive === true);
+
   const openBulkProxyModal = () => {
     if (selectedConnections.length === 0) return;
     const uniquePoolIds = [...new Set(selectedConnections.map((conn) => conn.providerSpecificData?.proxyPoolId || "__none__"))];
     setBulkProxyPoolId(uniquePoolIds.length === 1 ? uniquePoolIds[0] : "__none__");
+    // Default to saved rotation subset when present (align with OpenCode Free card), else all active
+    const activeIds = new Set(activePools.map((p) => p.id));
+    const savedActive = savedRotatePoolIds.filter((id) => activeIds.has(id));
+    setBulkRotatePoolIds(savedActive.length > 0 ? savedActive : activePools.map((p) => p.id));
     setShowBulkProxyModal(true);
   };
 
@@ -1002,15 +1012,26 @@ export default function ProviderDetailPage() {
     return applyProxyAssignments(targets);
   };
 
+  const toggleBulkRotatePool = (poolId) => {
+    setBulkRotatePoolIds((prev) => {
+      const next = prev.includes(poolId)
+        ? prev.filter((id) => id !== poolId)
+        : [...prev, poolId];
+      // Preserve pool-list order for stable one-to-one mapping
+      return activePools.map((p) => p.id).filter((id) => next.includes(id));
+    });
+  };
+
   const handleApplyOneToOne = () => {
-    const activePools = proxyPools.filter((p) => p.isActive === true);
-    if (activePools.length === 0) {
-      alert("No active proxy pools available.");
+    // Only pools checked in the Apply Proxy modal; keep list order
+    const rotatePools = activePools.filter((p) => bulkRotatePoolIds.includes(p.id));
+    if (rotatePools.length === 0) {
+      alert("Select at least one active proxy pool for one-to-one rotation.");
       return;
     }
     const targets = connections.map((c, i) => ({
       connectionId: c.id,
-      proxyPoolId: activePools[i % activePools.length].id,
+      proxyPoolId: rotatePools[i % rotatePools.length].id,
     }));
     return applyProxyAssignments(targets);
   };
@@ -1077,8 +1098,6 @@ export default function ProviderDetailPage() {
     </div>
   );
 
-  const activePools = proxyPools.filter((p) => p.isActive === true);
-
   const bulkActionModal = (
     <Modal
       isOpen={showBulkProxyModal}
@@ -1086,10 +1105,40 @@ export default function ProviderDetailPage() {
       title={`Apply Proxy (${connections.length} connections)`}
     >
       <div className="flex flex-col gap-3">
+        {activePools.length > 0 && (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-black/[0.06] dark:border-white/[0.06] p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-main">Rotation pools</span>
+              <span className="text-[11px] text-text-muted">
+                {bulkRotatePoolIds.length}/{activePools.length} selected
+              </span>
+            </div>
+            <p className="text-[11px] text-text-muted">
+              Used by One-to-one (rotate). Unchecked pools are skipped.
+            </p>
+            <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto pr-1">
+              {activePools.map((pool) => (
+                <label
+                  key={pool.id}
+                  className="flex items-center gap-2 rounded px-1.5 py-1 text-sm text-text-main hover:bg-black/[0.03] dark:hover:bg-white/[0.03] cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={bulkRotatePoolIds.includes(pool.id)}
+                    onChange={() => toggleBulkRotatePool(pool.id)}
+                    disabled={bulkUpdatingProxy}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  />
+                  <span className="truncate">{pool.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex flex-col">
           <button
             onClick={handleApplyOneToOne}
-            disabled={bulkUpdatingProxy || activePools.length === 0}
+            disabled={bulkUpdatingProxy || activePools.length === 0 || bulkRotatePoolIds.length === 0}
             className="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className="material-symbols-outlined text-text-muted text-[18px]">sync_alt</span>
