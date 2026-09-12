@@ -1,5 +1,5 @@
 // Google Translate TTS (no auth) — scrape token + batchexecute RPC
-import { UA } from "./_base.js";
+import { UA, makeUpstreamError } from "./_base.js";
 
 const REFRESH_MS = 11 * 60 * 1000;
 const cache = { token: null, tokenTime: 0 };
@@ -44,7 +44,7 @@ export default {
       headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": "https://translate.google.com/" },
       body: body.toString(),
     });
-    if (!res.ok) throw new Error(`Google TTS failed: ${res.status}`);
+    if (!res.ok) throw makeUpstreamError(res, `Google TTS failed: ${res.status}`);
     const data = await res.text();
     const split = JSON.parse(data.split("\n")[3]);
     const base64 = JSON.parse(split[0][2])[0];

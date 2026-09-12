@@ -1,4 +1,5 @@
 import { createErrorResult } from "../utils/error.js";
+import { parseWaitHeaderCooldown } from "../utils/retryAfter.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { refreshTokenByProvider } from "../services/tokenRefresh.js";
 import { PROVIDER_MEDIA } from "../providers/index.js";
@@ -180,7 +181,11 @@ export async function handleVideoProxyCore({
 
   if (!upstream.ok) {
     const message = sanitizeSecrets(bodyText || `HTTP ${upstream.status}`, credentials);
-    return createErrorResult(upstream.status, `[${provider}] ${message.slice(0, 2000)}`);
+    const cooldownHint = parseWaitHeaderCooldown(upstream.headers, {
+      status: upstream.status,
+      errorText: bodyText,
+    });
+    return createErrorResult(upstream.status, `[${provider}] ${message.slice(0, 2000)}`, { cooldownHint });
   }
 
   // Success: pass the upstream JSON through untouched (request_id / status / video.url),

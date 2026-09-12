@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { makeUpstreamError } from "./_base.js";
 
 function hexToBase64(audioHex) {
   const clean = typeof audioHex === "string" ? audioHex.trim() : "";
@@ -46,9 +47,10 @@ export default async function minimaxTts({ baseUrl, apiKey, text, modelId, voice
   const statusMessage = baseResp.status_msg || baseResp.statusMsg || data.message || "";
 
   if (!res.ok) {
-    throw new Error(statusMessage || rawText || `MiniMax TTS error (${res.status})`);
+    throw makeUpstreamError(res, statusMessage || rawText || `MiniMax TTS error (${res.status})`, rawText);
   }
   if (statusCode !== 0) {
+    // In-body error on HTTP 200 — no upstream status to propagate.
     throw new Error(statusMessage || "MiniMax TTS upstream error");
   }
 

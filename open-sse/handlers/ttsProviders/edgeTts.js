@@ -1,6 +1,6 @@
 // Microsoft Edge / Bing TTS (no auth) — via Bing translator endpoint
 import { Buffer } from "node:buffer";
-import { UA } from "./_base.js";
+import { UA, makeUpstreamError } from "./_base.js";
 
 const REFRESH_MS = 5 * 60 * 1000; // token TTL ~1h, refresh early
 const VOICES_TTL = 24 * 60 * 60 * 1000;
@@ -80,7 +80,7 @@ export default {
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`Bing TTS failed: ${res.status}${body ? " - " + body : ""}`);
+      throw makeUpstreamError(res, `Bing TTS failed: ${res.status}${body ? " - " + body : ""}`, body);
     }
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 1024) throw new Error("Bing TTS returned empty audio");

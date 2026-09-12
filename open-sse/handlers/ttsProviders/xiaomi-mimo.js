@@ -3,7 +3,7 @@
 // Message contract: target text in `role: assistant` content, style/voice
 // instructions in `role: user` content. Voice is selected via the top-level
 // `audio.voice` field (NOT embedded in the model name).
-import { parseModelVoice } from "./_base.js";
+import { parseModelVoice, makeUpstreamError } from "./_base.js";
 
 const DEFAULT_MODEL = "mimo-v2.5-tts";
 const DEFAULT_VOICE = "mimo_default";
@@ -52,7 +52,11 @@ export async function synthesizeMiMo(text, model, apiKey, style, language) {
   }
 
   if (!res.ok) {
-    throw new Error(data?.error?.message || rawText || `MiMo TTS error (${res.status})`);
+    throw makeUpstreamError(
+      res,
+      data?.error?.message || rawText || `MiMo TTS error (${res.status})`,
+      rawText
+    );
   }
 
   const audio = data?.choices?.[0]?.message?.audio?.data;

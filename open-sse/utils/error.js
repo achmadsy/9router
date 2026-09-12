@@ -1,4 +1,5 @@
 import { ERROR_TYPES, DEFAULT_ERROR_MESSAGES } from "../config/errorConfig.js";
+import { parseWaitHeaderCooldown } from "./retryAfter.js";
 
 /**
  * Build OpenAI-compatible error response body
@@ -53,7 +54,7 @@ export async function writeStreamError(writer, statusCode, message) {
  * Parse upstream provider error response
  * @param {Response} response - Fetch response from provider
  * @param {object} [executor] - Optional executor with parseError() override for provider-specific parsing
- * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number}>}
+ * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number, cooldownHint?: object|null}>}
  */
 export async function parseUpstreamError(response, executor = null) {
   let bodyText = "";
@@ -63,13 +64,25 @@ export async function parseUpstreamError(response, executor = null) {
     bodyText = "";
   }
 
+  // Self-Aware: parse wait headers from the Response (headers stay available
+  // after text()). errorText lets non-429 quota classifications through.
+  const cooldownHint = parseWaitHeaderCooldown(response.headers, {
+    status: response.status,
+    errorText: bodyText,
+  });
+
   // Let executor-specific parser extract provider-specific fields (e.g. codex resetsAtMs)
   if (executor && typeof executor.parseError === "function") {
     try {
       const parsed = executor.parseError(response, bodyText);
       if (parsed && typeof parsed === "object") {
         const msg = parsed.message || DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`;
-        return { statusCode: parsed.status || response.status, message: msg, resetsAtMs: parsed.resetsAtMs };
+        return {
+          statusCode: parsed.status || response.status,
+          message: msg,
+          resetsAtMs: parsed.resetsAtMs,
+          cooldownHint: parsed.cooldownHint ?? cooldownHint,
+        };
       }
     } catch { /* fall through to default parsing */ }
   }
@@ -85,7 +98,7 @@ export async function parseUpstreamError(response, executor = null) {
   const messageStr = typeof message === "string" ? message : JSON.stringify(message);
   const finalMessage = messageStr || DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`;
 
-  return { statusCode: response.status, message: finalMessage };
+  return { statusCode: response.status, message: finalMessage, cooldownHint };
 }
 
 /**
@@ -93,14 +106,30 @@ export async function parseUpstreamError(response, executor = null) {
  * @param {number} statusCode - HTTP status code
  * @param {string} message - Error message
  * @param {number} [resetsAtMs] - Optional precise cooldown expiry (ms epoch) for provider-specific quota errors
- * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number }}
+ * @param {object} [opts] - Extra metadata: { resetsAtMs, cooldownHint } (object-arg form for new callers)
+ * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number, cooldownHint?: object|null }}
  */
-export function createErrorResult(statusCode, message, resetsAtMs) {
+export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOpts) {
+  // New signature: createErrorResult(status, message, { resetsAtMs, cooldownHint })
+  // Legacy signature: createErrorResult(status, message, resetsAtMs) — kept working.
+  let resetsAtMs;
+  let cooldownHint = null;
+  if (resetsAtMsOrOpts !== null && typeof resetsAtMsOrOpts === "object") {
+    resetsAtMs = resetsAtMsOrOpts.resetsAtMs;
+    cooldownHint = resetsAtMsOrOpts.cooldownHint ?? null;
+  } else {
+    resetsAtMs = resetsAtMsOrOpts;
+    if (maybeOpts && typeof maybeOpts === "object") {
+      cooldownHint = maybeOpts.cooldownHint ?? null;
+      if (maybeOpts.resetsAtMs !== undefined) resetsAtMs = maybeOpts.resetsAtMs;
+    }
+  }
   return {
     success: false,
     status: statusCode,
     error: message,
     resetsAtMs,
+    cooldownHint,
     response: errorResponse(statusCode, message)
   };
 }

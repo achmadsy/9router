@@ -210,13 +210,15 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
       });
     }
 
-    const { shouldFallback } = await markAccountUnavailable(
-      credentials.connectionId,
-      result.status,
-      result.error,
-      providerId,
-      fetchLockKey,
-    );
+    const { shouldFallback } = await markAccountUnavailable({
+      credentials,
+      status: result.status,
+      errorText: result.error,
+      provider: providerId,
+      model: fetchLockKey,
+      resetsAtMs: result.resetsAtMs,
+      cooldownHint: result.cooldownHint,
+    });
 
     if (shouldFallback) {
       log.warn("AUTH", `Account ${credentials.connectionName} unavailable (${result.status}), trying fallback`);

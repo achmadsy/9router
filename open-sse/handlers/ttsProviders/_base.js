@@ -1,5 +1,6 @@
 // Shared TTS helpers
 import { Buffer } from "node:buffer";
+import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 
 export const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
@@ -15,6 +16,15 @@ export async function responseToBase64(res, defaultFormat = "mp3") {
   return { base64: Buffer.from(buf).toString("base64"), format };
 }
 
+// Typed error: attach status + wait-header cooldownHint so ttsCore can propagate.
+// Use when the caller already consumed res.body (throwUpstreamError reads it).
+export function makeUpstreamError(res, message, errorText = "") {
+  const err = new Error(message);
+  err.status = res.status;
+  err.cooldownHint = parseWaitHeaderCooldown(res.headers, { status: res.status, errorText });
+  return err;
+}
+
 export async function throwUpstreamError(res) {
   const text = await res.text().catch(() => "");
   let msg = `Upstream error (${res.status})`;
@@ -22,7 +32,7 @@ export async function throwUpstreamError(res) {
     const parsed = JSON.parse(text);
     msg = parsed?.error?.message || parsed?.message || parsed?.detail?.message || (typeof parsed?.detail === "string" ? parsed.detail : null) || text || msg;
   } catch { msg = text || msg; }
-  throw new Error(msg);
+  throw makeUpstreamError(res, msg, text);
 }
 
 // Parse `model` string as "modelId/voiceId" — match against known model list (longest prefix wins)

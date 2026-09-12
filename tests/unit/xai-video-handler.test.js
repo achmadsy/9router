@@ -142,9 +142,15 @@ describe("handleVideoCreate", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get("x-9router-connection-id")).toBe("conn-2");
-    expect(authMocks.markAccountUnavailable).toHaveBeenCalledWith(
-      "conn-1", 401, expect.any(String), "xai", null
-    );
+    expect(authMocks.markAccountUnavailable).toHaveBeenCalledWith({
+      credentials: expect.objectContaining({ connectionId: "conn-1" }),
+      status: 401,
+      errorText: expect.any(String),
+      provider: "xai",
+      model: null,
+      resetsAtMs: undefined,
+      cooldownHint: null,
+    });
   });
 
   it("does NOT rotate accounts on a 500 creation error (job may exist upstream)", async () => {

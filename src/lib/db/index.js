@@ -69,6 +69,13 @@ export {
   saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders,
 } from "./repos/requestDetailsRepo.js";
 
+// Self-Aware cooldown (policies + sidecar metadata)
+export {
+  getSelfAwarePolicy, listSelfAwarePolicies, upsertSelfAwarePolicy, deleteSelfAwarePolicy,
+  upsertCooldown, listActiveCooldowns, listCooldownsForScopes,
+  deleteCooldown, deleteByScope, deleteAllActive, purgeExpired,
+} from "./repos/selfAwareRepo.js";
+
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();
@@ -85,6 +92,14 @@ export async function exportDb() {
     customModels: [],
     mitmAlias: {},
     pricing: {},
+    // Manual wait policies persist; cooldown sidecars stay ephemeral (not exported).
+    selfAwarePolicies: db.all(`SELECT * FROM selfAwarePolicies ORDER BY provider, model`).map((r) => ({
+      provider: r.provider,
+      model: r.model,
+      timeoutMs: r.timeoutMs,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    })),
   };
 
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'modelAliases'`)) out.modelAliases[r.key] = parseJson(r.value);
@@ -111,6 +126,7 @@ export async function importDb(payload) {
     db.run(`DELETE FROM apiKeyAccessTargets`);
     db.run(`DELETE FROM combos`);
     db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
+    db.run(`DELETE FROM selfAwarePolicies`);
 
     // Settings
     if (payload.settings) {
@@ -174,6 +190,18 @@ export async function importDb(payload) {
     }
     for (const [provider, models] of Object.entries(payload.pricing || {})) {
       db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('pricing', ?, ?)`, [provider, stringifyJson(models || {})]);
+    }
+    // Manual wait policies — older backups without the key import as empty list.
+    // Keep excluding selfAwareCooldowns (ephemeral runtime state).
+    for (const p of payload.selfAwarePolicies || []) {
+      if (!p?.provider) continue;
+      const now = new Date().toISOString();
+      db.run(
+        `INSERT INTO selfAwarePolicies(provider, model, timeoutMs, createdAt, updatedAt)
+         VALUES(?, ?, ?, ?, ?)
+         ON CONFLICT(provider, model) DO UPDATE SET timeoutMs = excluded.timeoutMs, updatedAt = excluded.updatedAt`,
+        [p.provider, p.model || "", Math.round(Number(p.timeoutMs) || 0), p.createdAt || now, p.updatedAt || now]
+      );
     }
   });
 

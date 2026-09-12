@@ -69,6 +69,10 @@ export async function handleTtsCore({ provider, model, input, credentials, respo
 
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, `Provider '${provider}' does not support TTS via this route.`);
   } catch (err) {
-    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, err.message || "TTS synthesis failed");
+    // Typed upstream errors carry status (+ optional wait-header cooldownHint)
+    const status = Number.isFinite(err?.status) ? err.status : HTTP_STATUS.BAD_GATEWAY;
+    return createErrorResult(status, err.message || "TTS synthesis failed", {
+      cooldownHint: err?.cooldownHint ?? null,
+    });
   }
 }

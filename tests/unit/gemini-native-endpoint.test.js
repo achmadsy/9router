@@ -244,13 +244,15 @@ describe("Gemini native v1beta endpoint", () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
     expect(global.fetch.mock.calls[0][1].headers["x-goog-api-key"]).toBe("first-gemini-key");
     expect(global.fetch.mock.calls[1][1].headers["x-goog-api-key"]).toBe("second-gemini-key");
-    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith(
-      "first-conn",
-      504,
-      expect.stringContaining("UND_ERR_HEADERS_TIMEOUT"),
-      "gemini",
-      "gemini-3.1-flash-tts-preview"
-    );
+    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith({
+      credentials: expect.objectContaining({ connectionId: "first-conn" }),
+      status: 504,
+      errorText: expect.stringContaining("UND_ERR_HEADERS_TIMEOUT"),
+      provider: "gemini",
+      model: "gemini-3.1-flash-tts-preview",
+      resetsAtMs: undefined,
+      cooldownHint: undefined,
+    });
     expect(mocks.clearAccountError).toHaveBeenCalledWith(
       "second-conn",
       expect.objectContaining({ apiKey: "second-gemini-key" }),
@@ -271,13 +273,15 @@ describe("Gemini native v1beta endpoint", () => {
 
     expect(response.status).toBe(502);
     expect(body.error.message).toContain("ECONNRESET");
-    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith(
-      "gemini-conn",
-      502,
-      expect.stringContaining("ECONNRESET"),
-      "gemini",
-      "gemini-3.1-flash-tts-preview"
-    );
+    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith({
+      credentials: expect.objectContaining({ connectionId: "gemini-conn" }),
+      status: 502,
+      errorText: expect.stringContaining("ECONNRESET"),
+      provider: "gemini",
+      model: "gemini-3.1-flash-tts-preview",
+      resetsAtMs: undefined,
+      cooldownHint: undefined,
+    });
   });
 
   it("does not mark Gemini credentials unavailable when the native client aborts", async () => {

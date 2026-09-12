@@ -1,6 +1,8 @@
 // Web Fetch handler — dispatches to firecrawl, jina-reader, tavily, exa, ollama
 // Returns normalized shape across all providers
 
+import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
+
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_FORMAT = "markdown";
 
@@ -46,6 +48,15 @@ function truncate(text, max) {
   if (!text || typeof text !== "string") return text || "";
   if (!max || max <= 0) return text;
   return text.length > max ? text.slice(0, max) : text;
+}
+
+/** Attach wait-header cooldownHint to a failure result when the Response has one. */
+function failWithCooldown(result, res, errorText = "") {
+  if (!result || result.success !== false || !res) return result;
+  if (result.cooldownHint) return result;
+  const hint = parseWaitHeaderCooldown(res.headers, { status: result.status ?? res.status, errorText });
+  if (hint) result.cooldownHint = hint;
+  return result;
 }
 
 function parseJinaTitle(text) {
@@ -153,7 +164,8 @@ async function runFirecrawl({ url, fmt, timeoutMs, apiKey, maxCharacters, costPe
   const upstreamMs = Date.now() - upstreamStart;
   const { json } = await readJsonOrText(r.res);
   if (!r.res.ok) {
-    return { success: false, status: r.res.status, error: json?.error || `Firecrawl error: ${r.res.status}` };
+    const err = json?.error || `Firecrawl error: ${r.res.status}`;
+    return failWithCooldown({ success: false, status: r.res.status, error: err }, r.res, typeof err === "string" ? err : JSON.stringify(err));
   }
   const d = json?.data || {};
   const text = truncate(d.markdown || d.html || d.text || "", maxCharacters);
@@ -184,7 +196,8 @@ async function runJina({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuer
   const upstreamMs = Date.now() - upstreamStart;
   const body = await r.res.text();
   if (!r.res.ok) {
-    return { success: false, status: r.res.status, error: body?.slice(0, 500) || `Jina error: ${r.res.status}` };
+    const err = body?.slice(0, 500) || `Jina error: ${r.res.status}`;
+    return failWithCooldown({ success: false, status: r.res.status, error: err }, r.res, err);
   }
   const text = truncate(body, maxCharacters);
   return {
@@ -213,7 +226,8 @@ async function runTavily({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQu
   const upstreamMs = Date.now() - upstreamStart;
   const { json } = await readJsonOrText(r.res);
   if (!r.res.ok) {
-    return { success: false, status: r.res.status, error: json?.error || `Tavily error: ${r.res.status}` };
+    const err = json?.error || `Tavily error: ${r.res.status}`;
+    return failWithCooldown({ success: false, status: r.res.status, error: err }, r.res, typeof err === "string" ? err : JSON.stringify(err));
   }
   const first = json?.results?.[0] || {};
   const text = truncate(first.raw_content || "", maxCharacters);
@@ -243,7 +257,8 @@ async function runExa({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery
   const upstreamMs = Date.now() - upstreamStart;
   const { json } = await readJsonOrText(r.res);
   if (!r.res.ok) {
-    return { success: false, status: r.res.status, error: json?.error || `Exa error: ${r.res.status}` };
+    const err = json?.error || `Exa error: ${r.res.status}`;
+    return failWithCooldown({ success: false, status: r.res.status, error: err }, r.res, typeof err === "string" ? err : JSON.stringify(err));
   }
   const first = json?.results?.[0] || {};
   const text = truncate(first.text || "", maxCharacters);
@@ -286,7 +301,11 @@ async function runOllama({
       || json?.message
       || responseText?.slice(0, 500)
       || `Ollama error: ${r.res.status}`;
-    return { success: false, status: r.res.status, error };
+    return failWithCooldown(
+      { success: false, status: r.res.status, error },
+      r.res,
+      typeof error === "string" ? error : JSON.stringify(error)
+    );
   }
   if (!json || typeof json.content !== "string") {
     return { success: false, status: 502, error: "Ollama returned an empty or invalid web fetch response" };

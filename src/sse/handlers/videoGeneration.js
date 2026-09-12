@@ -177,9 +177,15 @@ export async function handleVideoCreate(request, action) {
     }
 
     // Record the failure (dashboard shows lastError/errorCode → user sees re-auth is needed)
-    const { shouldFallback } = await markAccountUnavailable(
-      credentials.connectionId, result.status, sanitizeSecrets(result.error, refreshedCredentials), provider, model
-    );
+    const { shouldFallback } = await markAccountUnavailable({
+      credentials,
+      status: result.status,
+      errorText: sanitizeSecrets(result.error, refreshedCredentials),
+      provider,
+      model,
+      resetsAtMs: result.resetsAtMs,
+      cooldownHint: result.cooldownHint,
+    });
 
     if (shouldFallback && CREATE_ROTATION_STATUSES.has(result.status)) {
       excludeConnectionIds.add(credentials.connectionId);
@@ -239,8 +245,14 @@ async function handleVideoPollInternal(request, requestId) {
     return withConnectionHeader(result.response, credentials.connectionId);
   }
 
-  await markAccountUnavailable(
-    credentials.connectionId, result.status, sanitizeSecrets(result.error, refreshedCredentials), provider, null
-  );
+  await markAccountUnavailable({
+    credentials,
+    status: result.status,
+    errorText: sanitizeSecrets(result.error, refreshedCredentials),
+    provider,
+    model: null,
+    resetsAtMs: result.resetsAtMs,
+    cooldownHint: result.cooldownHint,
+  });
   return result.response;
 }

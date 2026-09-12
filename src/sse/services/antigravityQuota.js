@@ -6,6 +6,7 @@
 
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { getAntigravityUsage } from "open-sse/services/usage/google.js";
+import { upsertSelfAwareCooldown, clearSelfAwareCooldown } from "./selfAwareCooldown.js";
 import * as log from "../utils/logger.js";
 
 // In-memory cache: connectionId → { [modelId]: { remainingPercentage, resetAt } }
@@ -65,6 +66,52 @@ export function clearAntigravityStrikes(connectionId, model) {
     delete cached[model];
     quotaCache.set(connectionId, cached);
   }
+  // Self-Aware: clear mirrored sidecar (RAM + SQLite together)
+  clearSelfAwareCooldown({ provider: "antigravity", model, scopeType: "account", scopeId: connectionId })
+    .catch(() => {});
+}
+
+/**
+ * Self-Aware: list active Antigravity cooldowns from RAM cache.
+ */
+export function listActiveAntigravityCooldowns() {
+  const now = Date.now();
+  const out = [];
+  for (const [connectionId, quotas] of quotaCache) {
+    if (!quotas) continue;
+    for (const [model, q] of Object.entries(quotas)) {
+      const resetMs = q?.resetAt ? new Date(q.resetAt).getTime() : 0;
+      if (!resetMs || resetMs <= now) continue;
+      out.push({ connectionId, model, expiresAtMs: resetMs });
+    }
+  }
+  return out;
+}
+
+/**
+ * Self-Aware: clear one Antigravity cooldown (RAM + mirror).
+ */
+export function clearAntigravityCooldown(connectionId, model) {
+  const key = `${connectionId}|${model}`;
+  strikeCounts.delete(key);
+  strikeBlocks.delete(key);
+  const cached = quotaCache.get(connectionId);
+  if (cached?.[model]) {
+    delete cached[model];
+    quotaCache.set(connectionId, cached);
+  }
+  clearSelfAwareCooldown({ provider: "antigravity", model, scopeType: "account", scopeId: connectionId })
+    .catch(() => {});
+}
+
+/**
+ * Self-Aware: clear all Antigravity cooldowns (RAM + mirror).
+ */
+export function clearAllAntigravityCooldowns() {
+  strikeCounts.clear();
+  strikeBlocks.clear();
+  quotaCache.clear();
+  // Sidecar rows expire naturally; board Reset All can also clear them.
 }
 
 /**
@@ -170,6 +217,17 @@ export async function handleAntigravityQuotaError(connectionId, status, model, a
       cached[model] = { remainingPercentage: 0, resetAt: new Date(blockedUntil).toISOString() };
       quotaCache.set(connectionId, cached);
       strikeBlocks.set(key, blockedUntil);
+      // Self-Aware: mirror RAM strike block into SQLite sidecar (no modelLock_*)
+      upsertSelfAwareCooldown({
+        provider: "antigravity",
+        model,
+        scopeType: "account",
+        scopeId: connectionId,
+        expiresAtMs: blockedUntil,
+        source: "antigravity-strike",
+        reason: `Antigravity ${count}x ${status} strike block`,
+        status: status ?? null,
+      }).catch(() => {});
       return blockedUntil;
     }
     return null;
@@ -183,5 +241,16 @@ export async function handleAntigravityQuotaError(connectionId, status, model, a
   if (resetMs <= Date.now()) return null;
 
   log.warn("AG_QUOTA", `${connectionId.slice(0, 8)} | UPSTREAM_${status} ${model} — quota exhausted; CACHE_BLOCK until ${quota.resetAt}`);
+  // Self-Aware: mirror quota-exhausted block into SQLite sidecar
+  upsertSelfAwareCooldown({
+    provider: "antigravity",
+    model,
+    scopeType: "account",
+    scopeId: connectionId,
+    expiresAtMs: resetMs,
+    source: "antigravity-quota",
+    reason: `Antigravity quota exhausted (${status})`,
+    status: status ?? null,
+  }).catch(() => {});
   return resetMs;
 }

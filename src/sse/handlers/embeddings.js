@@ -153,7 +153,7 @@ export async function handleEmbeddings(request) {
       return result.response;
     }
 
-    const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
+    const { shouldFallback } = await markAccountUnavailable({ credentials, status: result.status, errorText: result.error, provider, model, resetsAtMs: result.resetsAtMs, cooldownHint: result.cooldownHint });
 
     if (shouldFallback) {
       log.warn("AUTH", `Account ${credentials.connectionName} unavailable (${result.status}), trying fallback`);

@@ -5,6 +5,7 @@
  */
 import { PROVIDER_MEDIA } from "../../providers/index.js";
 import { ANTIGRAVITY_IDE_USER_AGENT } from "../../providers/shared.js";
+import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 
 // Default search model + endpoint derive from registry searchViaChat (single source)
 const searchModel = (id) => PROVIDER_MEDIA[id]?.searchViaChat?.defaultModel;
@@ -518,11 +519,14 @@ export async function handleChatSearch({
       data?.error ||
       data?.message ||
       `Upstream HTTP ${resp.status}`;
+    const errText = typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg);
     log?.warn?.(`[chatSearch] upstream error provider=${provider} status=${resp.status}`);
+    const cooldownHint = parseWaitHeaderCooldown(resp.headers, { status: resp.status, errorText: errText });
     return {
       success: false,
       status: resp.status,
-      error: typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg)
+      error: errText,
+      ...(cooldownHint ? { cooldownHint } : {}),
     };
   }
 

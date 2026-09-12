@@ -5,6 +5,7 @@
 // (`synthesizeViaConfig` reads `cfg.baseUrl`) and never looks at the connection,
 // which is exactly the limitation this provider exists to lift.
 import { Buffer } from "node:buffer";
+import { throwUpstreamError } from "./_base.js";
 
 const DEFAULT_BASE_URL = "http://localhost:8880";
 const DEFAULT_MODEL = "kokoro";
@@ -59,10 +60,7 @@ export default {
         response_format: responseFormat,
       }),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `Self-hosted TTS failed: ${res.status}`);
-    }
+    if (!res.ok) await throwUpstreamError(res);
     const buf = await res.arrayBuffer();
     return { base64: Buffer.from(buf).toString("base64"), format: responseFormat };
   },

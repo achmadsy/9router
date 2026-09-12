@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createErrorResult } from "../utils/error.js";
+import { parseWaitHeaderCooldown } from "../utils/retryAfter.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 
 // Build auth headers from sttConfig + token
@@ -29,7 +30,9 @@ async function upstreamError(res) {
   try { txt = await res.text(); } catch {}
   let msg = txt || `Upstream error (${res.status})`;
   try { const j = JSON.parse(txt); msg = j?.error?.message || j?.error || j?.message || msg; } catch {}
-  return createErrorResult(res.status, typeof msg === "string" ? msg : JSON.stringify(msg));
+  const errorText = typeof msg === "string" ? msg : JSON.stringify(msg);
+  const cooldownHint = parseWaitHeaderCooldown(res.headers, { status: res.status, errorText: txt });
+  return createErrorResult(res.status, errorText, { cooldownHint });
 }
 
 // Deepgram: raw binary POST + model query param

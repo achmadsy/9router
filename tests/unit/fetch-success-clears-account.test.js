@@ -113,12 +113,14 @@ describe("web fetch account state", () => {
     }));
 
     expect(response.status).toBe(429);
-    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith(
-      "jina-connection",
-      429,
-      "quota exceeded",
-      "jina-reader",
-      "webfetch:jina-reader",
-    );
+    expect(mocks.markAccountUnavailable).toHaveBeenCalledWith({
+      credentials: expect.objectContaining({ connectionId: "jina-connection" }),
+      status: 429,
+      errorText: "quota exceeded",
+      provider: "jina-reader",
+      model: "webfetch:jina-reader",
+      resetsAtMs: undefined,
+      cooldownHint: undefined,
+    });
   });
 });

@@ -125,6 +125,7 @@ export async function createProviderConnection(data) {
   const db = await getAdapter();
   const now = new Date().toISOString();
   let result;
+  let clearedLocksOnActivation = false;
 
   db.transaction(() => {
     const all = db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider]).map(rowToConn);
@@ -170,6 +171,7 @@ export async function createProviderConnection(data) {
 
     if (existing) {
       const normalized = resetHealthStateOnActivation(existing, data);
+      clearedLocksOnActivation = data?.testStatus === "active";
       const merged = { ...existing, ...normalized, updatedAt: now };
       upsert(db, merged);
       result = merged;
@@ -208,6 +210,14 @@ export async function createProviderConnection(data) {
     result = conn;
   });
 
+  // Self-Aware: activation that cleared modelLock_* also clears matching account sidecars (fail-open)
+  // Same coordination as updateProviderConnection.
+  if (clearedLocksOnActivation && result?.provider && result?.id) {
+    try {
+      const { deleteByScope } = await import("./selfAwareRepo.js");
+      await deleteByScope(result.provider, null, "account", result.id);
+    } catch { /* fail-open */ }
+  }
   return result;
 }
 
@@ -215,16 +225,25 @@ export async function createProviderConnection(data) {
 export async function updateProviderConnection(id, data) {
   const db = await getAdapter();
   let result;
+  let clearedLocksOnActivation = false;
   db.transaction(() => {
     const row = db.get(`SELECT * FROM providerConnections WHERE id = ?`, [id]);
     if (!row) { result = null; return; }
     const existing = rowToConn(row);
     const normalized = resetHealthStateOnActivation(existing, data);
+    clearedLocksOnActivation = data?.testStatus === "active";
     const merged = { ...existing, ...normalized, updatedAt: new Date().toISOString() };
     upsert(db, merged);
     if (data.priority !== undefined) reorderInTx(db, existing.provider);
     result = merged;
   });
+  // Self-Aware: activation that cleared modelLock_* also clears matching account sidecars (fail-open)
+  if (clearedLocksOnActivation && result?.provider && result?.id) {
+    try {
+      const { deleteByScope } = await import("./selfAwareRepo.js");
+      await deleteByScope(result.provider, null, "account", result.id);
+    } catch { /* fail-open */ }
+  }
   return result;
 }
 

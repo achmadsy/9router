@@ -10,6 +10,7 @@ import {
 } from "@/sse/services/apiKeyPolicy.js";
 import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
+import { parseWaitHeaderCooldown } from "open-sse/utils/retryAfter.js";
 import { initTranslators } from "open-sse/translator/index.js";
 
 let initialized = false;
@@ -302,13 +303,13 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
       const errorText = getSafeGeminiNativeErrorText(error);
       console.log(`[GEMINI_NATIVE] fetch failed model=${modelId} status=${status} ms=${durationMs} conn=${safeConnection} error=${errorText}`);
 
-      const { shouldFallback } = await markAccountUnavailable(
-        credentials.connectionId,
+      const { shouldFallback } = await markAccountUnavailable({
+        credentials,
         status,
         errorText,
-        "gemini",
-        modelId
-      );
+        provider: "gemini",
+        model: modelId,
+      });
 
       if (shouldFallback) {
         excludeConnectionIds.add(credentials.connectionId);
@@ -336,13 +337,18 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
     }
 
     const errorText = await upstreamResponse.text();
-    const { shouldFallback } = await markAccountUnavailable(
-      credentials.connectionId,
-      upstreamResponse.status,
+    const cooldownHint = parseWaitHeaderCooldown(upstreamResponse.headers, {
+      status: upstreamResponse.status,
       errorText,
-      "gemini",
-      modelId
-    );
+    });
+    const { shouldFallback } = await markAccountUnavailable({
+      credentials,
+      status: upstreamResponse.status,
+      errorText,
+      provider: "gemini",
+      model: modelId,
+      cooldownHint,
+    });
 
     if (shouldFallback) {
       excludeConnectionIds.add(credentials.connectionId);
