@@ -41,13 +41,14 @@ COPY --from=builder /app/open-sse ./open-sse
 COPY --from=builder /app/src/mitm ./src/mitm
 # Standalone node_modules may omit deps only required by the MITM child process.
 COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
-# Ensure `next` is available at runtime in case tracing did not include it.
-COPY --from=builder /app/node_modules/next ./node_modules/next
-# Ensure `@sentry/node` is available for custom-server.js early error tracking.
+# custom-server.js early-requires @sentry/node; tracing often omits the full package.
 COPY --from=builder /app/node_modules/@sentry ./node_modules/@sentry
 # sql.js loads dist/sql-wasm.wasm by path at runtime; tracing only follows JS imports,
 # so the last-resort DB driver would abort with ENOENT on the missing binary.
-COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
+# Only the wasm runtime is required — skip docs/tests/asm zips.
+COPY --from=builder /app/node_modules/sql.js/dist/sql-wasm.js ./node_modules/sql.js/dist/sql-wasm.js
+COPY --from=builder /app/node_modules/sql.js/dist/sql-wasm.wasm ./node_modules/sql.js/dist/sql-wasm.wasm
+COPY --from=builder /app/node_modules/sql.js/package.json ./node_modules/sql.js/package.json
 # node-machine-id is createRequire-loaded at runtime; tracing omits it.
 COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
 # WIP zcode: skip heavy browser packages so the image stays slim.
@@ -59,8 +60,10 @@ COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machin
 # RUN apk --no-cache add chromium xvfb nss freetype harfbuzz ca-certificates ttf-freefont
 RUN apk --no-cache add ca-certificates
 
-RUN mkdir -p /app/data && chown -R node:node /app && \
-  mkdir -p /app/data-home && chown node:node /app/data-home && \
+# Writable runtime dirs only — do NOT chown -R /app (that rewrites every file into
+# a multi-hundred-MB layer). Node can read root-owned app files.
+RUN mkdir -p /app/data /app/data-home && \
+  chown node:node /app/data /app/data-home && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
 # Fix permissions at runtime (handles mounted volumes).
