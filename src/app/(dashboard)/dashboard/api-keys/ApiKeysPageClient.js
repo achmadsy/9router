@@ -11,7 +11,8 @@ const PAUSED_CLASS = "inline-flex items-center px-2.5 py-0.5 rounded-full text-x
 
 /**
  * Dedicated API Keys management page.
- * Metadata-only reads; one-time secret on create/reroll; per-key model/combo policy.
+ * Metadata-only list reads; secrets stored encrypted at rest and copyable anytime.
+ * Per-key model/combo policy via one searchable picker.
  */
 export default function ApiKeysPageClient() {
   const [keys, setKeys] = useState([]);
@@ -19,7 +20,8 @@ export default function ApiKeysPageClient() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
-  const [oneTimeSecret, setOneTimeSecret] = useState(null);
+  const [secretModal, setSecretModal] = useState(null); // { secret, title }
+  const [revealingId, setRevealingId] = useState(null);
   const [visibleSecrets, setVisibleSecrets] = useState(new Set());
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -112,6 +114,34 @@ export default function ApiKeysPageClient() {
     });
   };
 
+  const openSecretModal = (secret, title = "API Key") => {
+    setVisibleSecrets(new Set([secret]));
+    setSecretModal({ secret, title });
+  };
+
+  const closeSecretModal = () => {
+    setSecretModal(null);
+    setVisibleSecrets(new Set());
+  };
+
+  /** Recover secret on demand — stored encrypted at rest, not one-time only. */
+  const revealSecret = async (key) => {
+    setRevealingId(key.id);
+    try {
+      const res = await fetch(`/api/keys/${key.id}/secret`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      openSecretModal(data.secret, `API Key — ${key.name}`);
+    } catch (e) {
+      setStatus({ type: "error", message: `Could not load secret: ${e.message}` });
+    } finally {
+      setRevealingId(null);
+    }
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!createForm.name.trim()) {
@@ -135,7 +165,7 @@ export default function ApiKeysPageClient() {
         throw new Error(err.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      setOneTimeSecret(data.secret || data.key);
+      openSecretModal(data.secret || data.key, `API Key Created — ${data.name || createForm.name}`);
       setCreateOpen(false);
       setCreateForm({ name: "", accessMode: "all", targets: [] });
       await loadKeys();
@@ -224,7 +254,7 @@ export default function ApiKeysPageClient() {
       const res = await fetch(`/api/keys/${key.id}/reroll`, { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setOneTimeSecret(data.secret || data.key);
+      openSecretModal(data.secret || data.key, `API Key Rerolled — ${data.name || key.name}`);
       await loadKeys();
     } catch (e) {
       setStatus({ type: "error", message: `Reroll failed: ${e.message}` });
@@ -237,7 +267,7 @@ export default function ApiKeysPageClient() {
         <div>
           <h1 className="text-2xl font-bold text-text-main">API Keys</h1>
           <p className="text-text-muted text-sm mt-1">
-            Create dedicated keys with per-key model/combo access. Secrets are shown once at create/reroll.
+            Create dedicated keys with per-key model/combo access. Copy the secret anytime from the key list.
           </p>
         </div>
         <button
@@ -291,7 +321,7 @@ export default function ApiKeysPageClient() {
         <span>
           <strong className="text-text-main">{pausedCount}</strong> paused
         </span>
-        <Tooltip text="Paused keys are rejected at request time. Default (All) keys expose every current and future model/combo; restricted keys only expose selected ones." />
+        <Tooltip text="Paused keys are rejected at request time. Default (All) keys expose every current and future model/combo; restricted keys only expose selected ones. Secrets are encrypted at rest — Show/copy works anytime." />
       </div>
 
       {loading ? (
@@ -335,8 +365,15 @@ export default function ApiKeysPageClient() {
                     </p>
                     <p className="text-text-muted text-xs mt-0.5">{targetSummary}</p>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Tooltip text="Copy does not apply — secret is only shown at create/reroll. Use reroll to mint a new secret." />
+                  <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                    <button
+                      type="button"
+                      onClick={() => revealSecret(key)}
+                      disabled={revealingId === key.id}
+                      className="px-2 py-1 rounded text-xs hover:bg-surface text-text-muted hover:text-text-main disabled:opacity-50"
+                    >
+                      {revealingId === key.id ? "Loading…" : "Copy secret"}
+                    </button>
                     <button
                       type="button"
                       onClick={() => openPolicyEditor(key)}
@@ -385,46 +422,43 @@ export default function ApiKeysPageClient() {
         </div>
       )}
 
-      {/* One-time secret modal */}
-      {oneTimeSecret && (
+      {/* Secret modal — copy as many times as needed */}
+      {secretModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
           <div className="bg-surface border border-border rounded-xl p-5 max-w-lg w-full space-y-4">
-            <h2 className="text-lg font-semibold text-text-main">API Key Created</h2>
+            <h2 className="text-lg font-semibold text-text-main">{secretModal.title || "API Key"}</h2>
             <StatusAlert
               status={{
-                type: "warning",
-                message: "Copy this key now. It is shown once and cannot be retrieved later. Reroll to mint a new secret.",
+                type: "info",
+                message: "Copy anytime — use the key list's Copy secret button whenever you need it again.",
               }}
             />
             <div className="flex items-center gap-2">
               <code className="flex-1 p-2 rounded bg-surface border border-border text-xs break-all select-all">
-                {visibleSecrets.has(oneTimeSecret) ? oneTimeSecret : "•".repeat(Math.min(oneTimeSecret.length, 48))}
+                {visibleSecrets.has(secretModal.secret) ? secretModal.secret : "•".repeat(Math.min(secretModal.secret.length, 48))}
               </code>
               <button
                 type="button"
-                onClick={() => toggleSecretVisibility(oneTimeSecret)}
+                onClick={() => toggleSecretVisibility(secretModal.secret)}
                 className="px-2 py-2 rounded hover:bg-surface text-text-muted"
                 aria-label="Toggle visibility"
               >
                 <span className="material-symbols-outlined text-[18px]">
-                  {visibleSecrets.has(oneTimeSecret) ? "visibility_off" : "visibility"}
+                  {visibleSecrets.has(secretModal.secret) ? "visibility_off" : "visibility"}
                 </span>
               </button>
               <button
                 type="button"
-                onClick={() => copySecret(oneTimeSecret, oneTimeSecret)}
+                onClick={() => copySecret(secretModal.secret, secretModal.secret)}
                 className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm"
               >
-                {copiedId === oneTimeSecret ? "Copied!" : "Copy"}
+                {copiedId === secretModal.secret ? "Copied!" : "Copy"}
               </button>
             </div>
             <div className="flex justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  setOneTimeSecret(null);
-                  setVisibleSecrets(new Set());
-                }}
+                onClick={closeSecretModal}
                 className="px-4 py-2 rounded-lg border border-border text-sm hover:bg-surface"
               >
                 Done

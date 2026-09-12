@@ -5,6 +5,8 @@ import {
   generateApiKeySecret,
   computeApiKeyDigest,
   buildApiKeyHint,
+  encryptApiKeySecret,
+  decryptApiKeySecret,
 } from "@/lib/apiKeys/auth.js";
 import { normalizeTargets, buildTargetIdSet } from "@/lib/apiKeys/policy.js";
 
@@ -52,8 +54,8 @@ export async function getApiKeys() {
   const out = [];
   for (const row of rows) {
     const key = rowToKey(row);
-    // strip keyHash from management list responses
-    const { keyHash, ...meta } = key;
+    // strip keyHash + recoverable ciphertext from management list responses
+    const { keyHash, secretEncrypted, ...meta } = key;
     meta.targets = await getApiKeyAccessTargets(key.id);
     out.push(meta);
   }
@@ -65,9 +67,17 @@ export async function getApiKeyById(id) {
   const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
   if (!row) return null;
   const key = rowToKey(row);
-  const { keyHash, ...meta } = key;
+  const { keyHash, secretEncrypted, ...meta } = key;
   meta.targets = await getApiKeyAccessTargets(id);
   return meta;
+}
+
+/** Decrypt recoverable secret for dashboard show/copy. Null if missing/corrupt. */
+export async function getRecoverableApiKeySecret(id) {
+  const db = await getAdapter();
+  const row = db.get(`SELECT secretEncrypted FROM apiKeys WHERE id = ?`, [id]);
+  if (!row?.secretEncrypted) return null;
+  return decryptApiKeySecret(row.secretEncrypted);
 }
 
 /** Internal: lookup by digest for request auth (returns full row incl. hash). */
@@ -93,7 +103,7 @@ function insertTargets(db, apiKeyId, targets) {
 }
 
 /**
- * Create a key. Returns metadata + one-time plaintext `key` (never stored).
+ * Create a key. Returns metadata + plaintext `key` (HMAC digest for auth; ciphertext for re-copy).
  * @param {string} name
  * @param {string|null} machineId
  * @param {{ accessMode?: string, targets?: Array }} [options]
@@ -111,9 +121,9 @@ export async function createApiKey(name, machineId, options = {}) {
 
   db.transaction(() => {
     db.run(
-      `INSERT INTO apiKeys(id, keyHash, keyHint, hashVersion, name, machineId, accessMode, isActive, createdAt, updatedAt, rerolledAt)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [id, keyHash, keyHint, API_KEY_HASH_VERSION, name, machineId || null, accessMode, 1, now, now]
+      `INSERT INTO apiKeys(id, keyHash, keyHint, hashVersion, name, machineId, accessMode, isActive, createdAt, updatedAt, rerolledAt, secretEncrypted)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      [id, keyHash, keyHint, API_KEY_HASH_VERSION, name, machineId || null, accessMode, 1, now, now, encryptApiKeySecret(secret)]
     );
     if (accessMode === API_KEY_ACCESS_MODE.RESTRICTED) {
       insertTargets(db, id, options.targets || []);
@@ -209,8 +219,8 @@ export async function rerollApiKey(id) {
   const keyHint = buildApiKeyHint(secret);
   const now = new Date().toISOString();
   db.run(
-    `UPDATE apiKeys SET keyHash = ?, keyHint = ?, hashVersion = ?, updatedAt = ?, rerolledAt = ? WHERE id = ?`,
-    [keyHash, keyHint, API_KEY_HASH_VERSION, now, now, id]
+    `UPDATE apiKeys SET keyHash = ?, keyHint = ?, hashVersion = ?, updatedAt = ?, rerolledAt = ?, secretEncrypted = ? WHERE id = ?`,
+    [keyHash, keyHint, API_KEY_HASH_VERSION, now, now, encryptApiKeySecret(secret), id]
   );
   return {
     id,

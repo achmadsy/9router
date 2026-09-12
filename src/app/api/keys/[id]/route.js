@@ -9,6 +9,7 @@ const FORBIDDEN_FIELDS = [
   "key",
   "keyHash",
   "secret",
+  "secretEncrypted",
   "hashVersion",
   "machineId",
   "createdAt",

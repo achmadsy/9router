@@ -51,6 +51,7 @@ describe("GET /api/keys", () => {
     for (const k of body.keys) {
       expect(k.key).toBeUndefined();
       expect(k.keyHash).toBeUndefined();
+      expect(k.secretEncrypted).toBeUndefined();
       expect(k.keyHint).toMatch(/^sk-9r-/);
       expect(k.id).toBeTruthy();
       expect(k.accessMode).toBeTruthy();

@@ -95,11 +95,13 @@ describe("API key secret format & HMAC", () => {
     expect(row).toBeDefined();
     expect(row.key).toBeUndefined();
     expect(row.keyHash).toBeUndefined();
+    expect(row.secretEncrypted).toBeUndefined();
     expect(row.keyHint).toMatch(/^sk-9r-\*\*\*/);
 
     const fetched = await db.getApiKeyById(created.id);
     expect(fetched.key).toBeUndefined();
     expect(fetched.keyHash).toBeUndefined();
+    expect(fetched.secretEncrypted).toBeUndefined();
 
     // Internal auth path still sees digest for timing-safe lookup
     const authRow = await db.getApiKeyByHash(
@@ -110,13 +112,28 @@ describe("API key secret format & HMAC", () => {
     expect(authRow.key).toBeUndefined();
 
     // Raw DB: no plaintext `key` column after migration 002; only hashed verifier
+    // plus AES ciphertext for recoverable show/copy (never plaintext secret).
     const adapter = (await import("@/lib/db/driver.js")).getAdapterSync
       ? (await import("@/lib/db/driver.js")).getAdapterSync()
       : await (await import("@/lib/db/driver.js")).getAdapter();
     const cols = adapter.all(`PRAGMA table_info(apiKeys)`);
     expect(cols.map((c) => c.name)).not.toContain("key");
-    const raw = adapter.get(`SELECT keyHash FROM apiKeys WHERE id = ?`, [created.id]);
+    const raw = adapter.get(`SELECT keyHash, secretEncrypted FROM apiKeys WHERE id = ?`, [created.id]);
     expect(raw.keyHash).toBe(authRow.keyHash);
+    expect(raw.secretEncrypted).toMatch(/^v1:/);
+    expect(String(raw.secretEncrypted || "").includes(created.key)).toBe(false);
+  });
+
+  it("recoverable secret re-fetch works for later copy", async () => {
+    const created = await db.createApiKey("sec-copy", "machine-1");
+    const recovered = await db.getRecoverableApiKeySecret(created.id);
+    expect(recovered).toBe(created.key);
+    expect(await db.validateApiKey(recovered)).toBe(true);
+
+    const rerolled = await db.rerollApiKey(created.id);
+    const after = await db.getRecoverableApiKeySecret(created.id);
+    expect(after).toBe(rerolled.key);
+    expect(after).not.toBe(created.key);
   });
 
   it("resolveApiKeyBySecret validates active key via timing-safe digest match", async () => {

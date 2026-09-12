@@ -18,7 +18,7 @@ export async function GET() {
   }
 }
 
-// POST /api/keys - Create new API key. Secret returned once as `secret`.
+// POST /api/keys - Create new API key. Plaintext also encrypted at rest for later show/copy.
 export async function POST(request) {
   try {
     const body = await request.json();

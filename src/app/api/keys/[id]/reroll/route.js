@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { rerollApiKey } from "@/lib/localDb";
 
-// POST /api/keys/[id]/reroll — rotate verifier; same ID/policy; new secret once.
+// POST /api/keys/[id]/reroll — rotate verifier; same ID/policy; new secret (copyable anytime after).
 export async function POST(request, { params }) {
   try {
     const { id } = await params;

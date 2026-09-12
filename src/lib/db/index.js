@@ -31,6 +31,7 @@ export {
 export {
   getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
   getApiKeyByHash, getApiKeyAccessTargets, rerollApiKey, authenticateApiKey,
+  getRecoverableApiKeySecret,
 } from "./repos/apiKeysRepo.js";
 
 // Combos

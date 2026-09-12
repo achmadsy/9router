@@ -7,6 +7,8 @@ import Tooltip from "../endpoint/components/Tooltip";
 /**
  * Model/combo multi-select for a restricted API key.
  * Default (All) = empty selection → key exposes every current/future model & combo.
+ * Models + combos are one searchable list (combos were previously double-listed
+ * because buildModelsList embeds combos as models with owned_by: "combo").
  */
 export default function ApiKeyPolicyEditor({
   accessMode = "all",
@@ -23,6 +25,7 @@ export default function ApiKeyPolicyEditor({
   const [selectedCombos, setSelectedCombos] = useState(
     () => new Set(targets.filter((t) => t.targetType === "combo").map((t) => t.targetId))
   );
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let ignore = false;
@@ -57,7 +60,52 @@ export default function ApiKeyPolicyEditor({
     });
   };
 
+  // Combos already appear inside the models catalog (owned_by: "combo").
+  // Prefer the richer combo rows and drop those duplicates from model options.
+  const comboOptions = useMemo(() => {
+    if (!options) return [];
+    return (options.combos || []).map((c) => ({
+      type: "combo",
+      id: c.name || c.id,
+      label: c.name || c.id,
+      meta: c.models?.length ? `${c.models.length} models` : null,
+    }));
+  }, [options]);
+
+  const modelOptions = useMemo(() => {
+    if (!options) return [];
+    const comboIds = new Set(comboOptions.map((c) => c.id));
+    return (options.models || [])
+      .filter((m) => m.owned_by !== "combo" && !comboIds.has(m.id))
+      .map((m) => ({
+        type: "model",
+        id: m.id,
+        label: m.id,
+        meta: m.owned_by || null,
+      }));
+  }, [options, comboOptions]);
+
+  const filteredItems = useMemo(() => {
+    const all = [...comboOptions, ...modelOptions].sort((a, b) => a.label.localeCompare(b.label));
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (i) =>
+        i.label.toLowerCase().includes(q) ||
+        (i.meta && String(i.meta).toLowerCase().includes(q))
+    );
+  }, [comboOptions, modelOptions, query]);
+
   const selectedCount = selectedModels.size + selectedCombos.size;
+  const totalOptions = comboOptions.length + modelOptions.length;
+
+  const isChecked = (item) =>
+    item.type === "model" ? selectedModels.has(item.id) : selectedCombos.has(item.id);
+
+  const handleCheck = (item, checked) => {
+    if (item.type === "model") toggle(setSelectedModels, item.id, checked);
+    else toggle(setSelectedCombos, item.id, checked);
+  };
 
   if (options === null) {
     return (
@@ -75,58 +123,63 @@ export default function ApiKeyPolicyEditor({
     <div className={className}>
       <StatusAlert status={{ type: "info", message: "Default exposes every current and future model/combo. Restricted keys only see selected items." }} />
       {accessMode === "restricted" && (
-        <div className="mt-3 space-y-4">
-          <div>
-            <div className="text-sm font-medium text-text-main mb-1">
-              Models
-              <span className="ml-1 text-text-muted text-xs">({selectedModels.size} selected)</span>
+        <div className="mt-3 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-sm font-medium text-text-main">
+              Models &amp; combos
+              <span className="ml-1 text-text-muted text-xs">
+                ({selectedCount} selected · {totalOptions} available)
+              </span>
             </div>
-            <div className="border border-border rounded-lg max-h-48 overflow-y-auto p-2 space-y-1">
-              {options.models.length === 0 ? (
-                <p className="text-text-muted text-xs">No models available.</p>
-              ) : (
-                options.models.map((m) => (
-                  <label key={m.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="accent-blue-600"
-                      disabled={disabled}
-                      checked={selectedModels.has(m.id)}
-                      onChange={(e) => toggle(setSelectedModels, m.id, e.target.checked)}
-                    />
-                    <span className="font-mono text-xs break-all">{m.id}</span>
-                    {m.owned_by && (
-                      <span className="text-text-muted text-xs ml-auto shrink-0">{m.owned_by}</span>
-                    )}
-                  </label>
-                ))
-              )}
-            </div>
+            <Tooltip text="One searchable list. Combos appear once (badge); member models stay individually selectable for direct calls." />
           </div>
-          <div>
-            <div className="text-sm font-medium text-text-main mb-1">
-              Combos
-              <span className="ml-1 text-text-muted text-xs">({selectedCombos.size} selected)</span>
-            </div>
-            <div className="border border-border rounded-lg max-h-40 overflow-y-auto p-2 space-y-1">
-              {options.combos.length === 0 ? (
-                <p className="text-text-muted text-xs">No combos yet. Combo members are reachable only via the combo itself.</p>
-              ) : (
-                options.combos.map((c) => (
-                  <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="accent-blue-600"
-                      disabled={disabled}
-                      checked={selectedCombos.has(c.name)}
-                      onChange={(e) => toggle(setSelectedCombos, c.name, e.target.checked)}
-                    />
-                    <span className="font-medium">{c.name}</span>
-                    <span className="text-text-muted text-xs">{c.models?.length || 0} models</span>
-                  </label>
-                ))
-              )}
-            </div>
+          <input
+            type="search"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+            placeholder="Search models & combos…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            disabled={disabled}
+            aria-label="Search models and combos"
+          />
+          <div className="border border-border rounded-lg max-h-56 overflow-y-auto p-2 space-y-0.5">
+            {filteredItems.length === 0 ? (
+              <p className="text-text-muted text-xs py-2">
+                No matches. {totalOptions === 0 ? "No models or combos available yet." : "Try a different search."}
+              </p>
+            ) : (
+              filteredItems.map((item) => (
+                <label
+                  key={`${item.type}:${item.id}`}
+                  className="flex items-center gap-2 text-sm cursor-pointer rounded px-1 py-0.5 hover:bg-surface/60"
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-blue-600"
+                    disabled={disabled}
+                    checked={isChecked(item)}
+                    onChange={(e) => handleCheck(item, e.target.checked)}
+                  />
+                  {item.type === "combo" && (
+                    <span className="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-semibold uppercase tracking-wide bg-purple-500/15 text-purple-600 dark:text-purple-400 shrink-0">
+                      combo
+                    </span>
+                  )}
+                  <span
+                    className={
+                      item.type === "combo"
+                        ? "font-medium text-xs break-all"
+                        : "font-mono text-xs break-all"
+                    }
+                  >
+                    {item.label}
+                  </span>
+                  {item.meta && (
+                    <span className="text-text-muted text-xs ml-auto shrink-0">{item.meta}</span>
+                  )}
+                </label>
+              ))
+            )}
           </div>
           {selectedCount === 0 && (
             <StatusAlert status={{ type: "warning", message: "No models or combos selected — this key is deny-all until you pick something." }} />
