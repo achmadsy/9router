@@ -8,7 +8,10 @@ function rowToPolicy(r) {
     id: r.id,
     provider: r.provider,
     model: r.model,
+    mode: r.mode || "duration",
     timeoutMs: r.timeoutMs,
+    resetHour: r.resetHour ?? null,
+    resetMinute: r.resetMinute ?? null,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
@@ -52,15 +55,24 @@ export async function listSelfAwarePolicies() {
   return db.all(`SELECT * FROM selfAwarePolicies ORDER BY provider, model`).map(rowToPolicy);
 }
 
-export async function upsertSelfAwarePolicy({ provider, model, timeoutMs }) {
+export async function upsertSelfAwarePolicy({ provider, model, mode = "duration", timeoutMs = 0, resetHour = null, resetMinute = null }) {
   const db = await getAdapter();
   const now = new Date().toISOString();
   const m = model || "";
+  const md = mode === "daily" ? "daily" : "duration";
+  const timeout = md === "daily" ? 0 : Math.round(Number(timeoutMs) || 0);
+  const hour = md === "daily" && resetHour != null ? Math.round(Number(resetHour)) : null;
+  const minute = md === "daily" && resetMinute != null ? Math.round(Number(resetMinute)) : null;
   db.run(
-    `INSERT INTO selfAwarePolicies(provider, model, timeoutMs, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?)
-     ON CONFLICT(provider, model) DO UPDATE SET timeoutMs = excluded.timeoutMs, updatedAt = excluded.updatedAt`,
-    [provider, m, Math.round(timeoutMs), now, now]
+    `INSERT INTO selfAwarePolicies(provider, model, mode, timeoutMs, resetHour, resetMinute, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(provider, model) DO UPDATE SET
+       mode = excluded.mode,
+       timeoutMs = excluded.timeoutMs,
+       resetHour = excluded.resetHour,
+       resetMinute = excluded.resetMinute,
+       updatedAt = excluded.updatedAt`,
+    [provider, m, md, timeout, hour, minute, now, now]
   );
   return rowToPolicy(db.get(`SELECT * FROM selfAwarePolicies WHERE provider = ? AND model = ?`, [provider, m]));
 }

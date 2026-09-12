@@ -105,6 +105,25 @@ describe("Self-Aware API routes", () => {
     expect(ok.status).toBe(200);
   });
 
+  it("PUT /api/self-aware/policies accepts daily mode and rejects bad HH:MM", async () => {
+    const { PUT } = await import("@/app/api/self-aware/policies/route.js");
+    const bad = await PUT(new Request("http://x", {
+      method: "PUT",
+      body: JSON.stringify({ provider: "opencode", model: "", mode: "daily", resetHour: 24, resetMinute: 0 }),
+    }));
+    expect(bad.status).toBe(400);
+
+    const ok = await PUT(new Request("http://x", {
+      method: "PUT",
+      body: JSON.stringify({ provider: "opencode", model: "", mode: "daily", resetHour: 0, resetMinute: 0 }),
+    }));
+    expect(ok.status).toBe(200);
+    const { upsertSelfAwarePolicy } = await import("@/lib/db/index.js");
+    expect(upsertSelfAwarePolicy).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "opencode", mode: "daily", resetHour: 0, resetMinute: 0,
+    }));
+  });
+
   it("DELETE /api/self-aware/policies requires provider", async () => {
     const { DELETE } = await import("@/app/api/self-aware/policies/route.js");
     const res = await DELETE(new Request("http://x?model=m"));

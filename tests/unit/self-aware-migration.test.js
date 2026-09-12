@@ -31,7 +31,7 @@ describe("self-aware schema v4", () => {
   it("fresh DB creates selfAwarePolicies + selfAwareCooldowns and stamps v4", async () => {
     const db = await freshDb();
     const row = db.get(`SELECT value FROM _meta WHERE key='schemaVersion'`);
-    expect(parseInt(row.value, 10)).toBe(4);
+    expect(parseInt(row.value, 10)).toBe(5);
     const tables = db.all(`SELECT name FROM sqlite_master WHERE type='table'`).map(t => t.name);
     expect(tables).toEqual(expect.arrayContaining(["selfAwarePolicies", "selfAwareCooldowns"]));
   });
@@ -52,7 +52,7 @@ describe("self-aware schema v4", () => {
     vi.resetModules();
     db = await freshDb();
     const ver = parseInt(db.get(`SELECT value FROM _meta WHERE key='schemaVersion'`).value, 10);
-    expect(ver).toBe(4);
+    expect(ver).toBe(5);
     const tables = db.all(`SELECT name FROM sqlite_master WHERE type='table'`).map(t => t.name);
     expect(tables).toEqual(expect.arrayContaining(["selfAwarePolicies", "selfAwareCooldowns"]));
     const settings = db.get(`SELECT data FROM settings WHERE id=1`);
@@ -101,6 +101,29 @@ describe("self-aware schema v4", () => {
     expect(info).not.toContain("id");
     const pk = db.all(`PRAGMA table_info(selfAwarePolicies)`).filter((c) => c.pk > 0).map((c) => c.name);
     expect(pk).toEqual(["provider", "model"]);
+    expect(info).toEqual(expect.arrayContaining(["mode", "resetHour", "resetMinute"]));
+  });
+
+  it("daily-reset policy upsert stores mode/hour/minute and leaves timeoutMs 0", async () => {
+    const repo = await import("@/lib/db/repos/selfAwareRepo.js");
+    await repo.upsertSelfAwarePolicy({
+      provider: "opencode", model: "", mode: "daily", resetHour: 0, resetMinute: 0,
+    });
+    const row = await repo.getSelfAwarePolicy("opencode", "glm-4.6");
+    expect(row.mode).toBe("daily");
+    expect(row.resetHour).toBe(0);
+    expect(row.resetMinute).toBe(0);
+    expect(row.timeoutMs).toBe(0);
+  });
+
+  it("duration policy keeps mode=duration with null reset fields", async () => {
+    const repo = await import("@/lib/db/repos/selfAwareRepo.js");
+    await repo.upsertSelfAwarePolicy({ provider: "openai", model: "gpt-4o", timeoutMs: 30_000 });
+    const row = await repo.getSelfAwarePolicy("openai", "gpt-4o");
+    expect(row.mode).toBe("duration");
+    expect(row.timeoutMs).toBe(30_000);
+    expect(row.resetHour).toBeNull();
+    expect(row.resetMinute).toBeNull();
   });
 
   it("cooldown unique index enforces one row per semantic target; upsert replaces", async () => {

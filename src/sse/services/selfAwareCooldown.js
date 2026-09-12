@@ -55,6 +55,24 @@ function isoOf(ms) {
   return ms ? new Date(ms).toISOString() : null;
 }
 
+/**
+ * Milliseconds until the next local wall-clock occurrence of HH:MM.
+ * Always > 0 (if "now" is exactly on the minute, wait until tomorrow).
+ */
+export function msUntilDailyReset(hour, minute, nowMs = Date.now()) {
+  if (hour == null || minute == null) return null;
+  const h = Number(hour);
+  const m = Number(minute);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    return null;
+  }
+  const now = new Date(nowMs);
+  const next = new Date(now);
+  next.setHours(h, m, 0, 0);
+  if (next.getTime() <= nowMs) next.setDate(next.getDate() + 1);
+  return next.getTime() - nowMs;
+}
+
 async function repo() {
   // Lazy import keeps pure decision path free of DB dependency in unit tests
   // that only call resolveSelfAwareDecision with in-memory inputs.
@@ -187,6 +205,10 @@ export async function getSelfAwarePolicyMs(provider, model) {
       }
     }
     if (!row) return null;
+    if ((row.mode || "duration") === "daily") {
+      const ms = msUntilDailyReset(row.resetHour, row.resetMinute);
+      return ms != null && ms > 0 ? ms : null;
+    }
     const ms = Number(row.timeoutMs);
     return Number.isFinite(ms) && ms > 0 ? ms : null;
   } catch (e) {

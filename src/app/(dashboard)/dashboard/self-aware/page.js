@@ -51,7 +51,10 @@ export default function SelfAwarePage() {
   const [policies, setPolicies] = useState([]);
   const [polLoading, setPolLoading] = useState(false);
   const [polError, setPolError] = useState(null);
-  const [form, setForm] = useState({ provider: "", model: "", value: "60", unit: "s" });
+  const [form, setForm] = useState({
+    provider: "", model: "", value: "60", unit: "s",
+    mode: "duration", resetHour: "0", resetMinute: "0",
+  });
   const [formMsg, setFormMsg] = useState(null);
 
   // Provider clones (duplicates) + custom nodes for labels + policy dropdown
@@ -212,11 +215,42 @@ export default function SelfAwarePage() {
   const handleSavePolicy = async (e) => {
     e.preventDefault();
     setFormMsg(null);
-    const timeoutMs = parseDuration(form.value, form.unit);
     if (!form.provider) {
       setFormMsg("Provider is required");
       return;
     }
+    if (form.mode === "daily") {
+      const resetHour = Number(form.resetHour);
+      const resetMinute = Number(form.resetMinute);
+      if (!Number.isInteger(resetHour) || resetHour < 0 || resetHour > 23 ||
+          !Number.isInteger(resetMinute) || resetMinute < 0 || resetMinute > 59) {
+        setFormMsg("Enter a valid daily reset time (HH:MM)");
+        return;
+      }
+      try {
+        const res = await fetch("/api/self-aware/policies", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: form.provider,
+            model: form.model.trim(),
+            mode: "daily",
+            resetHour,
+            resetMinute,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        setFormMsg({ ok: true, text: "Saved" });
+        loadPolicies();
+      } catch (err) {
+        setFormMsg({ ok: false, text: err.message });
+      }
+      return;
+    }
+    const timeoutMs = parseDuration(form.value, form.unit);
     if (timeoutMs == null) {
       setFormMsg("Enter a valid duration");
       return;
@@ -228,6 +262,7 @@ export default function SelfAwarePage() {
         body: JSON.stringify({
           provider: form.provider,
           model: form.model.trim(),
+          mode: "duration",
           timeoutMs,
         }),
       });
@@ -428,7 +463,8 @@ export default function SelfAwarePage() {
           <div className="bg-white/5 border border-white/10 rounded p-4 text-sm text-gray-300">
             Set wait time per provider/model. On 429 responses, duration comes from:
             upstream wait headers first, then this manual setting, then existing automatic cooldown.
-            Useful when no header is returned or the automatic cooldown is too short.
+            Duration mode cools for a fixed length. Daily reset mode cools until the next local HH:MM
+            (e.g. 00:00) — useful for providers that reset quota on a clock.
           </div>
 
           <form onSubmit={handleSavePolicy} className="flex flex-wrap items-end gap-3">
@@ -455,27 +491,65 @@ export default function SelfAwarePage() {
               />
             </label>
             <label className="block">
-              <span className="text-xs text-gray-400">Wait</span>
-              <div className="mt-1 flex gap-1">
-                <input
-                  type="number"
-                  min="1"
-                  value={form.value}
-                  onChange={(e) => setForm({ ...form, value: e.target.value })}
-                  className="w-20 bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
-                />
-                <select
-                  value={form.unit}
-                  onChange={(e) => setForm({ ...form, unit: e.target.value })}
-                  className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
-                >
-                  <option value="s">seconds</option>
-                  <option value="m">minutes</option>
-                  <option value="h">hours</option>
-                  <option value="d">days</option>
-                </select>
-              </div>
+              <span className="text-xs text-gray-400">Mode</span>
+              <select
+                value={form.mode}
+                onChange={(e) => setForm({ ...form, mode: e.target.value })}
+                className="mt-1 block w-36 bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+              >
+                <option value="duration">Duration</option>
+                <option value="daily">Daily reset</option>
+              </select>
             </label>
+            {form.mode === "duration" ? (
+              <label className="block">
+                <span className="text-xs text-gray-400">Wait</span>
+                <div className="mt-1 flex gap-1">
+                  <input
+                    type="number"
+                    min="1"
+                    value={form.value}
+                    onChange={(e) => setForm({ ...form, value: e.target.value })}
+                    className="w-20 bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+                  />
+                  <select
+                    value={form.unit}
+                    onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                    className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+                  >
+                    <option value="s">seconds</option>
+                    <option value="m">minutes</option>
+                    <option value="h">hours</option>
+                    <option value="d">days</option>
+                  </select>
+                </div>
+              </label>
+            ) : (
+              <label className="block">
+                <span className="text-xs text-gray-400">Reset at (local)</span>
+                <div className="mt-1 flex items-center gap-1">
+                  <input
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={form.resetHour}
+                    onChange={(e) => setForm({ ...form, resetHour: e.target.value })}
+                    className="w-14 bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+                    aria-label="Reset hour"
+                  />
+                  <span className="text-gray-400">:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    value={form.resetMinute}
+                    onChange={(e) => setForm({ ...form, resetMinute: e.target.value })}
+                    className="w-14 bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+                    aria-label="Reset minute"
+                  />
+                </div>
+              </label>
+            )}
             <button
               type="submit"
               disabled={polLoading}
@@ -510,13 +584,15 @@ export default function SelfAwarePage() {
                     <td className="px-3 py-2 text-white">{providerLabel(p.provider)}</td>
                     <td className="px-3 py-2 text-gray-300 font-mono text-xs">{p.model || "all"}</td>
                     <td className="px-3 py-2 text-gray-300">
-                      {p.timeoutMs >= 86400000
-                        ? `${Math.round(p.timeoutMs / 86400000)}d`
-                        : p.timeoutMs >= 3600000
-                          ? `${Math.round(p.timeoutMs / 3600000)}h`
-                          : p.timeoutMs >= 60000
-                            ? `${Math.round(p.timeoutMs / 60000)}m`
-                            : `${Math.round(p.timeoutMs / 1000)}s`}
+                      {p.mode === "daily"
+                        ? `Daily @ ${String(p.resetHour ?? 0).padStart(2, "0")}:${String(p.resetMinute ?? 0).padStart(2, "0")}`
+                        : p.timeoutMs >= 86400000
+                          ? `${Math.round(p.timeoutMs / 86400000)}d`
+                          : p.timeoutMs >= 3600000
+                            ? `${Math.round(p.timeoutMs / 3600000)}h`
+                            : p.timeoutMs >= 60000
+                              ? `${Math.round(p.timeoutMs / 60000)}m`
+                              : `${Math.round(p.timeoutMs / 1000)}s`}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <button

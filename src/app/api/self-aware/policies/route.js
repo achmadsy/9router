@@ -25,14 +25,29 @@ export async function PUT(request) {
     const body = await request.json();
     const provider = String(body.provider || "").trim();
     const model = String(body.model || "").trim();
+    const mode = body.mode === "daily" ? "daily" : "duration";
     const timeoutMs = Number(body.timeoutMs);
     if (!provider) {
       return NextResponse.json({ error: "provider is required" }, { status: 400 });
     }
+    if (mode === "daily") {
+      const resetHour = Number(body.resetHour);
+      const resetMinute = Number(body.resetMinute);
+      if (!Number.isInteger(resetHour) || resetHour < 0 || resetHour > 23) {
+        return NextResponse.json({ error: "resetHour must be 0..23" }, { status: 400 });
+      }
+      if (!Number.isInteger(resetMinute) || resetMinute < 0 || resetMinute > 59) {
+        return NextResponse.json({ error: "resetMinute must be 0..59" }, { status: 400 });
+      }
+      const policy = await upsertSelfAwarePolicy({
+        provider, model, mode: "daily", resetHour, resetMinute,
+      });
+      return NextResponse.json({ policy });
+    }
     if (!Number.isFinite(timeoutMs) || timeoutMs < MIN_MS || timeoutMs > MAX_MS) {
       return NextResponse.json({ error: `timeoutMs must be ${MIN_MS}..${MAX_MS}` }, { status: 400 });
     }
-    const policy = await upsertSelfAwarePolicy({ provider, model, timeoutMs });
+    const policy = await upsertSelfAwarePolicy({ provider, model, mode: "duration", timeoutMs });
     return NextResponse.json({ policy });
   } catch (e) {
     console.error("[API] self-aware policy upsert failed:", e);

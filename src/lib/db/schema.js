@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -181,14 +181,18 @@ export const TABLES = {
     ],
   },
   // Self-Aware cooldown: manual per-model wait policies (composite PK provider+model).
-  // timeoutMs is integer 1s..30d. Dynamic models OK. Clones isolated (own provider id).
+  // mode: "duration" (timeoutMs 1s..30d) | "daily" (resetHour+resetMinute local wall-clock).
+  // Dynamic models OK. Clones isolated (own provider id).
   // Unique index kept as belt-and-suspenders for already-migrated v4 DBs that
   // still have the old nullable id PK (ON CONFLICT(provider, model) uses it).
   selfAwarePolicies: {
     columns: {
       provider: "TEXT NOT NULL",
       model: "TEXT NOT NULL",
-      timeoutMs: "INTEGER NOT NULL",
+      mode: "TEXT NOT NULL DEFAULT 'duration'",
+      timeoutMs: "INTEGER NOT NULL DEFAULT 0",
+      resetHour: "INTEGER",
+      resetMinute: "INTEGER",
       createdAt: "TEXT NOT NULL",
       updatedAt: "TEXT NOT NULL",
     },

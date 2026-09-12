@@ -1,6 +1,6 @@
 // HIGH: resolveSelfAwareDecision — precedence, status gating, scopes, manual policy.
 import { describe, it, expect } from "vitest";
-import { resolveSelfAwareDecision, sanitizeReason } from "../../src/sse/services/selfAwareCooldown.js";
+import { resolveSelfAwareDecision, sanitizeReason, msUntilDailyReset } from "../../src/sse/services/selfAwareCooldown.js";
 
 const NOW = 1_700_000_000_000;
 const HINT = { source: "upstream-header", headerName: "Retry-After", expiresAtMs: NOW + 10_000, durationMs: 10_000 };
@@ -156,5 +156,52 @@ describe("sanitizeReason — secret redaction", () => {
   it("null/empty → null", () => {
     expect(sanitizeReason(null)).toBeNull();
     expect(sanitizeReason("   ")).toBeNull();
+  });
+});
+
+describe("msUntilDailyReset", () => {
+  it("returns null for invalid hour/minute", () => {
+    expect(msUntilDailyReset(24, 0)).toBeNull();
+    expect(msUntilDailyReset(0, 60)).toBeNull();
+    expect(msUntilDailyReset(null, 0)).toBeNull();
+  });
+
+  it("before target time today → remaining ms same day", () => {
+    // Local midnight+1h = 01:00 target, now 00:00
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const ms = msUntilDailyReset(0, 30, now.getTime());
+    expect(ms).toBe(30 * 60 * 1000);
+  });
+
+  it("after target time → wait until tomorrow", () => {
+    const now = new Date();
+    now.setHours(12, 0, 0, 0);
+    const ms = msUntilDailyReset(0, 0, now.getTime());
+    // ~12h remaining
+    expect(ms).toBeGreaterThan(11 * 3600 * 1000);
+    expect(ms).toBeLessThanOrEqual(12 * 3600 * 1000);
+  });
+
+  it("exactly on target → tomorrow (not 0)", () => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const ms = msUntilDailyReset(0, 0, now.getTime());
+    expect(ms).toBe(24 * 3600 * 1000);
+  });
+});
+
+describe("resolveSelfAwareDecision — daily policy as manualPolicyMs", () => {
+  it("applies computed daily duration as manual wait when no header", () => {
+    const d = resolveSelfAwareDecision({
+      provider: "opencode", model: "glm-4.6", status: 429,
+      manualPolicyMs: 90 * 60 * 1000, // e.g. until next 00:00
+      scope: { scopeType: "proxy", scopeId: "pool-a" },
+      nowMs: NOW,
+    });
+    expect(d.source).toBe("manual-policy");
+    expect(d.cooldownMs).toBe(90 * 60 * 1000);
+    expect(d.scopeType).toBe("proxy");
+    expect(d.scopeId).toBe("pool-a");
   });
 });
