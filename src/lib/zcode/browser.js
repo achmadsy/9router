@@ -1,8 +1,10 @@
-import { launch as cbLaunch } from "cloakbrowser";
-import { chromium as pwChromium } from "playwright-core";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+
+// Lazy-load heavy browser deps so the server boots without them (WIP zcode / slim Docker).
+let cbLaunch;
+let pwChromium;
 
 const USER_DATA_DIR = path.join(os.homedir(), ".cloakbrowser", "profiles", "9router-zcode");
 
@@ -60,6 +62,18 @@ export async function launch(opts = {}) {
 
   if (browserInstance) {
     await close();
+  }
+
+  // Only required when actually launching a captcha browser — not at module load.
+  if (!cbLaunch) {
+    ({ launch: cbLaunch } = await import("cloakbrowser"));
+  }
+  if (!pwChromium) {
+    try {
+      ({ chromium: pwChromium } = await import("playwright-core"));
+    } catch {
+      pwChromium = null;
+    }
   }
 
   const sysChromium = resolveSystemChromium();
