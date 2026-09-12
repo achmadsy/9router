@@ -302,7 +302,7 @@ export default function ProvidersPage() {
         id: node.id,
         name: node.name || baseInfo?.name || baseId,
         color: baseInfo?.color || "#6366F1",
-        textIcon: baseInfo?.alias?.slice(0, 2).toUpperCase() || "CL",
+        textIcon: baseInfo?.textIcon || baseInfo?.alias?.slice(0, 2).toUpperCase() || baseId.slice(0, 2).toUpperCase(),
         prefix: node.prefix,
         baseProvider: baseId,
         icon: baseInfo?.icon,
@@ -899,7 +899,8 @@ function ApiKeyProviderCard({
         ? "/providers/oai-r.png"
         : "/providers/oai-cc.png";
     if (isAnthropicCompatible) return "/providers/anthropic-m.png";
-    return getProviderIconSrc(provider.id);
+    // Duplicates reuse the source provider's icon asset
+    return getProviderIconSrc(provider.baseProvider || provider.id);
   };
 
   return (

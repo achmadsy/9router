@@ -1361,7 +1361,8 @@ export default function ProviderDetailPage() {
     if (isAnthropicCompatible) {
       return "/providers/anthropic-m.png";
     }
-    return getProviderIconSrc(providerInfo.id);
+    // Duplicates resolve the source registry id for the icon asset
+    return getProviderIconSrc(providerInfo.baseProvider || providerInfo.id);
   };
 
   return (
@@ -1393,7 +1394,7 @@ export default function ProviderDetailPage() {
                 className="max-h-12 max-w-12 rounded-lg object-contain"
                 sizes="48px"
                 onError={() => {
-                  markProviderIconMissing(providerInfo.id);
+                  markProviderIconMissing(providerInfo.baseProvider || providerInfo.id);
                   setHeaderImgError(true);
                 }}
               loading="lazy"
@@ -1504,6 +1505,50 @@ export default function ProviderDetailPage() {
                 Delete
               </Button>
             </div>
+          </div>
+        </Card>
+      )}
+
+      {isCloneNode && providerNode && (
+        <Card>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold">Duplicate Details</h2>
+              <p className="break-all text-sm text-text-muted">
+                Cloned from <span className="font-medium text-text-main">{AI_PROVIDERS[cloneBaseId]?.name || cloneBaseId}</span>
+                {providerNode.prefix ? (
+                  <> · models exposed as <span className="font-mono">{`${providerNode.prefix}/…`}</span></>
+                ) : null}
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                Connections here are isolated from the source provider.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="delete"
+              onClick={() => {
+                setConfirmState({
+                  title: "Delete Duplicate",
+                  message: `Delete this duplicate and all of its connections? The source provider is not affected.`,
+                  onConfirm: async () => {
+                    setConfirmState(null);
+                    try {
+                      const res = await fetch(`/api/provider-nodes/${providerId}`, { method: "DELETE" });
+                      if (res.ok) {
+                        router.push("/dashboard/providers");
+                      }
+                    } catch (error) {
+                      console.log("Error deleting provider clone:", error);
+                    }
+                  }
+                });
+              }}
+              className="w-full sm:w-auto"
+            >
+              Delete Duplicate
+            </Button>
           </div>
         </Card>
       )}
