@@ -7,7 +7,38 @@ import {
   requestDeviceCode,
   pollForToken
 } from "@/lib/oauth/providers";
-import { createProviderConnection } from "@/models";
+import { createProviderConnection, getProviderNodeById } from "@/models";
+import { isProviderCloneId } from "open-sse/providers/clones.js";
+
+// When OAuth completes for a provider clone (`?as=<cloneId>`), persist the new
+// connection under the clone id so its credential pool stays isolated.
+async function resolveSavedProviderId(asParam, baseProvider) {
+  try {
+    const as = typeof asParam === "string" ? asParam : null;
+    if (as && isProviderCloneId(as)) {
+      const node = await getProviderNodeById(as);
+      if (node?.type === "provider-clone") {
+        return {
+          provider: as,
+          providerSpecificData: {
+            baseProvider: node.baseProvider || baseProvider,
+            prefix: node.prefix,
+            nodeName: node.name,
+          },
+        };
+      }
+    }
+  } catch { /* fall through to base provider */ }
+  return { provider: baseProvider, providerSpecificData: null };
+}
+
+function readAsParam(request, body) {
+  try {
+    const fromUrl = new URL(request.url).searchParams.get("as");
+    if (fromUrl) return fromUrl;
+  } catch {}
+  return body?.as || null;
+}
 import { readDesktopPassToken, readDesktopAccountRegion } from "open-sse/shared/mimoAccount.js";
 import { resolveMimoAccount } from "open-sse/shared/mimoRegions.js";
 import {
@@ -45,7 +76,7 @@ import {
 import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
 import { ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
 
-async function completeXaiManualCode(code, state) {
+async function completeXaiManualCode(code, state, asParam = null) {
   const session = state ? getXaiSessionStatus(state) : null;
   if (!session) {
     throw new Error("xAI OAuth session not found; restart the login flow and paste the code again");
@@ -60,14 +91,16 @@ async function completeXaiManualCode(code, state) {
       session.codeVerifier,
       state
     );
+    const saved = await resolveSavedProviderId(asParam, "xai");
     const connection = await createProviderConnection({
-      provider: "xai",
+      provider: saved.provider,
       authType: "oauth",
       ...tokenData,
       expiresAt: tokenData.expiresIn
         ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
         : null,
       testStatus: "active",
+      ...(saved.providerSpecificData ? { providerSpecificData: saved.providerSpecificData } : {}),
     });
     clearXaiSession(state);
     stopXaiProxy();
@@ -301,6 +334,7 @@ export async function POST(request, { params }) {
     } catch {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
     }
+    const asParam = readAsParam(request, body);
 
     if (action === "register-session") {
       // Register proxy session out of URL query (state) + body (codeVerifier).
@@ -350,8 +384,9 @@ export async function POST(request, { params }) {
         }
 
         try {
+          const saved = await resolveSavedProviderId(asParam, "xiaomi-mimo");
           const connection = await createProviderConnection({
-            provider: "xiaomi-mimo",
+            provider: saved.provider,
             authType: "oauth",
             accessToken,
             refreshToken: null,
@@ -366,6 +401,7 @@ export async function POST(request, { params }) {
               mimoUserId: passToken?.userId || null,
               mimoCUserId: passToken?.cUserId || null,
               mimoRegion,
+              ...(saved.providerSpecificData || {}),
             },
             testStatus: "active",
           });
@@ -396,14 +432,16 @@ export async function POST(request, { params }) {
         }
         try {
           const tokenData = await exchangeTokens(provider, token, null, null, state);
+          const saved = await resolveSavedProviderId(asParam, provider);
           const connection = await createProviderConnection({
-            provider,
+            provider: saved.provider,
             authType: provider === "windsurf" ? "api_key" : "oauth",
             ...tokenData,
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
             testStatus: "active",
+            ...(saved.providerSpecificData ? { providerSpecificData: saved.providerSpecificData } : {}),
           });
           return NextResponse.json({
             success: true,
@@ -441,12 +479,16 @@ export async function POST(request, { params }) {
         if (accountId) providerSpecificData.chatgptAccountId = accountId;
         if (planType) providerSpecificData.chatgptPlanType = planType;
 
+        const saved = await resolveSavedProviderId(asParam, provider);
         const connection = await createProviderConnection({
-          provider,
+          provider: saved.provider,
           authType: "access_token",
           accessToken: code,
           email: email || null,
-          providerSpecificData,
+          providerSpecificData: {
+            ...(providerSpecificData || {}),
+            ...(saved.providerSpecificData || {}),
+          },
           testStatus: "active",
         });
 
@@ -532,14 +574,16 @@ export async function POST(request, { params }) {
       if (result.success) {
         // Save to database (legacy kimi-coding OAuth → dual-auth kimi)
         const providerId = provider === "kimi-coding" ? "kimi" : provider;
+        const saved = await resolveSavedProviderId(asParam, providerId);
         const connection = await createProviderConnection({
-          provider: providerId,
+          provider: saved.provider,
           authType: "oauth",
           ...result.tokens,
           expiresAt: result.tokens.expiresIn 
             ? new Date(Date.now() + result.tokens.expiresIn * 1000).toISOString() 
             : null,
           testStatus: "active",
+          ...(saved.providerSpecificData ? { providerSpecificData: saved.providerSpecificData } : {}),
         });
 
         return NextResponse.json({ 
@@ -567,7 +611,7 @@ export async function POST(request, { params }) {
         return NextResponse.json({ error: "Manual code only supported for xai" }, { status: 400 });
       }
       const { code, state } = body;
-      const connection = await completeXaiManualCode(String(code || "").trim(), String(state || "").trim());
+      const connection = await completeXaiManualCode(String(code || "").trim(), String(state || "").trim(), asParam);
       return NextResponse.json({ success: true, connection });
     }
 

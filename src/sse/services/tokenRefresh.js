@@ -222,6 +222,9 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
  * @returns {Promise<object>} updated credentials object
  */
 export async function checkAndRefreshToken(provider, credentials, options = {}) {
+  // Clones inherit the base provider's refresh path; credentials stay under clone id.
+  const { resolveRuntimeProviderId } = await import("open-sse/providers/clones.js");
+  const refreshProvider = resolveRuntimeProviderId(provider);
   let creds = { ...credentials };
   if (!creds.connectionId && creds.id) {
     creds.connectionId = creds.id;
@@ -230,19 +233,19 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
   const force = options?.force === true;
 
   // ── 1. Regular access-token expiry ────────────────────────────────────────
-  if (force || _shouldRefreshCredentials(provider, creds)) {
+  if (force || _shouldRefreshCredentials(refreshProvider, creds)) {
     const expiresAt = creds.expiresAt ? new Date(creds.expiresAt).getTime() : null;
     const remaining = expiresAt ? expiresAt - Date.now() : null;
-    const refreshLead = _getRefreshLeadMs(provider);
+    const refreshLead = _getRefreshLeadMs(refreshProvider);
 
     log.info("TOKEN_REFRESH", "Refreshing provider credentials proactively", {
-      provider,
+      provider: refreshProvider,
       expiresIn: remaining === null ? null : Math.round(remaining / 1000),
       refreshLeadMs: refreshLead,
       lastRefreshAt: creds.lastRefreshAt || null,
     });
 
-    const newCreds = await _refreshProviderCredentials(provider, creds, log);
+    const newCreds = await _refreshProviderCredentials(refreshProvider, creds, log);
     if (newCreds?.accessToken || newCreds?.apiKey || newCreds?.copilotToken) {
       const mergedCreds = {
         ...newCreds,
@@ -264,12 +267,12 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
       };
 
       // Non-blocking: refresh projectId with the new access token
-      _refreshProjectId(provider, creds.connectionId, creds.accessToken);
+      _refreshProjectId(refreshProvider, creds.connectionId, creds.accessToken);
     }
   }
 
   // ── 2. GitHub Copilot token expiry ────────────────────────────────────────
-  if (provider === "github") {
+  if (refreshProvider === "github") {
     const copilotToken = creds.providerSpecificData?.copilotToken;
     const copilotExpiresAt = creds.providerSpecificData?.copilotTokenExpiresAt
       ? creds.providerSpecificData.copilotTokenExpiresAt * 1000

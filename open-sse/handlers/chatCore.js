@@ -31,6 +31,7 @@ import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { stripRecognizedContextSuffix } from "../services/model.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -61,6 +62,9 @@ export function stripContinuityFields(body) {
 
 export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
   const { provider, model } = modelInfo;
+  // Clones (codex-clone-…) keep credentials under the clone id but use the
+  // base provider for transport, models, capabilities, and special-cases.
+  const runtimeProvider = resolveRuntimeProviderId(provider);
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
   const sessionSeed = (() => {
@@ -78,7 +82,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const bypassResponse = handleBypassRequest(body, model, userAgent, ccFilterNaming);
   if (bypassResponse) return bypassResponse;
 
-  const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
+  const alias = PROVIDER_ID_TO_ALIAS[runtimeProvider] || runtimeProvider;
   const modelTargetFormat = getModelTargetFormat(alias, model);
   // Multi-endpoint providers: pick transport matching sourceFormat → zero translation.
   // Per-model guard: only use the transport when the model declares support for that
@@ -97,7 +101,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // whose wire format has no supported transport (for example MiniMax-M3:
   // OpenAI clients should stay on /chat/completions; other clients can fall
   // back to its declared Claude target).
-  const targetFormat = useTransport?.format || modelTargetFormat || getTargetFormat(provider, credentials);
+  const targetFormat = useTransport?.format || modelTargetFormat || getTargetFormat(runtimeProvider, credentials);
   if (useTransport && credentials) credentials.runtimeTransport = useTransport;
   const stripList = getModelStrip(alias, model);
   const upstreamModel = getModelUpstreamId(alias, model);
@@ -117,13 +121,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
 
   const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
-  const providerRequiresStreaming = PROVIDERS[provider]?.forceStream === true;
+  const providerRequiresStreaming = PROVIDERS[runtimeProvider]?.forceStream === true;
   let stream = providerRequiresStreaming ? true : (body.stream !== false);
 
   // Image generation models require non-streaming (Google v1internal:generateContent)
   const modelType = getModelType(alias, model);
   const isImageGenModel = modelType === "imageGen" || /image|imagen|image-generation/i.test(model);
-  if (isImageGenModel && (provider === "antigravity" || provider === "gemini-cli")) {
+  if (isImageGenModel && (runtimeProvider === "antigravity" || runtimeProvider === "gemini-cli")) {
     stream = false;
   }
 
@@ -150,7 +154,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Native passthrough: CLI tool and provider are the same ecosystem
   // Skip all translation/normalization — only model and Bearer are swapped
   const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
-  const passthrough = isNativePassthrough(clientTool, provider);
+  const passthrough = isNativePassthrough(clientTool, runtimeProvider);
 
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
@@ -165,7 +169,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Auto-strip media blocks the model can't read (vision/audio/pdf) before translation.
   if (!passthrough) {
-    const caps = getCapabilitiesForModel(provider, model);
+    const caps = getCapabilitiesForModel(runtimeProvider, model);
     if (stripUnsupportedModalities(body, sourceFormat, caps)) {
       log?.debug?.("MODALITY", `stripped unsupported media for ${provider}/${model}`);
     }
@@ -182,7 +186,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   if (passthrough) {
     log?.debug?.("PASSTHROUGH", `${clientTool} → ${provider} | native lossless`);
     translatedBody = { ...body, model: stripRecognizedContextSuffix(stripThinkingSuffix(upstreamModel)) };
-    if (provider === "codex") {
+    if (runtimeProvider === "codex") {
       const suffixThinking = {};
       applyThinking(sourceFormat, upstreamModel, suffixThinking, provider);
       if (suffixThinking.reasoning_effort) {
@@ -197,7 +201,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     // Normalize newer Cowork/CC beta shapes (adaptive thinking, mid-conversation system) the API rejects
     if (clientTool === "claude") normalizeClaudePassthrough(translatedBody, translatedBody.model);
   } else {
-    translatedBody = translateRequest(sourceFormat, targetFormat, upstreamModel, body, stream, credentials, provider, reqLogger, stripList, connectionId, clientTool);
+    translatedBody = translateRequest(sourceFormat, targetFormat, upstreamModel, body, stream, credentials, runtimeProvider, reqLogger, stripList, connectionId, clientTool);
     if (!translatedBody) {
       trackPendingRequest(model, provider, connectionId, false, true);
       return createErrorResult(HTTP_STATUS.BAD_REQUEST, `Failed to translate request for ${sourceFormat} → ${targetFormat}`);

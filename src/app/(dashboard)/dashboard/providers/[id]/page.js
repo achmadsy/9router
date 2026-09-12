@@ -7,6 +7,7 @@ import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
+import { resolveRuntimeProviderId, isProviderCloneId } from "open-sse/providers/clones.js";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
@@ -137,26 +138,46 @@ export default function ProviderDetailPage() {
     triggerApiKeyConnection();
   };
 
+  const isCloneNode = providerNode?.type === "provider-clone" || isProviderCloneId(providerId);
+  const cloneBaseId = isCloneNode
+    ? (providerNode?.baseProvider || resolveRuntimeProviderId(providerId))
+    : providerId;
+
   const providerInfo = providerNode
-    ? {
-        id: providerNode.id,
-        name: providerNode.name || (providerNode.type === "anthropic-compatible" ? "Anthropic Compatible" : "OpenAI Compatible"),
-        color: providerNode.type === "anthropic-compatible" ? "#D97757" : "#10A37F",
-        textIcon: providerNode.type === "anthropic-compatible" ? "AC" : "OC",
-        apiType: providerNode.apiType,
-        baseUrl: providerNode.baseUrl,
-        type: providerNode.type,
-      }
+    ? (isCloneNode
+        ? {
+            ...(AI_PROVIDERS[cloneBaseId]
+              || OAUTH_PROVIDERS[cloneBaseId]
+              || APIKEY_PROVIDERS[cloneBaseId]
+              || {}),
+            id: providerNode.id,
+            name: providerNode.name || AI_PROVIDERS[cloneBaseId]?.name || cloneBaseId,
+            alias: providerNode.prefix || AI_PROVIDERS[cloneBaseId]?.alias,
+            type: "provider-clone",
+            baseProvider: cloneBaseId,
+            prefix: providerNode.prefix,
+          }
+        : {
+            id: providerNode.id,
+            name: providerNode.name || (providerNode.type === "anthropic-compatible" ? "Anthropic Compatible" : "OpenAI Compatible"),
+            color: providerNode.type === "anthropic-compatible" ? "#D97757" : "#10A37F",
+            textIcon: providerNode.type === "anthropic-compatible" ? "AC" : "OC",
+            apiType: providerNode.apiType,
+            baseUrl: providerNode.baseUrl,
+            type: providerNode.type,
+          })
     : (OAUTH_PROVIDERS[providerId] || APIKEY_PROVIDERS[providerId] || FREE_PROVIDERS[providerId] || FREE_TIER_PROVIDERS[providerId] || WEB_COOKIE_PROVIDERS[providerId]);
   const authModes = providerInfo?.authModes || [];
-  const isOAuth = !!OAUTH_PROVIDERS[providerId] || !!FREE_PROVIDERS[providerId] || authModes.includes("oauth");
-  const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
-  const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
-  const staticModels = getModelsByProviderId(providerId);
-  const models = providerId === "cursor" && liveModels.length > 0
+  const isOAuth = !!OAUTH_PROVIDERS[cloneBaseId] || !!FREE_PROVIDERS[cloneBaseId] || authModes.includes("oauth");
+  const supportsApiKeyAuth = !!APIKEY_PROVIDERS[cloneBaseId] || authModes.includes("apikey") || isCloneNode;
+  const isFreeNoAuth = !!FREE_PROVIDERS[cloneBaseId]?.noAuth;
+  const staticModels = getModelsByProviderId(isCloneNode ? cloneBaseId : providerId);
+  const models = cloneBaseId === "cursor" && liveModels.length > 0
     ? liveModels
     : staticModels;
-  const providerAlias = getProviderAlias(providerId);
+  const providerAlias = isCloneNode
+    ? (providerNode?.prefix || getProviderAlias(cloneBaseId))
+    : getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
@@ -175,10 +196,11 @@ export default function ProviderDetailPage() {
   // Resolve suffix "(level)" for a model when a thinking level is picked and the model supports it.
   const resolveThinkingSuffix = (modelId) => {
     if (!thinkingMode || thinkingMode === "auto") return null;
-    const levels = getThinkingLevels(providerId, modelId);
+    const levels = getThinkingLevels(isCloneNode ? cloneBaseId : providerId, modelId);
     return levels && levels.includes(thinkingMode) ? thinkingMode : null;
   };
-  const providerStorageAlias = isCompatible ? providerId : providerAlias;
+  // Clones store disabled models under their own prefix so the source stays intact.
+  const providerStorageAlias = isCompatible ? providerId : (isCloneNode ? providerId : providerAlias);
   // Union of levels across this provider's reasoning models — drives the level picker options.
   // Include custom models too (e.g. manually added gpt-5.6-sol → max).
   const providerThinkingLevels = (() => {
@@ -187,7 +209,7 @@ export default function ProviderDetailPage() {
     const addLevels = (modelId) => {
       if (!modelId || seen.has(modelId)) return;
       seen.add(modelId);
-      const lv = getThinkingLevels(providerId, modelId);
+      const lv = getThinkingLevels(isCloneNode ? cloneBaseId : providerId, modelId);
       if (lv) lv.forEach((l) => { if (l !== "none") set.add(l); });
     };
     for (const m of models) addLevels(m.id);
@@ -1796,7 +1818,8 @@ export default function ProviderDetailPage() {
       ) : (
         <OAuthModal
           isOpen={showOAuthModal}
-          provider={providerId}
+          provider={isCloneNode ? cloneBaseId : providerId}
+          targetProviderId={isCloneNode ? providerId : undefined}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}

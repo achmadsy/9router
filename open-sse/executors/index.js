@@ -27,6 +27,7 @@ import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
 import ZcodeExecutor from "./zcode.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -67,13 +68,15 @@ const executors = {
 const defaultCache = new Map();
 
 export function getExecutor(provider) {
-  if (executors[provider]) return executors[provider];
-  if (!defaultCache.has(provider)) defaultCache.set(provider, new DefaultExecutor(provider));
+  // Clones (codex-clone-…) reuse the base provider's specialized executor.
+  const runtimeProvider = resolveRuntimeProviderId(provider);
+  if (executors[runtimeProvider]) return executors[runtimeProvider];
+  if (!defaultCache.has(provider)) defaultCache.set(provider, new DefaultExecutor(runtimeProvider));
   return defaultCache.get(provider);
 }
 
 export function hasSpecializedExecutor(provider) {
-  return !!executors[provider];
+  return !!executors[resolveRuntimeProviderId(provider)];
 }
 
 export { BaseExecutor } from "./base.js";

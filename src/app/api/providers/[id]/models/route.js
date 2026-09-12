@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import { GEMINI_CONFIG } from "@/lib/oauth/constants/oauth";
 import { refreshGoogleToken, refreshCodexToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
@@ -554,8 +555,20 @@ export async function GET(request, { params }) {
       });
     }
 
-    const config = PROVIDER_MODELS_CONFIG[connection.provider];
+    // Clones (codex-clone-…) inherit the base provider's models endpoint/config.
+    const runtimeProvider = resolveRuntimeProviderId(connection.provider);
+    const config = PROVIDER_MODELS_CONFIG[runtimeProvider];
     if (!config) {
+      // Fallback: static registry models for the base provider (API-key clones, etc.)
+      const staticModels = getStaticProviderModels(runtimeProvider);
+      if (staticModels.length > 0) {
+        return NextResponse.json({
+          provider: connection.provider,
+          connectionId: connection.id,
+          models: staticModels,
+          static: true,
+        });
+      }
       return NextResponse.json(
         { error: `Provider ${connection.provider} does not support models listing` },
         { status: 400 }

@@ -35,7 +35,13 @@ const PASTE_TOKEN_PROVIDERS = {
  * - Localhost: Auto callback via popup message
  * - Remote: Manual paste callback URL
  */
-export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig }) {
+export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig, targetProviderId }) {
+  // Clone connections: OAuth runs as `provider` but is saved under targetProviderId (?as=)
+  const withAs = useCallback((url) => {
+    if (!targetProviderId || targetProviderId === provider) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}as=${encodeURIComponent(targetProviderId)}`;
+  }, [provider, targetProviderId]);
   const [step, setStep] = useState("waiting"); // waiting | input | success | error
   const [authData, setAuthData] = useState(null);
   const [callbackUrl, setCallbackUrl] = useState("");
@@ -76,7 +82,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const exchangeTokens = useCallback(async (code, state) => {
     if (!authData) return;
     try {
-      const res = await fetch(`/api/oauth/${provider}/exchange`, {
+      const res = await fetch(withAs(`/api/oauth/${provider}/exchange`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -97,12 +103,12 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setError(err.message);
       setStep("error");
     }
-  }, [authData, provider, onSuccess, oauthMeta]);
+  }, [authData, provider, onSuccess, oauthMeta, withAs]);
 
   const completeXaiManualCode = useCallback(async (code) => {
     if (!authData?.state) return;
     try {
-      const res = await fetch("/api/oauth/xai/manual-code", {
+      const res = await fetch(withAs("/api/oauth/xai/manual-code"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, state: authData.state }),
@@ -116,7 +122,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setError(err.message);
       setStep("error");
     }
-  }, [authData, onSuccess]);
+  }, [authData, onSuccess, withAs]);
 
   // ZCode uses official CLI polling, but only after explicit user action.
   const completeZcodeLogin = useCallback(async () => {
@@ -124,7 +130,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     setPolling(true);
     setError(null);
     try {
-      const res = await fetch("/api/oauth/zcode/poll", {
+      const res = await fetch(withAs("/api/oauth/zcode/poll"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ deviceCode: authData.flowId }),
@@ -147,7 +153,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     } finally {
       setPolling(false);
     }
-  }, [authData, onSuccess]);
+  }, [authData, onSuccess, withAs]);
 
   // Poll for device code token
   const startPolling = useCallback(async (deviceCode, codeVerifier, interval, extraData, deadlineMs) => {
@@ -177,7 +183,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       try {
-        const res = await fetch(`/api/oauth/${provider}/poll`, {
+        const res = await fetch(withAs(`/api/oauth/${provider}/poll`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ deviceCode, codeVerifier, extraData }),
@@ -211,12 +217,12 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     setError("Authorization timeout");
     setStep("error");
     setPolling(false);
-  }, [provider, onSuccess]);
+  }, [provider, onSuccess, withAs]);
 
   // Trae/Windsurf proxy OAuth flow: dynamic-port local callback → auto exchange.
   const startProxyFlow = useCallback(async (providerId) => {
     // 1. Start the local callback server (returns a dynamic port + callback URL).
-    const startRes = await fetch(`/api/oauth/${providerId}/start-proxy`);
+    const startRes = await fetch(withAs(`/api/oauth/${providerId}/start-proxy`));
     const startData = await startRes.json();
     if (!startRes.ok || !startData.success || !startData.callbackUrl) {
       throw new Error(startData.reason || startData.error || `Failed to start ${providerId} callback server`);
@@ -232,7 +238,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     //    sent via POST body so the private key never lands in URL/query logs.
     const regBody = { state: authData.state };
     if (authData.codeVerifier) regBody.codeVerifier = authData.codeVerifier;
-    await fetch(`/api/oauth/${providerId}/register-session`, {
+    await fetch(withAs(`/api/oauth/${providerId}/register-session`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(regBody),
@@ -242,7 +248,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     setStep("waiting");
     popupRef.current = window.open(authData.authUrl, "oauth_popup", "width=600,height=700");
     if (!popupRef.current) setStep("input"); // popup blocked → fall back to manual paste
-  }, []);
+  }, [withAs]);
 
   // Start OAuth flow
   const startOAuthFlow = useCallback(async () => {
@@ -500,7 +506,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       if (cancelled || callbackProcessedRef.current) return;
       attempts += 1;
       try {
-          const res = await fetch(`/api/oauth/${pollProvider}/poll-status?state=${encodeURIComponent(authData.state)}`);
+          const res = await fetch(withAs(`/api/oauth/${pollProvider}/poll-status?state=${encodeURIComponent(authData.state)}`));
         const data = await res.json();
         if (cancelled || callbackProcessedRef.current) return;
         if (data.status === "done") {
@@ -528,7 +534,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     };
     setTimeout(tick, POLL_INTERVAL_MS);
     return () => { cancelled = true; };
-  }, [authData, onSuccess]);
+  }, [authData, onSuccess, withAs]);
 
   // Listen for OAuth callback via multiple methods
   useEffect(() => {
@@ -620,7 +626,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       if (authMode === "paste-token" && PASTE_TOKEN_PROVIDERS[provider]) {
         const token = pasteToken.trim();
         if (!token) throw new Error("Missing token");
-        const res = await fetch(`/api/oauth/${provider}/exchange`, {
+        const res = await fetch(withAs(`/api/oauth/${provider}/exchange`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code: token }),
@@ -636,7 +642,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       // Trae/Windsurf proxy flow fallback (popup blocked): paste the full callback URL
       if (PROXY_OAUTH_PROVIDERS.has(provider) && input) {
-        const res = await fetch(`/api/oauth/${provider}/exchange`, {
+        const res = await fetch(withAs(`/api/oauth/${provider}/exchange`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code: input, state: authData?.state }),
@@ -995,4 +1001,6 @@ OAuthModal.propTypes = {
     startUrl: PropTypes.string,
     region: PropTypes.string,
   }),
+  /** When set, OAuth still runs as `provider` but the connection is saved under this id (clones). */
+  targetProviderId: PropTypes.string,
 };

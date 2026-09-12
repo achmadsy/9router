@@ -25,7 +25,9 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
 import AddCompatibleModal from "./components/AddCompatibleModal";
+import AddDuplicateModal from "./components/AddDuplicateModal";
 import { STATUS_FILTER_OPTIONS, matchesStatusFilter } from "./utils";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 function getStatusDisplay(connected, error, errorCode) {
   const parts = [];
@@ -104,6 +106,7 @@ export default function ProvidersPage() {
   const [showAddCompatibleModal, setShowAddCompatibleModal] = useState(false);
   const [showAddAnthropicCompatibleModal, setShowAddAnthropicCompatibleModal] =
     useState(false);
+  const [showAddDuplicateModal, setShowAddDuplicateModal] = useState(false);
   const [testingMode, setTestingMode] = useState(null);
   const [testResults, setTestResults] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -288,6 +291,26 @@ export default function ProvidersPage() {
       (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
     );
 
+  // Duplicates of registry providers — own prefix + isolated credential pool
+  const cloneProviders = providerNodes
+    .filter((node) => node.type === "provider-clone")
+    .map((node) => {
+      const baseId = node.baseProvider || resolveRuntimeProviderId(node.id);
+      const baseInfo = AI_PROVIDERS[baseId] || OAUTH_PROVIDERS[baseId] || APIKEY_PROVIDERS[baseId];
+      return {
+        id: node.id,
+        name: node.name || baseInfo?.name || baseId,
+        color: baseInfo?.color || "#6366F1",
+        textIcon: baseInfo?.alias?.slice(0, 2).toUpperCase() || "CL",
+        prefix: node.prefix,
+        baseProvider: baseId,
+        icon: baseInfo?.icon,
+      };
+    })
+    .filter(
+      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
+    );
+
   // Dual-auth providers (oauth + apikey) store API keys as authType "apikey"
   // (and sometimes "api_key"). Card stats must count both so totals match detail.
   // kiro has no authModes in registry but accepts both (headless uses "api_key").
@@ -382,7 +405,8 @@ export default function ProvidersPage() {
     freeTierEntries.length > 0 ||
     apikeyEntries.length > 0 ||
     compatibleProviders.length > 0 ||
-    anthropicCompatibleProviders.length > 0;
+    anthropicCompatibleProviders.length > 0 ||
+    cloneProviders.length > 0;
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
@@ -436,6 +460,15 @@ export default function ProvidersPage() {
             >
               Add OpenAI Compatible
             </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="content_copy"
+              onClick={() => setShowAddDuplicateModal(true)}
+              className="w-full sm:w-auto"
+            >
+              Add Duplicate
+            </Button>
           </div>
         </div>
         {compatibleProviders.length === 0 &&
@@ -463,6 +496,27 @@ export default function ProvidersPage() {
           </div>
         )}
       </div>
+
+      {/* Duplicates — isolated credential pools + custom model prefixes */}
+      {cloneProviders.length > 0 && (
+        <div className="flex flex-col gap-4">
+          <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 leading-tight">
+            Duplicates
+          </h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+            {cloneProviders.map((info) => (
+              <ApiKeyProviderCard
+                key={info.id}
+                providerId={info.id}
+                provider={info}
+                stats={getProviderStats(info.id, "apikey")}
+                authType="apikey"
+                onToggle={(active) => handleToggleProvider(info.id, "apikey", active)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* OAuth Providers */}
       {oauthEntries.length > 0 && (
@@ -659,6 +713,15 @@ export default function ProvidersPage() {
         onCreated={(node) => {
           setProviderNodes((prev) => [...prev, node]);
           setShowAddAnthropicCompatibleModal(false);
+        }}
+      />
+      <AddDuplicateModal
+        isOpen={showAddDuplicateModal}
+        onClose={() => setShowAddDuplicateModal(false)}
+        providerNodes={providerNodes}
+        onCreated={(node) => {
+          setProviderNodes((prev) => [...prev, node]);
+          setShowAddDuplicateModal(false);
         }}
       />
 

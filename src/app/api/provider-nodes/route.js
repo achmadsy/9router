@@ -1,9 +1,25 @@
 import { NextResponse } from "next/server";
-import { createProviderNode, getProviderNodes } from "@/models";
-import { OPENAI_COMPATIBLE_PREFIX, ANTHROPIC_COMPATIBLE_PREFIX, CUSTOM_EMBEDDING_PREFIX } from "@/shared/constants/providers";
+import { createProviderNode, getProviderNodes, getProviderConnections } from "@/models";
+import {
+  OPENAI_COMPATIBLE_PREFIX,
+  ANTHROPIC_COMPATIBLE_PREFIX,
+  CUSTOM_EMBEDDING_PREFIX,
+  AI_PROVIDERS,
+  ALIAS_TO_ID,
+} from "@/shared/constants/providers";
 import { generateId } from "@/shared/utils";
+import { makeProviderCloneId } from "open-sse/providers/clones.js";
 
 export const dynamic = "force-dynamic";
+
+async function isNameTaken(name) {
+  const nameNorm = String(name || "").trim().toLowerCase();
+  if (!nameNorm) return false;
+  const [nodes, connections] = await Promise.all([getProviderNodes(), getProviderConnections()]);
+  return nodes.some((n) => (n.name || "").trim().toLowerCase() === nameNorm)
+    || connections.some((c) => (c.name || "").trim().toLowerCase() === nameNorm)
+    || Object.values(AI_PROVIDERS).some((p) => (p.name || "").trim().toLowerCase() === nameNorm);
+}
 
 const OPENAI_COMPATIBLE_DEFAULTS = {
   baseUrl: "https://api.openai.com/v1",
@@ -44,6 +60,38 @@ export async function POST(request) {
 
     // Determine type
     const nodeType = type || "openai-compatible";
+
+    // Duplicate of a registry provider (OAuth/API-key): isolated credential pool
+    // under a new name + model prefix. Does NOT copy credentials.
+    if (nodeType === "provider-clone") {
+      const baseProvider = String(body.baseProvider || "").trim();
+      if (!baseProvider || !AI_PROVIDERS[baseProvider]) {
+        return NextResponse.json({ error: "Base provider not found" }, { status: 400 });
+      }
+
+      if (await isNameTaken(name)) {
+        return NextResponse.json({ error: "Name already in use" }, { status: 400 });
+      }
+
+      const prefixTrimmed = prefix.trim();
+      if (ALIAS_TO_ID[prefixTrimmed] || AI_PROVIDERS[prefixTrimmed]) {
+        return NextResponse.json({ error: "Prefix already in use by a built-in provider" }, { status: 400 });
+      }
+      const nodes = await getProviderNodes();
+      const prefixTaken = nodes.some((n) => (n.prefix || "").trim() === prefixTrimmed);
+      if (prefixTaken) {
+        return NextResponse.json({ error: "Prefix already in use" }, { status: 400 });
+      }
+
+      const node = await createProviderNode({
+        id: makeProviderCloneId(baseProvider),
+        type: "provider-clone",
+        name: name.trim(),
+        prefix: prefixTrimmed,
+        baseProvider,
+      });
+      return NextResponse.json({ node }, { status: 201 });
+    }
 
     if (nodeType === "openai-compatible") {
       if (!apiType || !["chat", "responses"].includes(apiType)) {

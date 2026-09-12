@@ -62,6 +62,8 @@ export async function createProviderNode(data) {
     prefix: data.prefix,
     apiType: data.apiType,
     baseUrl: data.baseUrl,
+    // provider-clone only: registry provider this clone inherits transport/models from
+    ...(data.baseProvider ? { baseProvider: data.baseProvider } : {}),
     createdAt: now,
     updatedAt: now,
   };

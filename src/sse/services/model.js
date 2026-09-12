@@ -42,6 +42,13 @@ export async function getModelInfo(modelStr) {
     // Provider-node prefixes are user-defined. They must not override built-in
     // provider ids/aliases such as `cf`, `cloudflare-ai`, `openai`, or `hf`.
     if (!RESERVED_PROVIDER_PREFIXES.has(parsed.providerAlias)) {
+      // Duplicates of registry providers (own prefix + isolated credential pool)
+      const cloneNodes = await getProviderNodes({ type: "provider-clone" });
+      const matchedClone = cloneNodes.find((node) => node.prefix === parsed.providerAlias);
+      if (matchedClone) {
+        return { provider: matchedClone.id, model: parsed.model };
+      }
+
       const openaiNodes = await getProviderNodes({ type: "openai-compatible" });
       const matchedOpenAI = openaiNodes.find((node) => node.prefix === parsed.providerAlias);
       if (matchedOpenAI) {

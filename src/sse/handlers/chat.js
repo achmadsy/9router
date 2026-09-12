@@ -25,6 +25,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 /**
  * Handle chat completion request
@@ -256,7 +257,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
 
     // Ensure real project ID is available for providers that need it (P0 fix: cold miss)
-    if ((provider === "antigravity" || provider === "gemini-cli") && !refreshedCredentials.projectId) {
+    const runtimeProvider = resolveRuntimeProviderId(provider);
+    if ((runtimeProvider === "antigravity" || runtimeProvider === "gemini-cli") && !refreshedCredentials.projectId) {
       const pid = await getProjectIdForConnection(credentials.connectionId, refreshedCredentials.accessToken, provider);
       if (pid) {
         refreshedCredentials.projectId = pid;
