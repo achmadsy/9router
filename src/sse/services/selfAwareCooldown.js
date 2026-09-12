@@ -12,6 +12,7 @@
 import { MAX_SELF_AWARE_COOLDOWN_MS, isQuotaLikeStatus } from "open-sse/utils/retryAfter.js";
 import { checkFallbackError, buildModelLockUpdate } from "open-sse/services/accountFallback.js";
 import { resolveProviderId } from "@/shared/constants/providers.js";
+import { isProviderCloneId, resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import * as log from "../utils/logger.js";
 
 const REASON_MAX = 200;
@@ -176,7 +177,15 @@ export function resolveSelfAwareDecision(input = {}) {
 export async function getSelfAwarePolicyMs(provider, model) {
   try {
     const r = await repo();
-    const row = await r.getSelfAwarePolicy(provider, model);
+    let row = await r.getSelfAwarePolicy(provider, model);
+    // Duplicates (codex-clone-…): inherit the base provider policy when no
+    // clone-specific row exists. Blank-model fallback is already in the repo.
+    if (!row && isProviderCloneId(provider)) {
+      const base = resolveRuntimeProviderId(provider);
+      if (base && base !== provider) {
+        row = await r.getSelfAwarePolicy(base, model);
+      }
+    }
     if (!row) return null;
     const ms = Number(row.timeoutMs);
     return Number.isFinite(ms) && ms > 0 ? ms : null;

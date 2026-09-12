@@ -158,6 +158,36 @@ describe("markAccountUnavailable — modelLock + sidecar", () => {
     expect(expiry).toBeLessThanOrEqual(Date.now() + 91_000);
   });
 
+  it("clone provider inherits base manual policy when no clone-specific row", async () => {
+    dbMock.__setConnections([{
+      id: "conn-clone", provider: "codex-clone-abc", displayName: "Codex Dup",
+      backoffLevel: 0, isActive: true,
+    }]);
+    repoMock.getSelfAwarePolicy.mockImplementation(async (provider, model) => {
+      if (provider === "codex" && model === "gpt-5") {
+        return {
+          id: "pol-base", provider: "codex", model: "gpt-5",
+          timeoutMs: 90_000, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        };
+      }
+      return null;
+    });
+    const result = await auth.markAccountUnavailable({
+      credentials: { id: "conn-clone", connectionId: "conn-clone", provider: "codex-clone-abc" },
+      status: 429, errorText: "rate limit exceeded",
+      provider: "codex-clone-abc", model: "gpt-5",
+    });
+    expect(repoMock.getSelfAwarePolicy).toHaveBeenCalledWith("codex-clone-abc", "gpt-5");
+    expect(repoMock.getSelfAwarePolicy).toHaveBeenCalledWith("codex", "gpt-5");
+    expect(result.shouldFallback).toBe(true);
+    const sidecar = [...repoMock.__store.values()][0];
+    expect(sidecar.provider).toBe("codex-clone-abc");
+    expect(sidecar.source).toBe("manual-policy");
+    expect(sidecar.scopeId).toBe("conn-clone");
+    const conn = (await dbMock.getProviderConnections({ provider: "codex-clone-abc" }))[0];
+    expect(conn["modelLock_gpt-5"]).toBeTruthy();
+  });
+
   it("sidecar write failure leaves lock authoritative", async () => {
     repoMock.__setFailWrites(true);
     const result = await auth.markAccountUnavailable({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import CooldownTimer from "@/shared/components/CooldownTimer";
 
@@ -53,6 +53,9 @@ export default function SelfAwarePage() {
   const [polError, setPolError] = useState(null);
   const [form, setForm] = useState({ provider: "", model: "", value: "60", unit: "s" });
   const [formMsg, setFormMsg] = useState(null);
+
+  // Provider clones (duplicates) + custom nodes for labels + policy dropdown
+  const [providerNodes, setProviderNodes] = useState([]);
 
   // Session cookie auth — dashboardGuard middleware validates the cookie;
   // same plain-fetch pattern as the rest of the dashboard pages.
@@ -120,6 +123,20 @@ export default function SelfAwarePage() {
     run();
     return () => { cancelled = true; };
   }, [tab]);
+
+  // Load provider nodes once for clone/custom labels + policy options
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/provider-nodes", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setProviderNodes(data.nodes || []);
+      } catch { /* labels fall back to raw id */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Poll every 5s while visible; pause when hidden, refresh on visible
   useEffect(() => {
@@ -235,7 +252,45 @@ export default function SelfAwarePage() {
     }
   };
 
-  const providerLabel = (id) => AI_PROVIDERS[id]?.displayName || id;
+  // Registry uses display.name; clones/custom nodes use node.name.
+  // Same label source as the Add Duplicate modal (info.name || id).
+  const nodeById = useMemo(
+    () => new Map((providerNodes || []).map((n) => [n.id, n])),
+    [providerNodes],
+  );
+  const providerLabel = (id) => {
+    if (!id) return "—";
+    const node = nodeById.get(id);
+    if (node?.name) return node.name;
+    const p = AI_PROVIDERS[id];
+    return p?.displayName || p?.name || id;
+  };
+
+  const providerOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    for (const [id, p] of Object.entries(AI_PROVIDERS)) {
+      if (p?.hidden) continue;
+      seen.add(id);
+      options.push({
+        value: id,
+        label: p?.displayName || p?.name || id,
+        kind: "registry",
+      });
+    }
+    for (const node of providerNodes || []) {
+      if (!node?.id || seen.has(node.id)) continue;
+      seen.add(node.id);
+      const label = node.name || node.id;
+      options.push({
+        value: node.id,
+        label: node.type === "provider-clone" ? `${label} (duplicate)` : label,
+        kind: node.type || "custom",
+      });
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  }, [providerNodes]);
+
   const activeCount = cooldowns.filter((c) => (c.expiresAtMs || new Date(c.expiresAt).getTime()) > now).length;
 
   return (
@@ -385,8 +440,8 @@ export default function SelfAwarePage() {
                 className="mt-1 block w-44 bg-black/30 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
               >
                 <option value="">Select provider…</option>
-                {Object.entries(AI_PROVIDERS).map(([id, p]) => (
-                  <option key={id} value={id}>{p.displayName || id}</option>
+                {providerOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
             </label>
