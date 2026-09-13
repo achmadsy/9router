@@ -23,8 +23,11 @@ export function matchesIssueKeyword(input) {
 // Expected multi-account cascade: rate-limit locks, combo fallback, account rotation.
 // Operational state (routing working as designed), not bugs — keep out of Sentry.
 // Real failures (5xx, stream stalls, unexpected crashes) still report.
+// Also covers auth.js's raw console.error lock line:
+//   "❌ codex [429]: [429]: The usage limit has been reached"
+// (status is bracketed, so the bare `429` alternative never matches).
 const SENTRY_IGNORED_RE =
-  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|(?:^|\s)429.*usage limit/i;
+  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|❌\s*\S+\s*\[429\]|(?:^|[\s\[])429[\]:\s].*usage limit/i;
 
 export function isSentryIgnoredMessage(input) {
   if (!input) return false;

@@ -236,6 +236,39 @@ describe("Sentry reporting gaps & issue detection", () => {
 
       expect(captureSpy).not.toHaveBeenCalled();
     });
+
+    it("suppresses auth.js provider 429 usage-limit lock lines from Sentry", () => {
+      // auth.js: console.error(`❌ ${provider} [${status}]: ${reason}`)
+      const line = "❌ codex [429]: [429]: The usage limit has been reached";
+      expect(sentryLib.isSentryIgnoredMessage(line)).toBe(true);
+
+      const captureSpy = vi.spyOn(sentryLib, "captureMessage").mockImplementation(() => {});
+      vi.spyOn(sentryLib, "isSentryReady").mockReturnValue(true);
+
+      initConsoleLogCapture();
+      console.error(line);
+
+      expect(captureSpy).not.toHaveBeenCalled();
+    });
+
+    it("still forwards real 5xx console.error lines to Sentry", () => {
+      expect(sentryLib.isSentryIgnoredMessage("ERROR 502 · codex/gpt-5.1 · 100ms\n    upstream bad gateway")).toBe(false);
+    });
+  });
+
+  describe("isSentryIgnoredMessage cascade noise", () => {
+    it("ignores expected multi-account cascade lines", () => {
+      const ignored = [
+        "❌ codex [429]: [429]: The usage limit has been reached",
+        "[AUTH] connection-abc locked modelLock_gpt-5.1 for 60s [429] src=self-aware",
+        "[CHAT] [codex/gpt-5.1] failed, trying next account",
+        "[429]: The usage limit has been reached",
+        "[3:14:22 PM] 🟢 ✗ ERROR 429 · codex/gpt-5.1 · 100ms\n    [429]: The usage limit has been reached",
+      ];
+      for (const sample of ignored) {
+        expect(sentryLib.isSentryIgnoredMessage(sample), sample).toBe(true);
+      }
+    });
   });
 
   describe("OAuth Refresh Error Classification", () => {
