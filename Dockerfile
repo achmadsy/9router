@@ -69,9 +69,10 @@ COPY --from=builder /app/node_modules/socks-proxy-agent ./node_modules/socks-pro
 RUN mkdir -p /app/data /app/data-home && \
   chown node:node /app/data /app/data-home && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true && \
-  # cloakbrowser downloads Chromium into $HOME/.cloakbrowser at first launch
-  mkdir -p /home/node/.cloakbrowser && chown -R node:node /home/node && \
-  chmod 755 /home/node /home/node/.cloakbrowser
+  # Pre-create writable config parent before nested read-only desktop-profile mounts.
+  # cloakbrowser downloads Chromium into $HOME/.cloakbrowser at first launch.
+  mkdir -p /home/node/.config /home/node/.cloakbrowser && chown -R node:node /home/node && \
+  chmod 755 /home/node /home/node/.config /home/node/.cloakbrowser
 
 # gosu: drop to node user after fixing volume perms (handles mounted volumes)
 # Chromium runtime deps for cloakbrowser (captcha). Covers headless + headed fallback.
