@@ -75,31 +75,22 @@ export async function launch(opts = {}) {
     fs.mkdirSync(USER_DATA_DIR, { recursive: true });
   } catch {}
 
-  // Docker-safe Chromium 146 flags (SIGTRAP otherwise). Prefer --headless=new.
   const args = [
     "--no-sandbox",
     "--no-first-run",
     "--disable-default-apps",
-    "--disable-dev-shm-usage",
     "--disable-gpu",
-    "--disable-gpu-sandbox",
-    "--disable-software-rasterizer",
     "--disable-crash-reporter",
-    "--mute-audio",
+    "--disable-dev-shm-usage",
+    "--disable-software-rasterizer",
+    // Chromium 146 in Docker often SIGTRAPs without this
     "--no-zygote",
-    "--window-size=1280,800",
-    "--disable-blink-features=AutomationControlled",
   ];
-  if (headless) {
-    args.push("--headless=new");
-  }
 
   browserContext = await launchPersistentContext({
     headless,
     userDataDir: USER_DATA_DIR,
     args,
-    // cloakbrowser 0.5.x stealth fingerprint flags crash Chromium 146 in bookworm Docker
-    stealthArgs: false,
     // cloakbrowser accepts http(s)/socks5 URL; credentials auto-extracted
     ...(proxy ? { proxy } : {}),
   });

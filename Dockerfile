@@ -41,9 +41,6 @@ ENV PORT=20128
 ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATA_DIR=/app/data
-# Prefer distro Chromium for captcha; cloakbrowser's downloaded 146 SIGTRAPs in bookworm Docker.
-ENV CLOAKBROWSER_BINARY_PATH=/usr/bin/chromium
-ENV CLOAKBROWSER_SUPPRESS_FONT_WARNING=1
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/static ./.next/static
@@ -81,7 +78,6 @@ RUN mkdir -p /app/data /app/data-home && \
 RUN apt-get update && apt-get install -y \
     gosu \
     ca-certificates \
-    chromium \
     dbus \
     fonts-liberation \
     fonts-dejavu-core \
