@@ -26,7 +26,7 @@ import ZedExecutor from "./zed.js";
 import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
-import ZcodeExecutor from "./zcode.js";
+import { GlmExecutor } from "./glm.js";
 import { resolveRuntimeProviderId } from "../providers/clones.js";
 
 const executors = {
@@ -62,7 +62,7 @@ const executors = {
   zed: new ZedExecutor(),
   windsurf: new WindsurfExecutor(),
   "devin-cli": new DevinCliExecutor(),
-  zcode: new ZcodeExecutor(),
+  glm: new GlmExecutor(),
 };
 
 const defaultCache = new Map();
@@ -108,3 +108,4 @@ export { default as TraeExecutor } from "./trae.js";
 export { default as ZedExecutor } from "./zed.js";
 export { default as WindsurfExecutor } from "./windsurf.js";
 export { DevinCliExecutor } from "./devin-cli.js";
+export { GlmExecutor } from "./glm.js";

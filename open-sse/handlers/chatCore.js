@@ -95,14 +95,33 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // sourceFormat-matched transport if that format is declared (opencode-go models
   // differ — kimi/glm only do /chat/completions). Undeclared models keep the
   // upstream default (use the transport), preserving behavior for glm/deepseek/...
-  const useTransport = (!modelSupportedFormats || modelSupportedFormats.includes(sourceFormat)) ? runtimeTransport : null;
+  let useTransport = (!modelSupportedFormats || modelSupportedFormats.includes(sourceFormat)) ? runtimeTransport : null;
+  // GLM Start Plan (glm-5.3*) JWT only speaks Anthropic Messages on zcode-plan.
+  // Force claude translation so OpenAI clients are converted; never point
+  // runtimeTransport at api.z.ai (Coding Plan) — that package lacks glm-5.3*.
+  const glmHasJwt = !!(
+    runtimeProvider === "glm" &&
+    (credentials?.providerSpecificData?.zcodeJwtToken || credentials?.accessToken)
+  );
+  const glmStartPlan =
+    glmHasJwt &&
+    (["glm-5.3", "glm-5.3-flash"].some((m) => {
+      const id = String(model || "");
+      return id === m || id.endsWith(`/${m}`);
+    }));
+  if (glmStartPlan || (runtimeProvider === "glm" && credentials?.providerSpecificData?.useCodingPlan && glmHasJwt)) {
+    useTransport = resolveTransport(runtimeProvider, "claude") || useTransport;
+  }
   // A source-format-matched endpoint keeps the request lossless. Prefer it
   // over a model-level targetFormat, which is only the fallback for clients
   // whose wire format has no supported transport (for example MiniMax-M3:
   // OpenAI clients should stay on /chat/completions; other clients can fall
   // back to its declared Claude target).
   const targetFormat = useTransport?.format || modelTargetFormat || getTargetFormat(runtimeProvider, credentials);
-  if (useTransport && credentials) credentials.runtimeTransport = useTransport;
+  if (useTransport && credentials) {
+    // Start Plan executor owns the URL; do not stamp Coding Plan base onto credentials.
+    credentials.runtimeTransport = glmStartPlan ? null : useTransport;
+  }
   const stripList = getModelStrip(alias, model);
   const upstreamModel = getModelUpstreamId(alias, model);
 
@@ -347,6 +366,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     connectionProxyUrl: credentials?.providerSpecificData?.connectionProxyUrl || "",
     connectionNoProxy: credentials?.providerSpecificData?.connectionNoProxy || "",
     vercelRelayUrl: credentials?.providerSpecificData?.vercelRelayUrl || "",
+    strictProxy: credentials?.providerSpecificData?.strictProxy === true,
   };
 
   if (proxyOptions.vercelRelayUrl) {

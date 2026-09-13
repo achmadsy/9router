@@ -142,7 +142,7 @@ describe("extractOriginFromStack — caller file/line for Sentry tags", () => {
   const arrowStack = [
     "Error: captcha",
     "    at Object.execute (/x/node_modules/@sentry/node/build/cjs/xyz.js:5:1)",
-    "    at execute (/home/ubuntu/9router-fork/open-sse/executors/zcode.js:151:7)",
+    "    at execute (/home/ubuntu/9router-fork/open-sse/executors/glm.js:151:7)",
   ].join("\n");
 
   it("skips wrapper frames (sentry.js, logger.js) and returns first app frame", () => {
@@ -156,7 +156,7 @@ describe("extractOriginFromStack — caller file/line for Sentry tags", () => {
       line: 120,
     });
     expect(extractOriginFromStack(arrowStack)).toEqual({
-      file: "open-sse/executors/zcode.js",
+      file: "open-sse/executors/glm.js",
       line: 151,
     });
   });
@@ -184,10 +184,10 @@ describe("extractOriginFromStack — caller file/line for Sentry tags", () => {
     const esmStack = [
       "Error: upstream",
       "    at apply (file:///x/node_modules/@sentry/node/build/esm/utils.js:9:2)",
-      "    at parseError (/home/ubuntu/9router-fork/open-sse/executors/zcode.js:151:7)",
+      "    at parseError (/home/ubuntu/9router-fork/open-sse/executors/glm.js:151:7)",
     ].join("\n");
     expect(extractOriginFromStack(esmStack)).toEqual({
-      file: "open-sse/executors/zcode.js",
+      file: "open-sse/executors/glm.js",
       line: 151,
     });
   });

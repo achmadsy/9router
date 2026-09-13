@@ -298,7 +298,6 @@ export async function GET(request, { params }) {
         "codebuddy-intl",
         "qoder",
         "grok-cli",
-        "zcode",
       ];
       let deviceData;
       if (noPkceDeviceProviders.includes(provider)) {
@@ -504,8 +503,8 @@ export async function POST(request, { params }) {
       }
 
       // Some providers exchange a server-tracked callback without PKCE/client redirect fields.
-      const noPkceExchangeProviders = ["cline", "clinepass", "kimchi", "zcode"];
-      const requiresRedirectUri = provider !== "zcode";
+      const noPkceExchangeProviders = ["cline", "clinepass", "kimchi"];
+      const requiresRedirectUri = true;
       if (
         !code ||
         (requiresRedirectUri && !redirectUri) ||
@@ -547,7 +546,7 @@ export async function POST(request, { params }) {
       }
 
       // Providers that don't use PKCE for device code
-      const noPkceProviders = ["github", "kimi", "kimi-coding", "kilocode", "codebuddy-cn", "codebuddy-intl", "zcode"];
+      const noPkceProviders = ["github", "kimi", "kimi-coding", "kilocode", "codebuddy-cn", "codebuddy-intl"];
       let result;
       if (noPkceProviders.includes(provider)) {
         // kimi needs extraData._kimiDeviceId for stable X-Msh-Device-Id (CLIProxyAPI parity)

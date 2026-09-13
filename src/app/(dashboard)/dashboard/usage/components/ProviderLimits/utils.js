@@ -448,24 +448,6 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
-      case "zcode":
-        if (data.quotas) {
-          Object.entries(data.quotas).forEach(([key, quota]) => {
-            normalizedQuotas.push({
-              name: quota.displayName || key,
-              modelKey: quota.modelKey || key, // Keep modelKey for sorting
-              used: quota.used ?? null,
-              total: quota.total ?? null,
-              remaining: quota.remaining ?? null,
-              resetAt: quota.resetAt || null,
-              remainingPercentage: quota.remainingPercentage ?? null,
-              packageName: quota.packageName,
-              unit: quota.unit,
-            });
-          });
-        }
-        break;
-
       case "codex":
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([quotaType, quota]) => {

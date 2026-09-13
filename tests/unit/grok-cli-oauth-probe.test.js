@@ -47,19 +47,4 @@ describe("classifyOAuthProbeResult (grok-cli)", () => {
     const r = classifyOAuthProbeResult({ ok: false, status: 400 }, codex, "bad request");
     expect(r).toEqual({ valid: true, error: null, soft: false });
   });
-
-  it("ZCode test config matches official balance request", async () => {
-    const { OAUTH_TEST_CONFIG } = await import("../../src/app/api/providers/[id]/test/testUtils.js");
-    const zcodeConfig = OAUTH_TEST_CONFIG.zcode;
-    expect(zcodeConfig).toEqual({
-      url: "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.11.2",
-      method: "GET",
-      authHeader: "Authorization",
-      authPrefix: "Bearer ",
-      refreshable: false,
-    });
-    expect(zcodeConfig).not.toHaveProperty("body");
-    expect(zcodeConfig).not.toHaveProperty("extraHeaders");
-    expect(zcodeConfig).not.toHaveProperty("buildExtraHeaders");
-  });
 });

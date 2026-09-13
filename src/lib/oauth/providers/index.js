@@ -26,7 +26,6 @@ import kimchi from "./kimchi.js";
 import trae from "./trae.js";
 import windsurf from "./windsurf.js";
 import zed from "./zed.js";
-import zcode from "./zcode.js";
 
 // Provider configurations
 const PROVIDERS = {
@@ -52,7 +51,6 @@ const PROVIDERS = {
   trae,
   windsurf,
   zed,
-  zcode,
 };
 
 export { PROVIDERS };
@@ -91,7 +89,7 @@ export async function generateAuthData(providerName, redirectUri, meta) {
     : provider.config;
   const { codeVerifier: pkceVerifier, codeChallenge, state: pkceState } = generatePKCE(provider.pkceVerifierBytes);
   // Some providers receive callback state from upstream during prepareConfig.
-  const state = config._zcodeState || config.loginTraceID || pkceState;
+  const state = config.loginTraceID || pkceState;
   // Zed: codeVerifier carries the encoded RSA private key (from prepareConfig), not a PKCE verifier.
   const codeVerifier = config.privateKeyVerifier || pkceVerifier;
 
@@ -114,8 +112,6 @@ export async function generateAuthData(providerName, redirectUri, meta) {
     flowType: provider.flowType,
     fixedPort: provider.fixedPort,
     callbackPath: provider.callbackPath || "/callback",
-    ...(config._zcodeFlowId ? { flowId: config._zcodeFlowId } : {}),
-    ...(config._zcodeExpiresIn ? { expiresIn: config._zcodeExpiresIn } : {}),
   };
 }
 

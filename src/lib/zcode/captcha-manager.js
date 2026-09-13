@@ -1,49 +1,11 @@
-import { launch as launchBrowser, close as closeBrowser } from "./browser.js";
+import { launch as launchBrowser } from "./browser.js";
 import config from "./config.js";
-
-let dynamicSentry = null;
-
-function getSentryBridge() {
-  if (typeof globalThis !== "undefined" && globalThis.__9router_sentry) {
-    return globalThis.__9router_sentry;
-  }
-  return dynamicSentry;
-}
-
-// Fail-open dynamic load outside Next.js bundling
-if (typeof globalThis !== "undefined" && !globalThis.__9router_sentry) {
-  import("../sentry.js")
-    .then((mod) => {
-      dynamicSentry = mod;
-    })
-    .catch(() => {
-      // Safe no-op in environments without sentry.js (standalone or runner container)
-    });
-}
-
-function captureException(err, context = {}) {
-  try {
-    const bridge = getSentryBridge();
-    if (bridge && typeof bridge.captureException === "function") {
-      return bridge.captureException(err, context);
-    }
-  } catch {}
-  return null;
-}
-
-function captureMessage(msg, level = "info", context = {}) {
-  try {
-    const bridge = getSentryBridge();
-    if (bridge && typeof bridge.captureMessage === "function") {
-      return bridge.captureMessage(msg, level, context);
-    }
-  } catch {}
-  return null;
-}
 
 export class CaptchaManager {
   constructor() {
     this.cachedVerifyParam = null;
+    /** Normal HTTP/SOCKS proxy for CloakBrowser (same egress as model calls). */
+    this._proxyUrl = "";
     this.pendingPromise = null;
     this.resolveCallback = null;
     this.rejectCallback = null;
@@ -58,6 +20,17 @@ export class CaptchaManager {
     this._activePort = config.captchaPort;
   }
 
+  /**
+   * Set/reset CloakBrowser proxy. Empty string clears it.
+   * Changing proxy invalidates cached verify param (new egress IP).
+   */
+  setProxy(proxyUrl) {
+    const next = String(proxyUrl || "").trim();
+    if (next === (this._proxyUrl || "")) return;
+    this._proxyUrl = next;
+    this.invalidate();
+  }
+
   async fetchCaptchaConfig() {
     const now = Date.now();
     if (this.captchaConfigCache && now - this.captchaConfigCacheTime < config.captchaConfigCacheTTL) {
@@ -66,7 +39,7 @@ export class CaptchaManager {
 
     try {
       const res = await fetch(
-        `https://zcode.z.ai/api/v1/client/configs?app_version=${config.appVersion}`
+        `https://zcode.z.ai/api/v1/client/configs?app_version=${config.appVersion}&platform=win32`
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
@@ -76,8 +49,8 @@ export class CaptchaManager {
         this.captchaConfigCacheTime = now;
         return captchaConfig;
       }
-    } catch (err) {
-      console.error("[ZCode Captcha] Failed to fetch config, using defaults:", err.message);
+    } catch {
+      // Config endpoint may 400; fall back to defaults without noisy error.
     }
 
     return {
@@ -111,7 +84,7 @@ export class CaptchaManager {
     this._headedFallbackAttempted = false;
   }
 
-  async _resolvePending(verifyParam) {
+  _resolvePending(verifyParam) {
     this._clearVerificationTimers();
     if (this.resolveCallback) {
       this.resolveCallback(verifyParam);
@@ -121,7 +94,6 @@ export class CaptchaManager {
     this.rejectCallback = null;
     this._verificationPhase = null;
     this._headedFallbackAttempted = false;
-    await this._closeCaptchaPage();
   }
 
   _armPhaseTimeout(phase) {
@@ -148,21 +120,13 @@ export class CaptchaManager {
         return;
       }
 
-      const timeoutErr = new Error(
-        phase === "headed"
-          ? `Interactive captcha timed out after ${Math.round(timeoutMs / 1000)}s. Complete the puzzle in the browser window and retry.`
-          : `Traceless captcha verification timed out after ${Math.round(timeoutMs / 1000)}s. ` +
-            (process.platform === "linux" && !process.env.DISPLAY
-              ? "Interactive captcha puzzle is required by upstream, but no X display is available in this environment."
-              : "Ensure CloakBrowser can reach /zcode/captcha.html and retry.")
+      this._rejectPending(
+        new Error(
+          phase === "headed"
+            ? `Interactive captcha timed out after ${Math.round(timeoutMs / 1000)}s. Complete the puzzle in the browser window and retry.`
+            : `Captcha verification timed out after ${Math.round(timeoutMs / 1000)}s. Ensure CloakBrowser can reach /zcode/captcha.html and retry.`
+        )
       );
-      try {
-        captureException(timeoutErr, {
-          tags: { provider: "zcode", stage: "captcha_timeout", phase },
-          extra: { timeoutMs },
-        });
-      } catch {}
-      this._rejectPending(timeoutErr);
     }, timeoutMs);
   }
 
@@ -176,9 +140,8 @@ export class CaptchaManager {
     this.captchaPage = null;
   }
 
-  async openVerificationPage(port = config.captchaPort, { headless = true, interactive = false, proxy = null } = {}) {
+  async openVerificationPage(port = config.captchaPort, { headless = true, interactive = false } = {}) {
     this._activePort = port;
-    this._activeProxy = proxy;
     this._verificationPhase = headless ? "headless" : "headed";
 
     if (this.captchaPage && !this.captchaPage.isClosed()) {
@@ -200,44 +163,9 @@ export class CaptchaManager {
       }
     }
 
-    const browserInstance = await launchBrowser({ headless, proxy });
-    let context;
-    if (typeof browserInstance.contexts === "function") {
-      context = browserInstance.contexts()[0];
-      if (!context) {
-        context = await browserInstance.newContext({
-          viewport: { width: 1280, height: 800 },
-          userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-        });
-      }
-    } else {
-      context = browserInstance;
-    }
-
-    if (context && typeof context.addInitScript === "function") {
-      await context.addInitScript(() => {
-        try {
-          Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-        } catch {}
-      });
-    }
-
+    const browserInstance = await launchBrowser({ headless, proxy: this._proxyUrl || undefined });
+    const context = browserInstance.contexts()[0] || (await browserInstance.newContext());
     this.captchaPage = await context.newPage();
-
-    if (proxy) {
-      try {
-        const parsed = new URL(proxy);
-        if (parsed.username && parsed.password) {
-          const auth = {
-            username: decodeURIComponent(parsed.username),
-            password: decodeURIComponent(parsed.password),
-          };
-          if (typeof this.captchaPage.authenticate === "function") {
-            await this.captchaPage.authenticate(auth);
-          }
-        }
-      } catch {}
-    }
 
     const query = interactive ? "?mode=interactive" : "";
     await this.captchaPage.goto(`http://localhost:${port}/zcode/captcha.html${query}`, {
@@ -265,11 +193,10 @@ export class CaptchaManager {
 
     this._headedFallbackAttempted = true;
     await this._closeCaptchaPage();
-    await closeBrowser();
-    await this.openVerificationPage(this._activePort, { headless: false, interactive: true, proxy: this._activeProxy });
+    await this.openVerificationPage(this._activePort, { headless: false, interactive: true });
   }
 
-  async getVerifyParam(port = config.captchaPort, options = {}) {
+  async getVerifyParam(port = config.captchaPort) {
     if (this.cachedVerifyParam) {
       return this.cachedVerifyParam;
     }
@@ -278,19 +205,15 @@ export class CaptchaManager {
       return this.pendingPromise;
     }
 
-    const headless = options.headless !== false;
-    const interactive = options.interactive === true;
-
-    this._headedFallbackAttempted = !headless;
+    this._headedFallbackAttempted = false;
     this._activePort = port;
-    this._activeProxy = options.proxy || null;
 
     this.pendingPromise = new Promise((resolve, reject) => {
       this.resolveCallback = resolve;
       this.rejectCallback = reject;
     });
 
-    this.openVerificationPage(port, { headless, interactive, proxy: options.proxy || null }).catch((err) => {
+    this.openVerificationPage(port, { headless: true, interactive: false }).catch((err) => {
       this._rejectPending(new Error("Browser launch failed: " + err.message));
     });
 

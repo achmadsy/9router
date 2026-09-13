@@ -23,7 +23,8 @@ export async function isCaptchaError(response) {
     return (
       text.toLowerCase().includes("captcha") ||
       text.includes("verify token") ||
-      text.includes("verify failed")
+      text.includes("verify failed") ||
+      text.includes("code\":3007")
     );
   } catch {
     return false;

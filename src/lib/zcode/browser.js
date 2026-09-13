@@ -1,181 +1,116 @@
+import { launch as cbLaunch, launchPersistentContext } from "cloakbrowser";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import fs from "node:fs";
-
-// Lazy-load heavy browser deps so the server boots without them (WIP zcode / slim Docker).
-let cbLaunch;
-let pwChromium;
+import { spawn } from "node:child_process";
 
 const USER_DATA_DIR = path.join(os.homedir(), ".cloakbrowser", "profiles", "9router-zcode");
+const Xvfb_DISPLAY = ":99";
 
-export function parseProxyConfig(rawProxy) {
-  if (!rawProxy) return undefined;
+let browserContext = null;
+let currentMode = null;
+let currentProxy = "";
+let xvfbProcess = null;
+
+async function ensureXvfb() {
+  if (process.env.DISPLAY) return;
+  if (xvfbProcess && xvfbProcess.exitCode === null) return;
   try {
-    const parsed = new URL(rawProxy);
-    const username = decodeURIComponent(parsed.username || "");
-    const password = decodeURIComponent(parsed.password || "");
-    const server = `${parsed.protocol}//${parsed.host}`;
-    return {
-      server,
-      ...(username ? { username } : {}),
-      ...(password ? { password } : {}),
-      bypass: "localhost,127.0.0.1",
-    };
-  } catch {
-    return { server: rawProxy, bypass: "localhost,127.0.0.1" };
+    xvfbProcess = spawn("Xvfb", [Xvfb_DISPLAY, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], {
+      stdio: "ignore",
+      detached: false,
+    });
+    xvfbProcess.unref?.();
+    process.env.DISPLAY = Xvfb_DISPLAY;
+    // Give Xvfb a moment to bind the display
+    await new Promise((r) => setTimeout(r, 300));
+  } catch (err) {
+    console.warn("[ZCode Captcha] Xvfb unavailable:", err.message);
   }
 }
 
-let browserInstance = null;
-let currentMode = null;
-let currentProxy = null;
-
-function resolveSystemChromium() {
-  const candidates = [
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return null;
+/**
+ * cloakbrowser launch() uses chromium.launch() which does not accept userDataDir.
+ * Persistent profile requires launchPersistentContext (returns BrowserContext).
+ * captcha-manager only needs contexts()[0].newPage() — BrowserContext works
+ * via a thin shim so callers keep the same shape.
+ */
+function wrapContextAsBrowser(context) {
+  return {
+    contexts: () => [context],
+    newContext: async () => context,
+    on: (event, fn) => context.browser?.()?.on?.(event, fn),
+    close: async () => {
+      try {
+        await context.close();
+      } catch {}
+    },
+  };
 }
 
 export async function launch(opts = {}) {
   const headless = opts.headless !== false;
   const requestedMode = headless ? "headless" : "headed";
-  const requestedProxy = opts.proxy ? (typeof opts.proxy === "string" ? opts.proxy : opts.proxy.server || "") : null;
+  const proxy = (opts.proxy || "").trim();
 
-  if (browserInstance && currentMode === requestedMode && currentProxy === requestedProxy) {
+  if (browserContext && currentMode === requestedMode && currentProxy === proxy) {
     try {
-      if (typeof browserInstance.contexts === "function") {
-        browserInstance.contexts();
-      } else if (typeof browserInstance.pages === "function") {
-        browserInstance.pages();
-      }
-      return browserInstance;
+      // touch the context; throws if closed
+      await browserContext.pages();
+      return wrapContextAsBrowser(browserContext);
     } catch {
-      browserInstance = null;
+      browserContext = null;
     }
   }
 
-  if (browserInstance) {
+  if (browserContext) {
     await close();
   }
 
-  // Only required when actually launching a captcha browser — not at module load.
-  if (!cbLaunch) {
-    ({ launch: cbLaunch } = await import("cloakbrowser"));
-  }
-  if (!pwChromium) {
-    try {
-      ({ chromium: pwChromium } = await import("playwright-core"));
-    } catch {
-      pwChromium = null;
-    }
+  if (!headless) {
+    await ensureXvfb();
   }
 
-  const sysChromium = resolveSystemChromium();
-  const launchArgs = [
+  try {
+    fs.mkdirSync(USER_DATA_DIR, { recursive: true });
+  } catch {}
+
+  const args = [
     "--no-sandbox",
     "--no-first-run",
     "--disable-default-apps",
-    "--disable-dev-shm-usage",
     "--disable-gpu",
+    "--disable-crash-reporter",
+    "--disable-dev-shm-usage",
     "--disable-software-rasterizer",
-    "--mute-audio",
+    // Chromium 146 in Docker often SIGTRAPs without this
     "--no-zygote",
-    "--window-size=1280,800",
-    "--disable-blink-features=AutomationControlled",
   ];
 
-  if (headless) {
-    launchArgs.push("--headless=new");
-  } else if (process.env.DISPLAY) {
-    launchArgs.push(`--display=${process.env.DISPLAY}`);
-  }
-
-  const proxyConfig = parseProxyConfig(requestedProxy);
-
-  // In Docker / Linux environments, use direct playwright-core with system Chromium
-  // to avoid heavy software canvas fingerprint loops that burn 100% CPU.
-  if (sysChromium && pwChromium) {
-    browserInstance = await pwChromium.launch({
-      headless: false,
-      executablePath: sysChromium,
-      args: launchArgs,
-      proxy: proxyConfig,
-    });
-
-    browserInstance.on("disconnected", () => {
-      browserInstance = null;
-      currentMode = null;
-      currentProxy = null;
-    });
-
-    currentMode = requestedMode;
-    currentProxy = requestedProxy;
-    return browserInstance;
-  }
-
-  const launchOpts = {
+  browserContext = await launchPersistentContext({
     headless,
     userDataDir: USER_DATA_DIR,
-    args: launchArgs,
-  };
-
-  if (opts.proxy) {
-    launchOpts.proxy = typeof opts.proxy === "string" ? parseProxyConfig(opts.proxy) : opts.proxy;
-  }
-
-  // If running in Docker Alpine or CHROMIUM_PATH set, specify executablePath and CLOAKBROWSER_BINARY_PATH
-  const chromiumPath =
-    process.env.CLOAKBROWSER_BINARY_PATH ||
-    process.env.CHROMIUM_PATH ||
-    (process.platform === "linux" && "/usr/bin/chromium-browser");
-
-  if (chromiumPath && typeof chromiumPath === "string") {
-    try {
-      if (fs.existsSync(chromiumPath)) {
-        process.env.CLOAKBROWSER_BINARY_PATH = chromiumPath;
-        launchOpts.executablePath = chromiumPath;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (process.env.CLOAKBROWSER_SUPPRESS_FONT_WARNING === undefined) {
-    process.env.CLOAKBROWSER_SUPPRESS_FONT_WARNING = "1";
-  }
-
-  browserInstance = await cbLaunch(launchOpts);
-
-  browserInstance.on("disconnected", () => {
-    browserInstance = null;
-    currentMode = null;
-    currentProxy = null;
+    args,
+    // cloakbrowser accepts http(s)/socks5 URL; credentials auto-extracted
+    ...(proxy ? { proxy } : {}),
   });
 
+  // Headed Chrome needs a "closed" signal; Playwright context close is enough.
   currentMode = requestedMode;
-  currentProxy = requestedProxy;
-  return browserInstance;
+  currentProxy = proxy;
+  return wrapContextAsBrowser(browserContext);
 }
 
 export async function close() {
-  if (browserInstance) {
-    const inst = browserInstance;
-    browserInstance = null;
-    currentMode = null;
-    currentProxy = null;
+  if (browserContext) {
     try {
-      await Promise.race([
-        inst.close(),
-        new Promise((r) => setTimeout(r, 2000)),
-      ]);
+      await browserContext.close();
     } catch {
       // ignore
     }
+    browserContext = null;
+    currentMode = null;
+    currentProxy = "";
   }
+  // Leave Xvfb running for possible headed retries
 }

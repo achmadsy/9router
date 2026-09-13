@@ -286,9 +286,6 @@
       const subtitleText = document.getElementById('subtitle-text');
       const interactive = isInteractiveMode();
 
-      // Guard against multiple callback invocations from Aliyun SDK
-      let hasSubmitted = false;
-
       // Reset UI state
       verifySection.classList.remove('hidden');
       successWrapper.style.display = 'none';
@@ -320,62 +317,13 @@
           throw new Error('Alibaba captcha SDK failed to load. Check your network connection.');
         }
 
-        // Helper to handle completed verification
-        async function handleVerificationSuccess(verifyParam) {
-          if (!verifyParam || hasSubmitted) return;
-          hasSubmitted = true;
-          console.log('[Captcha] Verification parameter obtained, length:', verifyParam.length);
-
-          // Hide verification section, show success state
-          verifySection.classList.add('hidden');
-          successWrapper.style.display = 'flex';
-          card.classList.add('success-state');
-
-          if (card.querySelector('.dynamic-success')) {
-            // Already in success state
-            return;
-          }
-
-          const successTitle = document.createElement('h1');
-          successTitle.className = 'dynamic-success';
-          successTitle.innerText = 'Verification Successful';
-          successTitle.style.marginTop = '16px';
-
-          const successSub = document.createElement('p');
-          successSub.className = 'subtitle dynamic-success';
-          successSub.innerText = 'Token sent to backend. Waiting for next verification...';
-          successSub.style.marginBottom = '0';
-
-          card.appendChild(successTitle);
-          card.appendChild(successSub);
-
-          // Post back to backend
-          try {
-            const res = await fetch('/api/zcode/captcha/submit', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ verifyParam })
-            });
-            if (!res.ok) {
-              const errText = await res.text().catch(() => '');
-              throw new Error(errText || `HTTP ${res.status}`);
-            }
-            console.log('[Captcha] Posted to backend successfully');
-          } catch (err) {
-            console.error('[Captcha] Failed to post to backend:', err);
-            successTitle.innerText = 'Backend submit failed';
-            successSub.innerText = err?.message || 'Could not send token to 9router';
-            successSub.className = 'subtitle dynamic-error';
-          }
-        }
-
-        const captchaOptions = {
+        window.initAliyunCaptcha({
           SceneId: config.sceneId,
+          mode: 'popup',
           region: config.region,
           prefix: config.prefix,
-          mode: 'popup',
-          button: '#captcha-trigger-btn',
           element: '#captcha-div',
+          button: '#captcha-trigger-btn',
           captchaLogoImg: '',
           showErrorTip: false,
           getInstance: (instance) => {
@@ -383,27 +331,63 @@
             window.__captchaInstance = instance;
             loader.classList.add('hidden');
 
-            const btn = document.getElementById('captcha-trigger-btn');
-            if (btn) {
-              if (interactive) {
-                btn.style.display = 'block';
-                btn.innerText = 'Click to Complete Verification';
-                btn.style.cssText = 'display:block;margin:15px auto;padding:12px 24px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;';
+            // Interactive fallback: show puzzle UI. Default: try traceless first.
+            if (interactive) {
+              console.log('[Captcha] Interactive mode — showing captcha puzzle');
+              if (typeof instance.show === 'function') {
+                instance.show();
+              } else {
+                document.getElementById('captcha-trigger-btn').click();
               }
-              btn.click();
+            } else if (typeof instance.startTracelessVerification === 'function') {
+              console.log('[Captcha] Running traceless silent verification...');
+              instance.startTracelessVerification();
+            } else if (typeof instance.show === 'function') {
+              instance.show();
+            } else {
+              document.getElementById('captcha-trigger-btn').click();
             }
           },
-          captchaVerifyCallback: async (param) => {
-            console.log('[Captcha] captchaVerifyCallback invoked');
-            const verifyParam = param?.captchaVerifyParam || (typeof param === 'string' ? param : JSON.stringify(param));
-            await handleVerificationSuccess(verifyParam);
-            return { captchaResult: true, bizResult: true };
-          },
-          onBizResultCallback: (bizResult) => {
-            console.log('[Captcha] onBizResultCallback invoked:', bizResult);
-          },
           success: async (verifyParam) => {
-            await handleVerificationSuccess(verifyParam);
+            console.log('[Captcha] Verification parameter obtained, length:', verifyParam.length);
+
+            // Hide verification section, show success state
+            verifySection.classList.add('hidden');
+            successWrapper.style.display = 'flex';
+            card.classList.add('success-state');
+
+            const successTitle = document.createElement('h1');
+            successTitle.className = 'dynamic-success';
+            successTitle.innerText = 'Verification Successful';
+            successTitle.style.marginTop = '16px';
+
+            const successSub = document.createElement('p');
+            successSub.className = 'subtitle dynamic-success';
+            successSub.innerText = 'Token sent to backend. Waiting for next verification...';
+            successSub.style.marginBottom = '0';
+
+            card.appendChild(successTitle);
+            card.appendChild(successSub);
+
+            // Post back to backend
+            try {
+              const res = await fetch('/api/zcode/captcha/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ verifyParam })
+              });
+              if (!res.ok) {
+                const errText = await res.text().catch(() => '');
+                throw new Error(errText || `HTTP ${res.status}`);
+              }
+              console.log('[Captcha] Posted to backend successfully');
+            } catch (err) {
+              console.error('[Captcha] Failed to post to backend:', err);
+              successTitle.innerText = 'Backend submit failed';
+              successSub.innerText = err?.message || 'Could not send token to 9router';
+              successSub.className = 'subtitle dynamic-error';
+            }
+            // Keep page open for reuse via __resetCaptcha
           },
           fail: async (err) => {
             console.error('[Captcha] Verification failed:', err);
@@ -427,9 +411,7 @@
             loader.innerHTML = '<p style="color: #ef4444; font-size: 13px;">Load error. Refresh or retry the request.</p>';
             loader.classList.remove('hidden');
           }
-        };
-
-        window.initAliyunCaptcha(captchaOptions);
+        });
 
       } catch (error) {
         console.error('[Captcha] Initialization error:', error);

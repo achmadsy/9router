@@ -10,6 +10,7 @@ import { isProviderCloneId } from "open-sse/providers/clones.js";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
+import { isRelayPoolType, supportsNormalProxyOnly } from "@/lib/network/connectionProxy";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,7 @@ function normalizeProxyConfig(body = {}) {
   };
 }
 
-async function normalizeProxyPoolId(proxyPoolId) {
+async function normalizeProxyPoolId(proxyPoolId, providerId = null) {
   if (proxyPoolId === undefined || proxyPoolId === null || proxyPoolId === "" || proxyPoolId === "__none__") {
     return { proxyPoolId: null };
   }
@@ -42,6 +43,13 @@ async function normalizeProxyPoolId(proxyPoolId) {
   const proxyPool = await getProxyPoolById(normalizedId);
   if (!proxyPool) {
     return { error: "Proxy pool not found" };
+  }
+
+  if (providerId && supportsNormalProxyOnly(providerId) && isRelayPoolType(proxyPool.type)) {
+    return {
+      error:
+        "Relay proxies (Vercel/Cloudflare/Deno) are not supported for GLM — use a normal HTTP/SOCKS proxy pool",
+    };
   }
 
   return { proxyPoolId: normalizedId };
@@ -95,7 +103,7 @@ export async function POST(request) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });
     }
 
-    const proxyPoolResult = await normalizeProxyPoolId(body.proxyPoolId);
+    const proxyPoolResult = await normalizeProxyPoolId(body.proxyPoolId, provider);
     if (proxyPoolResult.error) {
       return NextResponse.json({ error: proxyPoolResult.error }, { status: 400 });
     }

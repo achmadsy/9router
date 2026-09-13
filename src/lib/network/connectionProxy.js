@@ -1,6 +1,16 @@
 import { getProxyPoolById } from "@/models";
 import { makeKv } from "@/lib/db/helpers/kvStore.js";
 
+/** Header-based relays (not real HTTP/SOCKS proxies). CloakBrowser cannot use them. */
+export const RELAY_POOL_TYPES = ["vercel", "cloudflare", "deno"];
+export function isRelayPoolType(type) {
+  return RELAY_POOL_TYPES.includes(String(type || "").toLowerCase());
+}
+/** Providers that must only use normal HTTP/SOCKS proxies (captcha/IP-bound). */
+export function supportsNormalProxyOnly(providerId) {
+  return providerId === "glm";
+}
+
 // Safely normalize any value into a trimmed string.
 function normalizeString(value) {
   if (value === undefined || value === null) return "";
@@ -97,8 +107,10 @@ function normalizeLegacyProxy(providerSpecificData = {}) {
  * 3. No Proxy
  */
 export async function resolveConnectionProxyConfig(
-  providerSpecificData = {}
+  providerSpecificData = {},
+  options = {}
 ) {
+  const excludeRelay = options.excludeRelay === true;
   try {
     const proxyPoolIdRaw = normalizeString(
       providerSpecificData?.proxyPoolId
@@ -128,41 +140,47 @@ export async function resolveConnectionProxyConfig(
 
       if (isValidPool) {
         /**
-         * Vercel/Cloudflare relay proxies use base URL rewriting
-         * instead of HTTP_PROXY environment variables.
+         * Vercel/Cloudflare/Deno relays rewrite URLs/headers — not usable by
+         * CloakBrowser or undici HTTP_PROXY. Skip when provider needs a normal proxy.
          */
-        if (proxyPool.type === "vercel" || proxyPool.type === "cloudflare" || proxyPool.type === "deno") {
+        if (isRelayPoolType(proxyPool.type)) {
+          if (excludeRelay) {
+            console.warn(
+              `[connectionProxy] Relay pool "${proxyPool.name}" (${proxyPool.type}) ignored for normal-proxy provider; falling through`
+            );
+          } else {
+            return {
+              source: proxyPool.type,
+
+              proxyPoolId,
+              proxyPool,
+
+              connectionProxyEnabled: false,
+              connectionProxyUrl: "",
+              connectionNoProxy: noProxy,
+
+              strictProxy: proxyPool.strictProxy === true,
+
+              vercelRelayUrl: proxyUrl, // Still mapped to vercelRelayUrl in the unified payload since they use the exact same header spec
+            };
+          }
+        } else {
+          /**
+           * Standard proxy pool
+           */
           return {
-            source: proxyPool.type,
+            source: "pool",
 
             proxyPoolId,
             proxyPool,
 
-            connectionProxyEnabled: false,
-            connectionProxyUrl: "",
+            connectionProxyEnabled: true,
+            connectionProxyUrl: proxyUrl,
             connectionNoProxy: noProxy,
 
             strictProxy: proxyPool.strictProxy === true,
-
-            vercelRelayUrl: proxyUrl, // Still mapped to vercelRelayUrl in the unified payload since they use the exact same header spec
           };
         }
-
-        /**
-         * Standard proxy pool
-         */
-        return {
-          source: "pool",
-
-          proxyPoolId,
-          proxyPool,
-
-          connectionProxyEnabled: true,
-          connectionProxyUrl: proxyUrl,
-          connectionNoProxy: noProxy,
-
-          strictProxy: proxyPool.strictProxy === true,
-        };
       }
     }
 

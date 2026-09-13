@@ -5,6 +5,7 @@ import {
   updateProviderConnection,
   deleteProviderConnection,
 } from "@/models";
+import { isRelayPoolType, supportsNormalProxyOnly } from "@/lib/network/connectionProxy";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -33,7 +34,7 @@ function normalizeProxyConfig(body = {}) {
   };
 }
 
-async function normalizeProxyPoolUpdate(proxyPoolIdInput) {
+async function normalizeProxyPoolUpdate(proxyPoolIdInput, providerId = null) {
   if (proxyPoolIdInput === undefined) {
     return { hasProxyPoolField: false, proxyPoolId: null };
   }
@@ -50,6 +51,14 @@ async function normalizeProxyPoolUpdate(proxyPoolIdInput) {
   const proxyPool = await getProxyPoolById(proxyPoolId);
   if (!proxyPool) {
     return { hasProxyPoolField: true, error: "Proxy pool not found" };
+  }
+
+  if (providerId && supportsNormalProxyOnly(providerId) && isRelayPoolType(proxyPool.type)) {
+    return {
+      hasProxyPoolField: true,
+      error:
+        "Relay proxies (Vercel/Cloudflare/Deno) are not supported for GLM — use a normal HTTP/SOCKS proxy pool",
+    };
   }
 
   return { hasProxyPoolField: true, proxyPoolId };
@@ -111,7 +120,7 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });
     }
 
-    const proxyPoolResult = await normalizeProxyPoolUpdate(body.proxyPoolId);
+    const proxyPoolResult = await normalizeProxyPoolUpdate(body.proxyPoolId, existing.provider);
     if (proxyPoolResult.error) {
       return NextResponse.json({ error: proxyPoolResult.error }, { status: 400 });
     }

@@ -17,10 +17,8 @@ import {
   CLINE_CONFIG,
   KILOCODE_CONFIG,
   KIMCHI_CONFIG,
-  ZCODE_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
-import { buildZcodeStartPlanBalanceUrl } from "@/lib/zcode/config.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -127,13 +125,6 @@ const OAUTH_TEST_CONFIG = {
     softFailMessage: {
       402: "Connected, but Grok Build credits are exhausted (spending limit). Add credits or upgrade SuperGrok.",
     },
-  },
-  zcode: {
-    url: buildZcodeStartPlanBalanceUrl(),
-    method: "GET",
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    refreshable: false,
   },
 };
 

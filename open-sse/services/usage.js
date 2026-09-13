@@ -26,7 +26,6 @@ import {
   getVercelAiGatewayUsage,
   getQoderUsage,
 } from "./usage/misc.js";
-import { getZcodeUsage } from "./usage/zcode.js";
 
 /**
  * Get usage data for a provider connection
@@ -63,8 +62,6 @@ const USAGE_HANDLERS = {
   groq: (c) => getGroqUsage(c.apiKey, c.proxyOptions),
   zed: (c) => getZedUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   "xiaomi-mimo": (c) => getXiaomiMimoUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
-  // Billing endpoints use the raw Start Plan JWT and same source identity as chat.
-  zcode: (c) => getZcodeUsage(c, c.proxyOptions),
 };
 
 export async function getUsageForProvider(connection, proxyOptions = null, options = {}) {

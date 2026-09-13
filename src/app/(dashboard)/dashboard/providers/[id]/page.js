@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
-import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
+import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, ZaiOAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { resolveRuntimeProviderId, isProviderCloneId } from "open-sse/providers/clones.js";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
@@ -26,6 +26,8 @@ import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
+// Mirrors src/lib/network/connectionProxy.js RELAY_POOL_TYPES (client-safe; do not import that module here — it pulls node:sqlite).
+const RELAY_POOL_TYPES_CLIENT = new Set(["vercel", "cloudflare", "deno"]);
 
 const AUTO_PING_SETTINGS_KEYS = {
   claude: "claudeAutoPing",
@@ -180,7 +182,12 @@ export default function ProviderDetailPage() {
   const providerAlias = isCloneNode
     ? (providerNode?.prefix || getProviderAlias(cloneBaseId))
     : getProviderAlias(providerId);
-  
+  // GLM captcha needs normal HTTP/SOCKS only — hide Vercel/CF/Deno relays
+  const selectableProxyPools =
+    providerId === "glm"
+      ? proxyPools.filter((p) => !RELAY_POOL_TYPES_CLIENT.has(String(p.type || "").toLowerCase()))
+      : proxyPools;
+
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
   const isCompatible = isOpenAICompatible || isAnthropicCompatible;
@@ -189,6 +196,7 @@ export default function ProviderDetailPage() {
     providerId === "xai" ? "Grok Build OAuth"
     : providerId === "grok-cli" ? "Grok CLI Device Login"
     : providerId === "kimi" ? "Kimi Coding OAuth"
+    : providerId === "glm" ? "Z.AI OAuth"
     : "OAuth";
   const apiKeyConnectionLabel =
     providerId === "xai" ? "xAI API Key"
@@ -964,7 +972,7 @@ export default function ProviderDetailPage() {
     return "Selected connections have mixed proxy bindings";
   })();
 
-  const activePools = proxyPools.filter((p) => p.isActive === true);
+  const activePools = selectableProxyPools.filter((p) => p.isActive === true);
 
   const openBulkProxyModal = () => {
     if (selectedConnections.length === 0) return;
@@ -1055,7 +1063,7 @@ export default function ProviderDetailPage() {
             <div className="flex-1 min-w-0">
               <ConnectionRow
                 connection={conn}
-                proxyPools={proxyPools}
+                proxyPools={selectableProxyPools}
                 isOAuth={isOAuth}
                 isFirst={index === 0}
                 isLast={index === connections.length - 1}
@@ -1152,7 +1160,7 @@ export default function ProviderDetailPage() {
             <span className="material-symbols-outlined text-text-muted text-[18px]">link_off</span>
             <span className="text-sm text-text-main">None (unbind all)</span>
           </button>
-          {proxyPools.map((pool) => (
+          {selectableProxyPools.map((pool) => (
             <button
               key={pool.id}
               onClick={() => handleApplySinglePool(pool.id)}
@@ -1610,7 +1618,7 @@ export default function ProviderDetailPage() {
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold">Connections</h2>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-              {connections.length > 0 && proxyPools.length > 0 && (
+              {connections.length > 0 && selectableProxyPools.length > 0 && (
                 <Button
                   size="sm"
                   variant="secondary"
@@ -1909,6 +1917,13 @@ export default function ProviderDetailPage() {
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
         />
+      ) : providerId === "glm" ? (
+        <ZaiOAuthModal
+          isOpen={showOAuthModal}
+          providerInfo={providerInfo}
+          onSuccess={handleOAuthSuccess}
+          onClose={() => setShowOAuthModal(false)}
+        />
       ) : (
         <OAuthModal
           isOpen={showOAuthModal}
@@ -1942,7 +1957,7 @@ export default function ProviderDetailPage() {
         authType={providerInfo?.authType}
         authHint={providerInfo?.authHint}
         website={providerInfo?.website}
-        proxyPools={proxyPools}
+        proxyPools={selectableProxyPools}
         error={addConnectionError}
         existingNames={connections.map((c) => c.name).filter(Boolean)}
         onSave={handleSaveApiKey}
@@ -1955,7 +1970,7 @@ export default function ProviderDetailPage() {
       <EditConnectionModal
         isOpen={showEditModal}
         connection={selectedConnection}
-        proxyPools={proxyPools}
+        proxyPools={selectableProxyPools}
         onSave={handleUpdateConnection}
         onClose={() => setShowEditModal(false)}
       />

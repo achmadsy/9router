@@ -124,36 +124,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     }
   }, [authData, onSuccess, withAs]);
 
-  // ZCode uses official CLI polling, but only after explicit user action.
-  const completeZcodeLogin = useCallback(async () => {
-    if (!authData?.flowId) return;
-    setPolling(true);
-    setError(null);
-    try {
-      const res = await fetch(withAs("/api/oauth/zcode/poll"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceCode: authData.flowId }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "ZCode login completion failed");
-      if (data.success) {
-        setStep("success");
-        onSuccess?.();
-        return;
-      }
-      if (data.pending) {
-        setError("Authorization not ready. Finish browser sign-in, then click Complete Login again.");
-        return;
-      }
-      throw new Error(data.errorDescription || data.error || "ZCode authorization failed");
-    } catch (err) {
-      setError(err.message);
-      setStep("error");
-    } finally {
-      setPolling(false);
-    }
-  }, [authData, onSuccess, withAs]);
 
   // Poll for device code token
   const startPolling = useCallback(async (deviceCode, codeVerifier, interval, extraData, deadlineMs) => {
@@ -423,10 +393,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       } else if (
         !isLocalhost ||
         provider === "codex" ||
-        provider === "xai" ||
-        provider === "zcode"
+        provider === "xai"
       ) {
-        // Non-localhost, fixed-port proxy failure, or ZCode manual callback flow.
+        // Non-localhost or fixed-port proxy failure: manual callback flow.
         setStep("input");
         window.open(data.authUrl, "_blank");
       } else {
@@ -671,10 +640,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       const url = new URL(input);
-      if (provider === "zcode" && url.protocol !== "zcode:") {
-        throw new Error("Final zcode.z.ai URLs may contain consumed codes. Use Complete Login instead.");
-      }
-      const code = url.searchParams.get("code") || url.searchParams.get("authCode");
+            const code = url.searchParams.get("code") || url.searchParams.get("authCode");
       const token = url.searchParams.get("token");
       const state = url.searchParams.get("state");
       const errorParam = url.searchParams.get("error");
@@ -693,7 +659,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         );
       }
 
-      await exchangeTokens(provider === "zcode" ? input : token || code, state);
+      await exchangeTokens(token || code, state);
     } catch (err) {
       setError(err.message);
       setStep("error");
@@ -719,16 +685,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   if (!provider || !providerInfo) return null;
   const isXaiProvider = provider === "xai";
   const isKimchiProvider = provider === "kimchi";
-  const isZcodeProvider = provider === "zcode";
   const deviceLoginUrl = deviceData?.verification_uri_complete || deviceData?.verification_uri || "";
   const modalTitle = isXaiProvider ? "Connect Grok Build OAuth" : `Connect ${providerInfo.name}`;
   const manualPlaceholder = isXaiProvider
     ? "http://127.0.0.1:56121/callback?code=... or copied code"
     : isKimchiProvider
       ? `${placeholderUrl.replace("code=...", "token=...")} or copied token`
-      : isZcodeProvider
-        ? "zcode://oauth/callback?code=...&state=..."
-        : placeholderUrl;
+      : placeholderUrl;
 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
@@ -811,15 +774,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         {(step === "waiting" || step === "input") && !isDeviceCode && !PROXY_OAUTH_PROVIDERS.has(provider) && (
           <>
             <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50">
-              <span className={`material-symbols-outlined text-base text-primary ${isZcodeProvider ? "" : "animate-spin"}`}>
-                {isZcodeProvider ? "info" : "progress_activity"}
+              <span className="material-symbols-outlined text-base text-primary animate-spin">
+                progress_activity
               </span>
               <span className="text-sm">
-                {isZcodeProvider
-                  ? "Finish ZCode authorization in the browser, then return here."
-                  : isXaiProvider
-                    ? "Waiting for Grok Build OAuth…"
-                    : "Waiting for popup authorization…"}
+                {isXaiProvider
+                  ? "Waiting for Grok Build OAuth…"
+                  : "Waiting for popup authorization…"}
               </span>
             </div>
 
@@ -836,60 +797,33 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                 </div>
               </div>
 
-              {isZcodeProvider ? (
-                <>
-                  <div>
-                    <p className="text-sm font-medium mb-2">Step 2: Complete login</p>
-                    <p className="text-xs text-text-muted">
-                      After browser authorization finishes, click Complete Login. 9Router checks the official ZCode CLI flow once; it does not poll automatically.
-                    </p>
-                  </div>
-                  {error && <p className="text-sm text-red-600">{error}</p>}
-                  <details className="text-xs text-text-muted">
-                    <summary className="cursor-pointer">Deep-link callback fallback</summary>
-                    <p className="mt-2 mb-2">
-                      Only paste a genuine zcode:// callback URL delivered before browser completion. Final zcode.z.ai URLs may contain consumed codes.
-                    </p>
-                    <Input
-                      value={callbackUrl}
-                      onChange={(e) => setCallbackUrl(e.target.value)}
-                      placeholder={manualPlaceholder}
-                      className="font-mono text-xs"
-                    />
-                    <Button onClick={handleManualSubmit} className="mt-2" fullWidth disabled={!callbackUrl}>
-                      Use Deep-Link Callback
-                    </Button>
-                  </details>
-                </>
-              ) : (
-                <div>
-                  <p className="text-sm font-medium mb-2">
-                    Step 2: Paste the {provider === "xai" ? "callback URL or copied code" : isKimchiProvider ? "callback URL or copied token" : "callback URL"} here
-                  </p>
-                  <p className="text-xs text-text-muted mb-2">
-                    {provider === "xai"
-                      ? "If xAI shows a code instead of redirecting, paste that code here."
-                      : isKimchiProvider
-                        ? "After authorization, copy the full callback URL or token from your browser."
-                        : "After authorization, copy the full URL from your browser."}
-                  </p>
-                  <Input
-                    value={callbackUrl}
-                    onChange={(e) => setCallbackUrl(e.target.value)}
-                    placeholder={manualPlaceholder}
-                    className="font-mono text-xs"
-                  />
-                </div>
-              )}
+              <div>
+                <p className="text-sm font-medium mb-2">
+                  Step 2: Paste the {provider === "xai" ? "callback URL or copied code" : isKimchiProvider ? "callback URL or copied token" : "callback URL"} here
+                </p>
+                <p className="text-xs text-text-muted mb-2">
+                  {provider === "xai"
+                    ? "If xAI shows a code instead of redirecting, paste that code here."
+                    : isKimchiProvider
+                      ? "After authorization, copy the full callback URL or token from your browser."
+                      : "After authorization, copy the full URL from your browser."}
+                </p>
+                <Input
+                  value={callbackUrl}
+                  onChange={(e) => setCallbackUrl(e.target.value)}
+                  placeholder={manualPlaceholder}
+                  className="font-mono text-xs"
+                />
+              </div>
             </div>
 
             <div className="flex gap-2">
               <Button
-                onClick={isZcodeProvider ? completeZcodeLogin : handleManualSubmit}
+                onClick={handleManualSubmit}
                 fullWidth
-                disabled={isZcodeProvider ? !authData?.flowId || polling : !callbackUrl}
+                disabled={!callbackUrl}
               >
-                {isZcodeProvider ? (polling ? "Checking…" : "Complete Login") : "Connect"}
+                Connect
               </Button>
               <Button onClick={handleClose} variant="ghost" fullWidth>
                 Cancel
