@@ -20,6 +20,22 @@ export function matchesIssueKeyword(input) {
   }
 }
 
+// Expected multi-account cascade: rate-limit locks, combo fallback, account rotation.
+// Operational state (routing working as designed), not bugs — keep out of Sentry.
+// Real failures (5xx, stream stalls, unexpected crashes) still report.
+const SENTRY_IGNORED_RE =
+  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|(?:^|\s)429.*usage limit/i;
+
+export function isSentryIgnoredMessage(input) {
+  if (!input) return false;
+  if (typeof input === "string") return SENTRY_IGNORED_RE.test(input);
+  try {
+    return SENTRY_IGNORED_RE.test(JSON.stringify(input));
+  } catch {
+    return false;
+  }
+}
+
 // Redact sensitive text (Bearer tokens, API keys, OAuth tokens, secrets, URL credentials, cookies)
 export function redactSensitiveText(text) {
   if (!text || typeof text !== "string") return text;

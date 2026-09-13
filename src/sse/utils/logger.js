@@ -1,6 +1,6 @@
 // Logger utility for cloud
 
-import { captureMessage, matchesIssueKeyword } from "@/lib/sentry";
+import { captureMessage, isSentryIgnoredMessage, matchesIssueKeyword } from "@/lib/sentry";
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -50,6 +50,9 @@ export function line(tag, symbol, message) {
 export function errorLine(tag, symbol, message) {
   console.log(`[${formatTime()}] ${tag} ${symbol} ${message}`);
   try {
+    // Still print to console; skip Sentry for expected multi-account cascade noise
+    // (429 locks, combo fallback, account rotation). Real 5xx/stalls still report.
+    if (isSentryIgnoredMessage(message)) return;
     captureMessage(message, "error", { tags: { tag, symbol, kind: "errorLine" } });
   } catch { /* fail-open */ }
 }
@@ -98,6 +101,7 @@ export function warn(tag, message, data) {
   }
   try {
     if (isSentryIgnoredWarning(tag, message)) return;
+    if (isSentryIgnoredMessage(`[${tag}] ${message}`)) return;
     const fullText = `${tag} ${message} ${data ? formatData(data) : ""}`;
     if (matchesIssueKeyword(fullText) || LEVEL <= LOG_LEVELS.WARN) {
       captureMessage(`[${tag}] ${message}`, "warning", {
@@ -114,6 +118,7 @@ export function error(tag, message, data) {
     console.log(`[${formatTime()}] ❌ [${tag}] ${message}${dataStr}`);
   }
   try {
+    if (isSentryIgnoredMessage(`[${tag}] ${message}`)) return;
     captureMessage(`[${tag}] ${message}`, "error", {
       tags: { tag, kind: "error" },
       extra: data ? { data } : undefined,

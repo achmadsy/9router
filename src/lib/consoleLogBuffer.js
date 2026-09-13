@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config.js";
-import { captureException, captureMessage, matchesIssueKeyword, redactSensitiveText, scrubSensitiveData } from "@/lib/sentry.js";
+import { captureException, captureMessage, isSentryIgnoredMessage, matchesIssueKeyword, redactSensitiveText, scrubSensitiveData } from "@/lib/sentry.js";
 import { isNextjsSpanWarning } from "@/lib/nextjsNoise.js";
 
 const consoleLevels = ["log", "info", "warn", "error", "debug"];
@@ -101,6 +101,9 @@ export function initConsoleLogCapture() {
       state.originals[level](...args);
 
       try {
+        // Expected multi-account cascade noise (429 locks, combo fallback,
+        // account rotation). Real 5xx/stalls still report.
+        if (isSentryIgnoredMessage(line)) return;
         if (level === "error") {
           // Skip lines already handled by dedicated Sentry reporters (logger.js, zcode executor, etc.)
           if (!line.includes("❌ [") && !line.includes("✗ ERROR") && !line.includes("[ZCode Captcha]")) {
