@@ -1,3 +1,11 @@
+# v0.5.76 (2026-09-15)
+
+## Features
+- **API keys**: per-key total token limits (input + output; cache tokens ride inside the canonical prompt total) with **daily / monthly / forever** windows — schema v6 adds `tokenLimit`/`tokenLimitPeriod` to `apiKeys`; create/edit forms on the API Keys page take a limit + period selector, key rows show a usage-vs-limit badge (`tokenUsage` attached to `GET /api/keys` for limited keys); enforcement in `resolveApiKeyContext` returns **429 `insufficient_quota` / `token_limit_exceeded`** with a `retry-after` until the next local midnight / next month (fail-open if the usage lookup errors); usage aggregated from `usageHistory` via new `getApiKeyTokenUsage(apiKeyId, period)`; `tokenLimit`/`tokenLimitPeriod` accepted by `POST /api/keys` and `PUT /api/keys/[id]` (omit to keep current, `null` to clear; unknown periods rejected 400, a set limit without a period defaults to `forever`)
+- **Self-aware**: IN 0 · OUT 0 silent rate-limit detection now scoped to **GLM Coding (`glm`)** only — other providers legitimately complete with zero tokens and no longer get parked as unknown-quota; glm clones resolve to the base id (new `isEmptyUsageRateLimit` gate in `requestDetail.js`, applied to streaming / non-streaming / SSE→JSON paths)
+- **Sentry**: upstream error lines now carry the raw provider response body (truncated to 600 chars) when the extracted message doesn't already include it — `parseUpstreamError` returns `upstreamBody`, `chatCore` appends an `Upstream:` segment to the `ERROR` logLine
+- **Sentry**: CloakBrowser launcher noise no longer reported — `[cloakbrowser]` lifecycle lines and the "CloakBrowser — stealth Chromium" welcome banner are filtered out of console-error/warn capture (captcha/auth failures via `[ZCode Captcha]` still report)
+
 # v0.5.75 (2026-09-10)
 
 ## Features

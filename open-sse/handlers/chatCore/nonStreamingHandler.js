@@ -6,7 +6,7 @@ import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { parseSSEToOpenAIResponse } from "./sseToJsonHandler.js";
 import { unwrapClineEnvelope } from "../../shared/clineEnvelope.js";
-import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats, formatDoneLine, isEmptyUsage } from "./requestDetail.js";
+import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats, formatDoneLine, isEmptyUsageRateLimit } from "./requestDetail.js";
 import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
@@ -274,10 +274,11 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, endpoint: clientRawRequest?.endpoint, silent: true });
   if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
 
-  // IN 0 · OUT 0 on a "successful" body = silent rate-limit. Do not clear
+  // IN 0 · OUT 0 on a "successful" body = silent rate-limit (GLM Coding only —
+  // other providers legitimately complete with zero tokens). Do not clear
   // account error state — lock via self-aware instead (x-retry-after first,
   // else unknown-quota until a manual policy is set).
-  const emptyUsageFail = isEmptyUsage(usage);
+  const emptyUsageFail = isEmptyUsageRateLimit(provider, usage);
   if (emptyUsageFail && onEmptyUsage) {
     const cooldownHint = parseWaitHeaderCooldown(providerResponse.headers, { status: 429 });
     Promise.resolve(onEmptyUsage({ status: 429, errorText: "empty usage (IN 0 · OUT 0) treated as rate limit", cooldownHint }))

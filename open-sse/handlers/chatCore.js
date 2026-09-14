@@ -493,7 +493,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Provider returned error
   if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false, true);
-    const { statusCode, message, resetsAtMs, cooldownHint } = await parseUpstreamError(providerResponse, executor);
+    const { statusCode, message, resetsAtMs, cooldownHint, upstreamBody } = await parseUpstreamError(providerResponse, executor);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKeyId,
@@ -509,7 +509,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
     if (log?.errorLine) {
       const urlStr = providerUrl ? `\n    URL: ${providerUrl}` : "";
-      log.errorLine(reqTag, "✗", `ERROR ${statusCode} · ${provider}/${model} · ${Date.now() - requestStartTime}ms${urlStr}\n    ${errMsg}`);
+      // Attach the raw upstream body when it isn't already the message source —
+      // extracted messages often drop the payload the provider actually sent.
+      const bodyStr = upstreamBody && !errMsg.includes(upstreamBody.slice(0, 120))
+        ? `\n    Upstream: ${upstreamBody.replace(/\s+/g, " ").trim()}`
+        : "";
+      log.errorLine(reqTag, "✗", `ERROR ${statusCode} · ${provider}/${model} · ${Date.now() - requestStartTime}ms${urlStr}\n    ${errMsg}${bodyStr}`);
     }
     reqLogger.logError(new Error(message), finalBody || translatedBody);
     return createErrorResult(statusCode, errMsg, { resetsAtMs, cooldownHint });

@@ -1,5 +1,6 @@
 import { getSettings } from "@/lib/localDb";
 import { authenticateApiKey } from "@/lib/db/index.js";
+import { getApiKeyTokenUsage } from "@/lib/db/repos/usageRepo.js";
 import { extractApiKey } from "./auth.js";
 import { authorizeResource, loadCombosForPolicy, modelNotAllowedResponse } from "@/lib/apiKeys/policy.js";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
@@ -61,7 +62,47 @@ export async function resolveApiKeyContext(request, options = {}) {
     };
   }
 
+  // Per-key total token limit (input+output; cache rides in the prompt total).
+  // Fail-open: if the usage lookup errors, allow the request through.
+  if (keyRow.tokenLimit) {
+    try {
+      const used = await getApiKeyTokenUsage(keyRow.id, keyRow.tokenLimitPeriod);
+      if (used.totalTokens >= keyRow.tokenLimit) {
+        log.warn("API_KEY", `Token limit exceeded for key ${keyRow.id} (${keyRow.name || "unnamed"}): ${used.totalTokens}/${keyRow.tokenLimit} (${keyRow.tokenLimitPeriod})`);
+        return {
+          apiKey,
+          keyRow,
+          errorResponse: Response.json(
+            {
+              error: {
+                message: `API key token limit exceeded (${keyRow.tokenLimitPeriod}): ${used.totalTokens} of ${keyRow.tokenLimit} tokens used`,
+                type: "insufficient_quota",
+                code: "token_limit_exceeded",
+              },
+            },
+            { status: 429, headers: { "retry-after": retryAfterSeconds(keyRow.tokenLimitPeriod) } }
+          ),
+        };
+      }
+    } catch (e) {
+      log.warn("API_KEY", `Token limit check failed (allowing request): ${e?.message || e}`);
+    }
+  }
+
   return { apiKey, keyRow, errorResponse: null };
+}
+
+/** Seconds until the limit window resets (daily → next local midnight, monthly → next month, forever → null). */
+function retryAfterSeconds(period) {
+  if (period === "daily" || period === "monthly") {
+    const now = new Date();
+    const reset = new Date(now);
+    if (period === "daily") reset.setDate(now.getDate() + 1);
+    else reset.setMonth(now.getMonth() + 1);
+    reset.setHours(0, 0, 0, 0);
+    return String(Math.max(1, Math.ceil((reset.getTime() - now.getTime()) / 1000)));
+  }
+  return "0";
 }
 
 /**

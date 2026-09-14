@@ -900,6 +900,40 @@ function foldHistoryRowIntoStats(stats, r, { connectionMap, providerNodeNameMap,
  * Re-aggregate usageHistory for one apiKeyId (whole page scoped).
  * Daily summaries are not keyed, so we never use them here.
  */
+/**
+ * Total tokens (prompt + completion; cached is inside the canonical prompt
+ * total) attributed to an apiKeyId over a limit window.
+ * period: "daily" (local calendar day) | "monthly" (local calendar month) |
+ * "forever" (all time). Unknown period → forever.
+ */
+export async function getApiKeyTokenUsage(apiKeyId, period = "forever") {
+  if (!apiKeyId) return { totalTokens: 0, requests: 0 };
+  const db = await getAdapter();
+  let startMs = 0;
+  if (period === "daily") {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    startMs = d.getTime();
+  } else if (period === "monthly") {
+    const d = new Date();
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    startMs = d.getTime();
+  }
+  const row = db.get(
+    `SELECT COUNT(*) as requests,
+            COALESCE(SUM(promptTokens), 0) as promptTokens,
+            COALESCE(SUM(completionTokens), 0) as completionTokens
+       FROM usageHistory
+      WHERE apiKeyId = ? AND timestamp >= ?`,
+    [apiKeyId, new Date(startMs).toISOString()]
+  );
+  return {
+    totalTokens: (row?.promptTokens || 0) + (row?.completionTokens || 0),
+    requests: row?.requests || 0,
+  };
+}
+
 function aggregateUsageHistoryForKey(db, { days, apiKeyId, connectionMap, providerNodeNameMap, apiKeyMap }) {
   const empty = {
     totalRequests: 0,

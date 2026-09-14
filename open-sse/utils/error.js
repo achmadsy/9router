@@ -50,11 +50,14 @@ export async function writeStreamError(writer, statusCode, message) {
   await writer.write(encoder.encode(`data: ${JSON.stringify(errorBody)}\n\n`));
 }
 
+// Raw upstream bodies are diagnostics only — keep them short for Sentry/logs.
+const UPSTREAM_BODY_MAX = 600;
+
 /**
  * Parse upstream provider error response
  * @param {Response} response - Fetch response from provider
  * @param {object} [executor] - Optional executor with parseError() override for provider-specific parsing
- * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number, cooldownHint?: object|null}>}
+ * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null}>}
  */
 export async function parseUpstreamError(response, executor = null) {
   let bodyText = "";
@@ -63,6 +66,9 @@ export async function parseUpstreamError(response, executor = null) {
   } catch {
     bodyText = "";
   }
+  // Truncated raw body, kept for Sentry/logs when the extracted message alone
+  // doesn't convey what the provider actually said.
+  const upstreamBody = bodyText ? bodyText.slice(0, UPSTREAM_BODY_MAX) : null;
 
   // Self-Aware: parse wait headers from the Response (headers stay available
   // after text()). errorText lets non-429 quota classifications through.
@@ -82,6 +88,7 @@ export async function parseUpstreamError(response, executor = null) {
           message: msg,
           resetsAtMs: parsed.resetsAtMs,
           cooldownHint: parsed.cooldownHint ?? cooldownHint,
+          upstreamBody,
         };
       }
     } catch { /* fall through to default parsing */ }
@@ -98,7 +105,7 @@ export async function parseUpstreamError(response, executor = null) {
   const messageStr = typeof message === "string" ? message : JSON.stringify(message);
   const finalMessage = messageStr || DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`;
 
-  return { statusCode: response.status, message: finalMessage, cooldownHint };
+  return { statusCode: response.status, message: finalMessage, cooldownHint, upstreamBody };
 }
 
 /**

@@ -96,6 +96,20 @@ export function isEmptyUsage(usage) {
   return !inTok && !outTok;
 }
 
+// GLM Coding (z.ai) returns 200 with IN 0 · OUT 0 when the Coding Plan quota
+// is silently exhausted. Other providers legitimately complete with zero
+// tokens (empty prompts, cached-only answers) — don't rate-limit-lock them.
+const EMPTY_USAGE_AS_429_PROVIDERS = new Set(["glm"]);
+
+/**
+ * True when a zero-token completion should be treated as a silent 429.
+ * Provider clones ("glm-clone-xxx") resolve to their base id first.
+ */
+export function isEmptyUsageRateLimit(provider, usage) {
+  const base = typeof provider === "string" ? provider.split("-clone-")[0] : provider;
+  return EMPTY_USAGE_AS_429_PROVIDERS.has(base) && isEmptyUsage(usage);
+}
+
 export function formatDoneLine({ usage, latency }) {
   const u = usage || {};
   const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;

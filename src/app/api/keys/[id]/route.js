@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey, getApiKeyAccessTargets } from "@/lib/localDb";
-import { API_KEY_ACCESS_MODE } from "@/lib/apiKeys/constants.js";
+import { API_KEY_ACCESS_MODE, parseTokenLimitInput } from "@/lib/apiKeys/constants.js";
 import { normalizeTargets } from "@/lib/apiKeys/policy.js";
 import { parsePolicyInput } from "@/lib/apiKeys/validate.js";
 
@@ -56,6 +56,11 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: policy.error }, { status: 400 });
     }
 
+    const tokenLimit = parseTokenLimitInput(body);
+    if (tokenLimit.error) {
+      return NextResponse.json({ error: tokenLimit.error }, { status: 400 });
+    }
+
     const updateData = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
@@ -71,6 +76,10 @@ export async function PUT(request, { params }) {
         updateData.accessMode = API_KEY_ACCESS_MODE.RESTRICTED;
       }
     }
+
+    // Omitted → keep current; tokenLimit null → clear the limit.
+    if (tokenLimit.tokenLimit !== undefined) updateData.tokenLimit = tokenLimit.tokenLimit;
+    if (tokenLimit.tokenLimitPeriod !== undefined) updateData.tokenLimitPeriod = tokenLimit.tokenLimitPeriod;
 
     const updated = await updateApiKey(id, updateData);
     if (!updated) {

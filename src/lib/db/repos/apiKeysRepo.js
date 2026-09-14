@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
-import { API_KEY_ACCESS_MODE, API_KEY_HASH_VERSION } from "@/lib/apiKeys/constants.js";
+import { API_KEY_ACCESS_MODE, API_KEY_HASH_VERSION, API_KEY_TOKEN_LIMIT_PERIODS } from "@/lib/apiKeys/constants.js";
 import {
   generateApiKeySecret,
   computeApiKeyDigest,
@@ -24,7 +24,15 @@ function rowToKey(row) {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     rerolledAt: row.rerolledAt || null,
+    tokenLimit: row.tokenLimit ?? null,
+    tokenLimitPeriod: row.tokenLimit && row.tokenLimitPeriod ? row.tokenLimitPeriod : null,
   };
+}
+
+/** Valid period or null. Unknown values are dropped rather than trusted. */
+export function normalizeTokenLimitPeriod(period) {
+  if (!period) return null;
+  return Object.values(API_KEY_TOKEN_LIMIT_PERIODS).includes(period) ? period : null;
 }
 
 function rowToTarget(row) {
@@ -116,14 +124,16 @@ export async function createApiKey(name, machineId, options = {}) {
   const accessMode = options.accessMode === API_KEY_ACCESS_MODE.RESTRICTED
     ? API_KEY_ACCESS_MODE.RESTRICTED
     : API_KEY_ACCESS_MODE.ALL;
+  const tokenLimit = Number.isInteger(options.tokenLimit) && options.tokenLimit > 0 ? options.tokenLimit : null;
+  const tokenLimitPeriod = tokenLimit ? normalizeTokenLimitPeriod(options.tokenLimitPeriod) || API_KEY_TOKEN_LIMIT_PERIODS.FOREVER : null;
   const now = new Date().toISOString();
   const id = uuidv4();
 
   db.transaction(() => {
     db.run(
-      `INSERT INTO apiKeys(id, keyHash, keyHint, hashVersion, name, machineId, accessMode, isActive, createdAt, updatedAt, rerolledAt, secretEncrypted)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-      [id, keyHash, keyHint, API_KEY_HASH_VERSION, name, machineId || null, accessMode, 1, now, now, encryptApiKeySecret(secret)]
+      `INSERT INTO apiKeys(id, keyHash, keyHint, hashVersion, name, machineId, accessMode, isActive, createdAt, updatedAt, rerolledAt, secretEncrypted, tokenLimit, tokenLimitPeriod)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+      [id, keyHash, keyHint, API_KEY_HASH_VERSION, name, machineId || null, accessMode, 1, now, now, encryptApiKeySecret(secret), tokenLimit, tokenLimitPeriod]
     );
     if (accessMode === API_KEY_ACCESS_MODE.RESTRICTED) {
       insertTargets(db, id, options.targets || []);
@@ -176,9 +186,22 @@ export async function updateApiKey(id, data = {}) {
       if (nextTargets.length > 0) accessMode = API_KEY_ACCESS_MODE.RESTRICTED;
     }
 
+    // tokenLimit/period omitted → keep current; tokenLimit null → clear limit.
+    let tokenLimit = existing.tokenLimit ?? null;
+    let tokenLimitPeriod = existing.tokenLimitPeriod ?? null;
+    if (data.tokenLimit !== undefined || data.tokenLimitPeriod !== undefined) {
+      if (data.tokenLimit !== undefined) {
+        tokenLimit = Number.isInteger(data.tokenLimit) && data.tokenLimit > 0 ? data.tokenLimit : null;
+      }
+      if (data.tokenLimitPeriod !== undefined) {
+        tokenLimitPeriod = normalizeTokenLimitPeriod(data.tokenLimitPeriod);
+      }
+      tokenLimitPeriod = tokenLimit ? (tokenLimitPeriod || API_KEY_TOKEN_LIMIT_PERIODS.FOREVER) : null;
+    }
+
     db.run(
-      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, accessMode = ?, updatedAt = ? WHERE id = ?`,
-      [name, machineId || null, isActive, accessMode, now, id]
+      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, accessMode = ?, tokenLimit = ?, tokenLimitPeriod = ?, updatedAt = ? WHERE id = ?`,
+      [name, machineId || null, isActive, accessMode, tokenLimit, tokenLimitPeriod, now, id]
     );
 
     if (replaceTargets) {

@@ -25,11 +25,11 @@ export default function ApiKeysPageClient() {
   const [visibleSecrets, setVisibleSecrets] = useState(new Set());
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: "", accessMode: "all", targets: [] });
+  const [createForm, setCreateForm] = useState({ name: "", accessMode: "all", targets: [], tokenLimit: "", tokenLimitPeriod: "forever" });
   const [creating, setCreating] = useState(false);
 
   const [policyKey, setPolicyKey] = useState(null);
-  const [policyForm, setPolicyForm] = useState({ name: "", isActive: true, accessMode: "all", targets: [] });
+  const [policyForm, setPolicyForm] = useState({ name: "", isActive: true, accessMode: "all", targets: [], tokenLimit: "", tokenLimitPeriod: "forever" });
   const [savingPolicy, setSavingPolicy] = useState(false);
 
   const [requireApiKey, setRequireApiKey] = useState(false);
@@ -158,6 +158,8 @@ export default function ApiKeysPageClient() {
           name: createForm.name.trim(),
           accessMode: createForm.accessMode,
           targets: createForm.accessMode === "restricted" ? createForm.targets : [],
+          tokenLimit: createForm.tokenLimit === "" ? null : Number(createForm.tokenLimit),
+          tokenLimitPeriod: createForm.tokenLimitPeriod,
         }),
       });
       if (!res.ok) {
@@ -167,7 +169,7 @@ export default function ApiKeysPageClient() {
       const data = await res.json();
       openSecretModal(data.secret || data.key, `API Key Created — ${data.name || createForm.name}`);
       setCreateOpen(false);
-      setCreateForm({ name: "", accessMode: "all", targets: [] });
+      setCreateForm({ name: "", accessMode: "all", targets: [], tokenLimit: "", tokenLimitPeriod: "forever" });
       await loadKeys();
     } catch (e2) {
       setStatus({ type: "error", message: `Create failed: ${e2.message}` });
@@ -203,6 +205,8 @@ export default function ApiKeysPageClient() {
       isActive: key.isActive !== false,
       accessMode: key.accessMode || "all",
       targets: key.targets || [],
+      tokenLimit: key.tokenLimit != null ? String(key.tokenLimit) : "",
+      tokenLimitPeriod: key.tokenLimitPeriod || "forever",
     });
   };
 
@@ -220,6 +224,8 @@ export default function ApiKeysPageClient() {
           isActive: policyForm.isActive,
           accessMode: policyForm.accessMode,
           targets: policyForm.accessMode === "restricted" ? policyForm.targets : [],
+          tokenLimit: policyForm.tokenLimit === "" ? null : Number(policyForm.tokenLimit),
+          tokenLimitPeriod: policyForm.tokenLimitPeriod,
         }),
       });
       if (!res.ok) {
@@ -364,6 +370,13 @@ export default function ApiKeysPageClient() {
                       {key.keyHint}
                     </p>
                     <p className="text-text-muted text-xs mt-0.5">{targetSummary}</p>
+                    {key.tokenLimit ? (
+                      <LimitBadge
+                        limit={key.tokenLimit}
+                        period={key.tokenLimitPeriod}
+                        usage={key.tokenUsage}
+                      />
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
                     <button
@@ -512,6 +525,7 @@ export default function ApiKeysPageClient() {
                 setCreateForm((f) => ({ ...f, accessMode, targets }))
               }
             />
+            <TokenLimitFields form={createForm} setForm={setCreateForm} idPrefix="ak-create" />
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -575,6 +589,7 @@ export default function ApiKeysPageClient() {
                 setPolicyForm((f) => ({ ...f, accessMode, targets }))
               }
             />
+            <TokenLimitFields form={policyForm} setForm={setPolicyForm} idPrefix="ak-edit" />
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -595,5 +610,74 @@ export default function ApiKeysPageClient() {
         </div>
       )}
     </div>
+  );
+}
+
+const TOKEN_LIMIT_PERIODS = [
+  { value: "daily", label: "Daily" },
+  { value: "monthly", label: "Monthly" },
+  { value: "forever", label: "Forever" },
+];
+
+function formatTokenCount(n) {
+  if (n == null) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 10_000) return `${(n / 1000).toFixed(0)}K`;
+  return String(n);
+}
+
+function periodLabel(period) {
+  return TOKEN_LIMIT_PERIODS.find((p) => p.value === period)?.label || "Forever";
+}
+
+/** Limit number + period selector shared by create and edit modals. */
+function TokenLimitFields({ form, setForm, idPrefix }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-text-main mb-1">
+        Token limit <span className="text-text-muted font-normal">(total input + output, optional)</span>
+      </label>
+      <div className="flex gap-2">
+        <input
+          id={`${idPrefix}-limit`}
+          type="number"
+          min="1"
+          step="1"
+          placeholder="No limit"
+          value={form.tokenLimit}
+          onChange={(e) => setForm((f) => ({ ...f, tokenLimit: e.target.value }))}
+          className="flex-1 bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <select
+          id={`${idPrefix}-period`}
+          value={form.tokenLimitPeriod}
+          onChange={(e) => setForm((f) => ({ ...f, tokenLimitPeriod: e.target.value }))}
+          className="bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          {TOKEN_LIMIT_PERIODS.map((p) => (
+            <option key={p.value} value={p.value}>{p.label}</option>
+          ))}
+        </select>
+      </div>
+      <p className="text-text-muted text-xs mt-1">
+        Requests are rejected with 429 once the key&apos;s cumulative tokens (input + output) reach the limit.
+      </p>
+    </div>
+  );
+}
+
+/** Usage-vs-limit chip shown on each key row. */
+function LimitBadge({ limit, period, usage }) {
+  const used = usage ?? null;
+  const pct = used != null && limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : null;
+  const exhausted = pct != null && pct >= 100;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs ${
+        exhausted ? "bg-red-500/15 text-red-500" : "bg-blue-500/15 text-blue-500"
+      }`}
+    >
+      Limit {periodLabel(period)} · {used != null ? `${formatTokenCount(used)} / ${formatTokenCount(limit)}` : formatTokenCount(limit)}{pct != null ? ` (${pct}%)` : ""}
+    </span>
   );
 }

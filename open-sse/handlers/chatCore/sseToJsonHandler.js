@@ -3,7 +3,7 @@ import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine, isEmptyUsage } from "./requestDetail.js";
+import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine, isEmptyUsageRateLimit } from "./requestDetail.js";
 import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { isClaudeClassifierRequest, openAICompletionToClaudeMessage } from "./claudeMessageResponse.js";
@@ -221,7 +221,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       appendLog({ tokens: usage, status: "200 OK" });
       saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, endpoint: clientRawRequest?.endpoint, silent: true });
       if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
-      const emptyResponsesFail = isEmptyUsage(usage);
+      const emptyResponsesFail = isEmptyUsageRateLimit(provider, usage);
       if (emptyResponsesFail && onEmptyUsage) {
         const cooldownHint = parseWaitHeaderCooldown(providerResponse.headers, { status: 429 });
         Promise.resolve(onEmptyUsage({ status: 429, errorText: "empty usage (IN 0 · OUT 0) treated as rate limit", cooldownHint })).catch(() => {});
@@ -338,7 +338,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     appendLog({ tokens: usage, status: "200 OK" });
     saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, endpoint: clientRawRequest?.endpoint, silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
-    if (isEmptyUsage(usage) && onEmptyUsage) {
+    if (isEmptyUsageRateLimit(provider, usage) && onEmptyUsage) {
       const cooldownHint = parseWaitHeaderCooldown(providerResponse.headers, { status: 429 });
       Promise.resolve(onEmptyUsage({ status: 429, errorText: "empty usage (IN 0 · OUT 0) treated as rate limit", cooldownHint })).catch(() => {});
     } else if (onRequestSuccess) {

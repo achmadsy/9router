@@ -69,6 +69,13 @@ function formatArg(arg) {
   return typeof redactSensitiveText === "function" ? redactSensitiveText(str) : str;
 }
 
+// CloakBrowser lifecycle chatter (welcome banner, binary download/geoip
+// progress, proxy normalization) is routine launcher output, not an app error.
+// Real captcha/auth failures still come through as [ZCode Captcha] lines.
+function isCloakBrowserNoise(line) {
+  return line.includes("[cloakbrowser]") || line.includes("CloakBrowser — stealth Chromium");
+}
+
 function appendLine(line) {
   state.logs.push(line);
   const maxLines = CONSOLE_LOG_CONFIG.maxLines;
@@ -104,6 +111,8 @@ export function initConsoleLogCapture() {
         // Expected multi-account cascade noise (429 locks, combo fallback,
         // account rotation). Real 5xx/stalls still report.
         if (isSentryIgnoredMessage(line)) return;
+        // CloakBrowser launch/download banner + lifecycle info — routine, not errors.
+        if (isCloakBrowserNoise(line)) return;
         if (level === "error") {
           // Skip lines already handled by dedicated Sentry reporters (logger.js, zcode executor, etc.)
           if (!line.includes("❌ [") && !line.includes("✗ ERROR") && !line.includes("[ZCode Captcha]")) {
@@ -115,7 +124,7 @@ export function initConsoleLogCapture() {
             }
           }
         } else if (level === "warn") {
-          if (!line.includes("⚠️  [") && !line.includes("[ZCode Captcha]")) {
+          if (!line.includes("⚠️  [") && !line.includes("[ZCode Captcha]") && !isCloakBrowserNoise(line)) {
             if (matchesIssueKeyword(line)) {
               captureMessage(line, "warning", { tags: { source: "console.warn" } });
             }

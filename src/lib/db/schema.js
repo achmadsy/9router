@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -90,6 +90,11 @@ export const TABLES = {
       rerolledAt: "TEXT",
       // AES-GCM ciphertext only — never plaintext. Auth uses keyHash.
       secretEncrypted: "TEXT",
+      // Per-key total token limit (input + output, cache tokens are inside the
+      // canonical prompt total). NULL = unlimited.
+      tokenLimit: "INTEGER",
+      // "daily" | "monthly" | "forever" — window the limit applies to.
+      tokenLimitPeriod: "TEXT",
     },
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_ak_key_hash ON apiKeys(keyHash)",
