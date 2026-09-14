@@ -66,6 +66,45 @@ const SAMPLE_GLM_TOKENS_USAGE = {
   success: true,
 };
 
+const SAMPLE_START_PLAN_BALANCE = {
+  code: 0,
+  msg: "ok",
+  data: {
+    plans: [
+      {
+        name: "GLM Start Plan",
+        plan_id: "zai-start-plan",
+        status: "active",
+      },
+    ],
+    balances: [
+      {
+        entitlement_id: "ent-1",
+        show_name: "GLM-5.3",
+        plan_id: "zai-start-plan",
+        total_units: 1000,
+        used_units: 250,
+        remaining_units: 750,
+        available_units: 750,
+        reserved_units: 0,
+        expires_at: 1787905548,
+        capabilities: ["model:GLM-5.3"],
+        meter: "model_usage",
+      },
+      {
+        entitlement_id: "ent-2",
+        show_name: "GLM-5.3-Flash",
+        plan_id: "zai-start-plan",
+        total_units: 500,
+        used_units: 0,
+        remaining_units: 500,
+        expires_at: 0,
+        capabilities: ["model:GLM-5.3-Flash"],
+      },
+    ],
+  },
+};
+
 describe("glm registry usage flags", () => {
   it("is listed for apikey quota dashboard", () => {
     expect(USAGE_SUPPORTED_PROVIDERS).toContain("glm");
@@ -188,5 +227,138 @@ describe("getGlmUsage and getUsageForProvider(glm)", () => {
     });
 
     expect(usage.message).toBe("GLM API key not available.");
+  });
+});
+
+describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("JWT-only connection returns Start Plan buckets without Coding Plan fetch", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(jsonResponse(SAMPLE_START_PLAN_BALANCE));
+
+    const usage = await getGlmUsage(undefined, "glm", null, {
+      zcodeJwtToken: "fake-jwt",
+    });
+
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = proxyAwareFetch.mock.calls[0];
+    expect(String(url)).toContain("https://zcode.z.ai/api/v1/zcode-plan/billing/balance");
+    expect(String(url)).toContain("app_version=");
+    expect(opts.headers.Authorization).toBe("Bearer fake-jwt");
+
+    expect(usage.plan).toBe("Start");
+    expect(usage.quotas["Start: GLM-5.3"]).toMatchObject({
+      used: 250,
+      total: 1000,
+      remaining: 750,
+      remainingPercentage: 75,
+      resetAt: new Date(1787905548 * 1000).toISOString(),
+    });
+    expect(usage.quotas["Start: GLM-5.3-Flash"]).toMatchObject({
+      used: 0,
+      total: 500,
+      remaining: 500,
+      remainingPercentage: 100,
+      resetAt: null,
+    });
+  });
+
+  it("JWT + apiKey merges Start Plan with Coding Plan quotas", async () => {
+    proxyAwareFetch.mockImplementation(async (url) =>
+      jsonResponse(
+        String(url).includes("billing/balance")
+          ? SAMPLE_START_PLAN_BALANCE
+          : SAMPLE_GLM_CREDIT_USAGE,
+      ),
+    );
+
+    const usage = await getGlmUsage("glm-key", "glm", null, {
+      zcodeJwtToken: "fake-jwt",
+    });
+
+    expect(usage.plan).toBe("Start");
+    expect(usage.quotas["Start: GLM-5.3"].remaining).toBe(750);
+    expect(usage.quotas["Session (5h)"].used).toBe(25);
+    expect(usage.quotas["Weekly (7d)"].used).toBe(10);
+  });
+
+  it("JWT present but no active plan falls through to Coding Plan only", async () => {
+    proxyAwareFetch.mockImplementation(async (url) =>
+      jsonResponse(
+        String(url).includes("billing/balance")
+          ? {
+              code: 0,
+              data: {
+                plans: [{ name: "old", plan_id: "zai-start-plan", status: "expired" }],
+                balances: [],
+              },
+            }
+          : SAMPLE_GLM_CREDIT_USAGE,
+      ),
+    );
+
+    const usage = await getGlmUsage("glm-key", "glm", null, {
+      zcodeJwtToken: "fake-jwt",
+    });
+
+    expect(usage.quotas["Start:"]).toBeUndefined();
+    expect(usage.quotas["Session (5h)"]).toBeTruthy();
+    expect(usage.plan).toBe("Lite");
+  });
+
+  it("JWT-only, non-zero code → soft message", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(
+      jsonResponse({ code: 1113, msg: "no plan", data: null }),
+    );
+
+    const usage = await getGlmUsage(undefined, "glm", null, {
+      zcodeJwtToken: "fake-jwt",
+    });
+
+    expect(usage.message).toBe("no plan");
+    expect(usage.quotas).toBeUndefined();
+  });
+
+  it("JWT-only, HTTP 401 → invalid JWT message", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(jsonResponse({}, 401));
+
+    const usage = await getGlmUsage(undefined, "glm", null, {
+      zcodeJwtToken: "expired",
+    });
+
+    expect(usage.message).toBe("GLM Start Plan JWT invalid or expired.");
+  });
+
+  it("balances missing numeric units are skipped", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(
+      jsonResponse({
+        code: 0,
+        data: {
+          plans: [{ plan_id: "zai-start-plan", status: "active" }],
+          balances: [
+            { entitlement_id: "empty", total_units: null, used_units: null, remaining_units: null },
+            {
+              entitlement_id: "meter-only",
+              meter: "model_usage",
+              total_units: 10,
+              used_units: 10,
+              remaining_units: 0,
+            },
+          ],
+        },
+      }),
+    );
+
+    const usage = await getGlmUsage(undefined, "glm", null, { zcodeJwtToken: "jwt" });
+
+    expect(usage.quotas["Start: model_usage"]).toMatchObject({
+      used: 10,
+      total: 10,
+      remaining: 0,
+      remainingPercentage: 0,
+    });
+    expect(Object.keys(usage.quotas)).toHaveLength(1);
   });
 });

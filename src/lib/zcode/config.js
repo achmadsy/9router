@@ -10,6 +10,10 @@ export default {
   codingPlanUrl:
     process.env.ZAI_CODING_PLAN_URL ||
     "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages",
+  /** Start Plan billing balance (native ZCode quota panel). */
+  startPlanBalanceUrl:
+    process.env.ZAI_START_PLAN_BALANCE_URL ||
+    "https://zcode.z.ai/api/v1/zcode-plan/billing/balance",
   apiKeyFallbackUrl:
     process.env.ZAI_FALLBACK_URL || "https://api.z.ai/api/anthropic/v1/messages",
   /** OpenAI-format coding-plan / API-key endpoint (registry multi-transport). */
