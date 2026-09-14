@@ -102,65 +102,135 @@ function mapStartPlanBalances(balances, quotas = {}) {
   return quotas;
 }
 
+/** Map billing/current entitlements → daily grant rows when balance is unavailable. */
+function mapStartPlanEntitlements(plans, quotas = {}) {
+  if (!Array.isArray(plans)) return quotas;
+
+  for (const plan of plans) {
+    const status = plan?.status?.trim().toLowerCase();
+    if (status !== "active") continue;
+    const planId = plan?.plan_id?.trim().toLowerCase();
+    const name = plan?.name?.trim().toLowerCase();
+    const identity = (!planId && !name) || isStartPlanIdentity(planId) || isStartPlanIdentity(name);
+    if (!identity) continue;
+
+    const entitlements = Array.isArray(plan.entitlements) ? plan.entitlements : [];
+    for (const ent of entitlements) {
+      const total = parseNumberOrNull(ent?.grant_units);
+      if (total === null || total <= 0) continue;
+
+      const models = normalizeCapabilities(ent?.capabilities);
+      const showName = typeof ent?.show_name === "string" ? ent.show_name.trim() : "";
+      const label =
+        showName ||
+        models.join(", ") ||
+        (typeof ent?.meter === "string" && ent.meter.trim()) ||
+        "model_usage";
+      const period =
+        typeof ent?.period === "string" && ent.period.trim()
+          ? ` (${ent.period.trim()})`
+          : "";
+
+      let key = `${START_PLAN_LEVEL}: ${label}${period}`;
+      let suffix = 2;
+      while (quotas[key]) {
+        key = `${START_PLAN_LEVEL}: ${label}${period} (${suffix++})`;
+      }
+
+      // No used counter from /current — show full grant (100% remaining).
+      quotas[key] = {
+        used: 0,
+        total,
+        remaining: total,
+        remainingPercentage: 100,
+        resetAt: null,
+        unlimited: false,
+      };
+    }
+  }
+
+  return quotas;
+}
+
+async function fetchJsonBare(url, jwt, proxyOptions) {
+  const response = await proxyAwareFetch(
+    url,
+    {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: "application/json",
+      },
+    },
+    proxyOptions,
+  );
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      return { error: "GLM Start Plan JWT invalid or expired.", status: 401 };
+    }
+    return { error: `GLM Start Plan quota API error (${response.status}).`, status: response.status };
+  }
+
+  try {
+    const json = await response.json();
+    const code = json?.code;
+    const envelopeOk =
+      json?.success !== false &&
+      (code === undefined || code === null || code === 0 || code === 200);
+    if (!envelopeOk) {
+      return { error: json?.msg || "GLM Start Plan unavailable.", code };
+    }
+    return { json };
+  } catch {
+    return { error: "GLM Start Plan quota API returned invalid JSON." };
+  }
+}
+
 /**
- * Fetch Start Plan balance via zcode JWT (native ZCode panel).
- * Soft-fails: returns { quotas } | { message } | null (no JWT / skip).
+ * Fetch Start Plan via zcode JWT.
+ * 1) native /billing/balance (used + remaining buckets)
+ * 2) /billing/current (plans + daily grants) when balance is 3001 / empty
+ * Soft-fails: { plan, quotas } | { message } | null (no JWT).
  */
 async function fetchStartPlanUsage(jwt, proxyOptions) {
   if (!jwt) return null;
 
-  const url = new URL(zcodeConfig.startPlanBalanceUrl);
-  url.searchParams.set("app_version", zcodeConfig.appVersion);
-  const quotaUrl = url.toString();
+  const balanceUrl = new URL(zcodeConfig.startPlanBalanceUrl);
+  balanceUrl.searchParams.set("app_version", zcodeConfig.appVersion);
 
-  let response;
   try {
-    response = await proxyAwareFetch(
-      quotaUrl,
-      {
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-          Accept: "application/json",
-        },
-      },
-      proxyOptions,
-    );
+    const balance = await fetchJsonBare(balanceUrl.toString(), jwt, proxyOptions);
+    if (balance.json) {
+      const data = balance.json.data && typeof balance.json.data === "object" ? balance.json.data : {};
+      if (hasActiveStartPlan(data.plans)) {
+        const quotas = mapStartPlanBalances(data.balances, {});
+        if (Object.keys(quotas).length > 0) {
+          return { plan: START_PLAN_LEVEL, quotas };
+        }
+      }
+    }
+    // fall through to current (balance often returns 3001 parameter error)
+  } catch {
+    /* fall through to current */
+  }
+
+  try {
+    const current = await fetchJsonBare(zcodeConfig.startPlanCurrentUrl, jwt, proxyOptions);
+    if (!current.json) {
+      return { message: current.error || "GLM Start Plan unavailable." };
+    }
+    const data = current.json.data && typeof current.json.data === "object" ? current.json.data : {};
+    if (!hasActiveStartPlan(data.plans)) {
+      return { message: "GLM Start Plan not active." };
+    }
+    const quotas = mapStartPlanEntitlements(data.plans, {});
+    if (Object.keys(quotas).length === 0) {
+      return { message: "GLM Start Plan active but no grants returned." };
+    }
+    return { plan: START_PLAN_LEVEL, quotas };
   } catch (error) {
     return { message: `GLM Start Plan error: ${error.message}` };
   }
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      return { message: "GLM Start Plan JWT invalid or expired." };
-    }
-    return { message: `GLM Start Plan quota API error (${response.status}).` };
-  }
-
-  let json;
-  try {
-    json = await response.json();
-  } catch {
-    return { message: "GLM Start Plan quota API returned invalid JSON." };
-  }
-
-  const code = json?.code;
-  const envelopeOk =
-    json?.success !== false && (code === undefined || code === null || code === 0 || code === 200);
-  if (!envelopeOk) {
-    return { message: json?.msg || "GLM Start Plan unavailable." };
-  }
-
-  const data = json?.data && typeof json.data === "object" ? json.data : {};
-  if (!hasActiveStartPlan(data.plans)) {
-    return { message: "GLM Start Plan not active." };
-  }
-
-  const quotas = mapStartPlanBalances(data.balances, {});
-  if (Object.keys(quotas).length === 0) {
-    return { message: "GLM Start Plan active but no balance buckets returned." };
-  }
-
-  return { plan: START_PLAN_LEVEL, quotas };
 }
 
 /**
@@ -250,6 +320,10 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null, provide
 
     // Prefer Start Plan label when both sources present.
     const planLabel = startPlan?.plan ? START_PLAN_LEVEL : plan;
+
+    if (Object.keys(quotas).length === 0) {
+      return { message: startPlan?.message || "GLM quota unavailable." };
+    }
 
     return { plan: planLabel, quotas };
   } catch (error) {

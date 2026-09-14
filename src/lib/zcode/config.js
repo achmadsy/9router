@@ -14,6 +14,10 @@ export default {
   startPlanBalanceUrl:
     process.env.ZAI_START_PLAN_BALANCE_URL ||
     "https://zcode.z.ai/api/v1/zcode-plan/billing/balance",
+  /** Start Plan plans/entitlements (works bare; used when balance returns 3001). */
+  startPlanCurrentUrl:
+    process.env.ZAI_START_PLAN_CURRENT_URL ||
+    "https://zcode.z.ai/api/v1/zcode-plan/billing/current",
   apiKeyFallbackUrl:
     process.env.ZAI_FALLBACK_URL || "https://api.z.ai/api/anthropic/v1/messages",
   /** OpenAI-format coding-plan / API-key endpoint (registry multi-transport). */
