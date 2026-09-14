@@ -5,6 +5,7 @@
 
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import zcodeConfig from "../../../src/lib/zcode/config.js";
+import { buildZcodeBalanceHeaders } from "../../../src/lib/zcode/headers.js";
 import { U } from "./shared.js";
 
 // GLM quota endpoints (region-aware) — url from registry transport.usage
@@ -102,95 +103,9 @@ function mapStartPlanBalances(balances, quotas = {}) {
   return quotas;
 }
 
-/** Map billing/current entitlements → daily grant rows when balance is unavailable. */
-function mapStartPlanEntitlements(plans, quotas = {}) {
-  if (!Array.isArray(plans)) return quotas;
-
-  for (const plan of plans) {
-    const status = plan?.status?.trim().toLowerCase();
-    if (status !== "active") continue;
-    const planId = plan?.plan_id?.trim().toLowerCase();
-    const name = plan?.name?.trim().toLowerCase();
-    const identity = (!planId && !name) || isStartPlanIdentity(planId) || isStartPlanIdentity(name);
-    if (!identity) continue;
-
-    const entitlements = Array.isArray(plan.entitlements) ? plan.entitlements : [];
-    for (const ent of entitlements) {
-      const total = parseNumberOrNull(ent?.grant_units);
-      if (total === null || total <= 0) continue;
-
-      const models = normalizeCapabilities(ent?.capabilities);
-      const showName = typeof ent?.show_name === "string" ? ent.show_name.trim() : "";
-      const label =
-        showName ||
-        models.join(", ") ||
-        (typeof ent?.meter === "string" && ent.meter.trim()) ||
-        "model_usage";
-      const period =
-        typeof ent?.period === "string" && ent.period.trim()
-          ? ` (${ent.period.trim()})`
-          : "";
-
-      let key = `${START_PLAN_LEVEL}: ${label}${period}`;
-      let suffix = 2;
-      while (quotas[key]) {
-        key = `${START_PLAN_LEVEL}: ${label}${period} (${suffix++})`;
-      }
-
-      // No used counter from /current — show full grant (100% remaining).
-      quotas[key] = {
-        used: 0,
-        total,
-        remaining: total,
-        remainingPercentage: 100,
-        resetAt: null,
-        unlimited: false,
-      };
-    }
-  }
-
-  return quotas;
-}
-
-async function fetchJsonBare(url, jwt, proxyOptions) {
-  const response = await proxyAwareFetch(
-    url,
-    {
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: "application/json",
-      },
-    },
-    proxyOptions,
-  );
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      return { error: "GLM Start Plan JWT invalid or expired.", status: 401 };
-    }
-    return { error: `GLM Start Plan quota API error (${response.status}).`, status: response.status };
-  }
-
-  try {
-    const json = await response.json();
-    const code = json?.code;
-    const envelopeOk =
-      json?.success !== false &&
-      (code === undefined || code === null || code === 0 || code === 200);
-    if (!envelopeOk) {
-      return { error: json?.msg || "GLM Start Plan unavailable.", code };
-    }
-    return { json };
-  } catch {
-    return { error: "GLM Start Plan quota API returned invalid JSON." };
-  }
-}
-
 /**
- * Fetch Start Plan via zcode JWT.
- * 1) native /billing/balance (used + remaining buckets)
- * 2) /billing/current (plans + daily grants) when balance is 3001 / empty
- * Soft-fails: { plan, quotas } | { message } | null (no JWT).
+ * Fetch Start Plan balance exactly like native ZCode NodeApiClient:
+ * GET /billing/balance?app_version=... with GUI source headers + Bearer JWT.
  */
 async function fetchStartPlanUsage(jwt, proxyOptions) {
   if (!jwt) return null;
@@ -199,34 +114,47 @@ async function fetchStartPlanUsage(jwt, proxyOptions) {
   balanceUrl.searchParams.set("app_version", zcodeConfig.appVersion);
 
   try {
-    const balance = await fetchJsonBare(balanceUrl.toString(), jwt, proxyOptions);
-    if (balance.json) {
-      const data = balance.json.data && typeof balance.json.data === "object" ? balance.json.data : {};
-      if (hasActiveStartPlan(data.plans)) {
-        const quotas = mapStartPlanBalances(data.balances, {});
-        if (Object.keys(quotas).length > 0) {
-          return { plan: START_PLAN_LEVEL, quotas };
-        }
-      }
-    }
-    // fall through to current (balance often returns 3001 parameter error)
-  } catch {
-    /* fall through to current */
-  }
+    const response = await proxyAwareFetch(
+      balanceUrl.toString(),
+      {
+        method: "GET",
+        headers: buildZcodeBalanceHeaders(jwt),
+      },
+      proxyOptions,
+    );
 
-  try {
-    const current = await fetchJsonBare(zcodeConfig.startPlanCurrentUrl, jwt, proxyOptions);
-    if (!current.json) {
-      return { message: current.error || "GLM Start Plan unavailable." };
+    if (!response.ok) {
+      if (response.status === 401) {
+        return { message: "GLM Start Plan JWT invalid or expired." };
+      }
+      return { message: `GLM Start Plan quota API error (${response.status}).` };
     }
-    const data = current.json.data && typeof current.json.data === "object" ? current.json.data : {};
+
+    let json;
+    try {
+      json = await response.json();
+    } catch {
+      return { message: "GLM Start Plan quota API returned invalid JSON." };
+    }
+
+    const code = json?.code;
+    const envelopeOk =
+      json?.success !== false &&
+      (code === undefined || code === null || code === 0 || code === 200);
+    if (!envelopeOk) {
+      return { message: json?.msg || "GLM Start Plan unavailable." };
+    }
+
+    const data = json?.data && typeof json.data === "object" ? json.data : {};
     if (!hasActiveStartPlan(data.plans)) {
       return { message: "GLM Start Plan not active." };
     }
-    const quotas = mapStartPlanEntitlements(data.plans, {});
+
+    const quotas = mapStartPlanBalances(data.balances, {});
     if (Object.keys(quotas).length === 0) {
-      return { message: "GLM Start Plan active but no grants returned." };
+      return { message: "GLM Start Plan active but no balance buckets returned." };
     }
+
     return { plan: START_PLAN_LEVEL, quotas };
   } catch (error) {
     return { message: `GLM Start Plan error: ${error.message}` };

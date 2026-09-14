@@ -4,6 +4,16 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(),
 }));
 
+vi.mock("../../src/lib/zcode/headers.js", () => ({
+  buildZcodeBalanceHeaders: vi.fn((jwt) => ({
+    "User-Agent": "ZCode/3.11.2",
+    "X-ZCode-App-Version": "3.11.2",
+    "X-Device-Mid": "test-device-mid",
+    "x-request-id": "test-request-id",
+    Authorization: `Bearer ${jwt}`,
+  })),
+}));
+
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import { getUsageForProvider } from "../../open-sse/services/usage.js";
 import { getGlmUsage } from "../../open-sse/services/usage/glm.js";
@@ -246,7 +256,19 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
     const [url, opts] = proxyAwareFetch.mock.calls[0];
     expect(String(url)).toContain("https://zcode.z.ai/api/v1/zcode-plan/billing/balance");
     expect(String(url)).toContain("app_version=");
+    expect(opts.method).toBe("GET");
     expect(opts.headers.Authorization).toBe("Bearer fake-jwt");
+    expect(opts.headers["User-Agent"]).toBe("ZCode/3.11.2");
+    expect(opts.headers["X-ZCode-App-Version"]).toBe("3.11.2");
+    expect(opts.headers["X-Device-Mid"]).toBe("test-device-mid");
+    expect(opts.headers["x-request-id"]).toBe("test-request-id");
+    expect(opts.headers["anthropic-version"]).toBeUndefined();
+    expect(opts.headers["X-ZCode-Agent"]).toBeUndefined();
+    expect(opts.headers["x-zcode-session-type"]).toBeUndefined();
+    expect(opts.headers["x-zcode-trace-id"]).toBeUndefined();
+    expect(opts.headers["x-query-id"]).toBeUndefined();
+    expect(opts.headers["x-session-id"]).toBeUndefined();
+    expect(opts.headers["X-Aliyun-Captcha-Verify-Param"]).toBeUndefined();
 
     expect(usage.plan).toBe("Start");
     expect(usage.quotas["Start: GLM-5.3"]).toMatchObject({
@@ -286,21 +308,12 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
 
   it("JWT present but no active plan falls through to Coding Plan only", async () => {
     proxyAwareFetch.mockImplementation(async (url) => {
-      const u = String(url);
-      if (u.includes("billing/balance")) {
+      if (String(url).includes("billing/balance")) {
         return jsonResponse({
           code: 0,
           data: {
             plans: [{ name: "old", plan_id: "zai-start-plan", status: "expired" }],
             balances: [],
-          },
-        });
-      }
-      if (u.includes("billing/current")) {
-        return jsonResponse({
-          code: 0,
-          data: {
-            plans: [{ name: "old", plan_id: "zai-start-plan", status: "expired" }],
           },
         });
       }
@@ -311,76 +324,35 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
       zcodeJwtToken: "fake-jwt",
     });
 
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(2);
+    expect(proxyAwareFetch.mock.calls.some(([url]) => String(url).includes("billing/current"))).toBe(false);
     expect(usage.quotas["Start:"]).toBeUndefined();
     expect(usage.quotas["Session (5h)"]).toBeTruthy();
     expect(usage.plan).toBe("Lite");
   });
 
-  it("balance 3001 falls back to /billing/current grants", async () => {
-    proxyAwareFetch.mockImplementation(async (url) => {
-      const u = String(url);
-      if (u.includes("billing/balance")) {
-        return jsonResponse({ code: 3001, msg: "parameter error" }, 400);
-      }
-      return jsonResponse({
-        code: 0,
-        data: {
-          plans: [
-            {
-              plan_id: "zcode-v3-start-plan-0817",
-              name: "ZCode Start Plan",
-              status: "active",
-              entitlements: [
-                {
-                  show_name: "GLM-5.3",
-                  grant_units: 3000000,
-                  period: "daily",
-                  capabilities: ["model:glm-5.3"],
-                },
-              ],
-            },
-          ],
-        },
-      });
-    });
+  it("JWT-only, non-zero code → soft message without current fallback", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(
+      jsonResponse({ code: 1113, msg: "no plan", data: null }),
+    );
 
     const usage = await getGlmUsage(undefined, "glm", null, {
       zcodeJwtToken: "fake-jwt",
     });
 
-    expect(usage.plan).toBe("Start");
-    expect(usage.quotas["Start: GLM-5.3 (daily)"]).toMatchObject({
-      used: 0,
-      total: 3000000,
-      remaining: 3000000,
-      remainingPercentage: 100,
-    });
-  });
-
-  it("JWT-only, non-zero code → soft message", async () => {
-    proxyAwareFetch.mockImplementation(async (url) => {
-      const u = String(url);
-      if (u.includes("billing/balance")) {
-        return jsonResponse({ code: 1113, msg: "no plan", data: null });
-      }
-      return jsonResponse({ code: 1113, msg: "no plan", data: null });
-    });
-
-    const usage = await getGlmUsage(undefined, "glm", null, {
-      zcodeJwtToken: "fake-jwt",
-    });
-
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
     expect(usage.message).toBe("no plan");
     expect(usage.quotas).toBeUndefined();
   });
 
   it("JWT-only, HTTP 401 → invalid JWT message", async () => {
-    proxyAwareFetch.mockImplementation(async () => jsonResponse({}, 401));
+    proxyAwareFetch.mockResolvedValueOnce(jsonResponse({}, 401));
 
     const usage = await getGlmUsage(undefined, "glm", null, {
       zcodeJwtToken: "expired",
     });
 
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
     expect(usage.message).toBe("GLM Start Plan JWT invalid or expired.");
   });
 

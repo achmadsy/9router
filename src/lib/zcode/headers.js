@@ -173,6 +173,13 @@ export function buildZcodeGuiRequestHeaders(extraHeaders = {}) {
   };
 }
 
+/** Native billing/balance request: NodeApiClient GUI headers + Authorization only. */
+export function buildZcodeBalanceHeaders(jwt) {
+  return buildZcodeGuiRequestHeaders({
+    Authorization: `Bearer ${jwt}`,
+  });
+}
+
 const ANTHROPIC_HEADER_KEYS = [
   "Anthropic-Version",
   "anthropic-version",

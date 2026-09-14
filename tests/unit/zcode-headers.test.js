@@ -3,6 +3,7 @@ import {
   applyZcodeApiKeyHeaders,
   applyZcodeCodingPlanHeaders,
   buildZcodeApiKeyHeaders,
+  buildZcodeBalanceHeaders,
   buildZcodeCodingPlanHeaders,
   clearZcodeCodingPlanHeaders,
   stripAnthropicHeadersForZcodePlan,
@@ -47,6 +48,27 @@ describe("zcode headers", () => {
     expect(headers["x-zcode-session-type"]).toBe("main");
     expect(headers["X-Aliyun-Captcha-Verify-Region"]).toBe("sgp");
     expect(headers["x-session-id"]).toBeTruthy();
+  });
+
+  it("builds native billing/balance headers without inference-only fields", () => {
+    const headers = buildZcodeBalanceHeaders("jwt-token");
+
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+    expect(headers["User-Agent"]).toBe("ZCode/3.11.2");
+    expect(headers["X-ZCode-App-Version"]).toBe("3.11.2");
+    expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
+    expect(headers["X-Release-Channel"]).toBe("production");
+    expect(headers["X-Device-Mid"]).toBeTruthy();
+    expect(headers["x-request-id"]).toBeTruthy();
+
+    expect(headers.Accept).toBeUndefined();
+    expect(headers["anthropic-version"]).toBeUndefined();
+    expect(headers["X-ZCode-Agent"]).toBeUndefined();
+    expect(headers["x-zcode-session-type"]).toBeUndefined();
+    expect(headers["x-zcode-trace-id"]).toBeUndefined();
+    expect(headers["x-query-id"]).toBeUndefined();
+    expect(headers["x-session-id"]).toBeUndefined();
+    expect(headers["X-Aliyun-Captcha-Verify-Param"]).toBeUndefined();
   });
 
   it("applyZcodeCodingPlanHeaders merges into existing headers", () => {
