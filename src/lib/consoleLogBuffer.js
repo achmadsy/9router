@@ -73,7 +73,15 @@ function formatArg(arg) {
 // progress, proxy normalization) is routine launcher output, not an app error.
 // Real captcha/auth failures still come through as [ZCode Captcha] lines.
 function isCloakBrowserNoise(line) {
-  return line.includes("[cloakbrowser]") || line.includes("CloakBrowser — stealth Chromium");
+  // Welcome banner is printed line-by-line (bare URLs, "Donate?", "Star us…")
+  // — match banner fragments, not just the title line.
+  return (
+    line.includes("[cloakbrowser]") ||
+    line.includes("CloakBrowser") ||
+    line.includes("CloakHQ/CloakBrowser") ||
+    line.includes("ko-fi.com/cloakhq") ||
+    line.includes("Star us if CloakBrowser")
+  );
 }
 
 function appendLine(line) {
