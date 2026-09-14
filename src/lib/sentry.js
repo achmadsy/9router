@@ -39,6 +39,20 @@ export function isSentryIgnoredMessage(input) {
   }
 }
 
+// CloakBrowser launcher chatter (welcome banner, binary download, geoip,
+// proxy normalization) is routine vendor output — drop it from breadcrumbs
+// too, not just console capture. Captcha/auth failures ([ZCode Captcha])
+// still report.
+export function isCloakBrowserNoiseText(text) {
+  if (!text || typeof text !== "string") return false;
+  return (
+    text.includes("[cloakbrowser]") ||
+    text.includes("CloakBrowser") ||
+    text.includes("CloakHQ/CloakBrowser") ||
+    text.includes("ko-fi.com/cloakhq")
+  );
+}
+
 // Redact sensitive text (Bearer tokens, API keys, OAuth tokens, secrets, URL credentials, cookies)
 export function redactSensitiveText(text) {
   if (!text || typeof text !== "string") return text;
@@ -329,6 +343,10 @@ export function initSentry() {
             event.message = normalizeIssueTitle(redactSensitiveText(event.message));
           }
           if (event.breadcrumbs && Array.isArray(event.breadcrumbs)) {
+            event.breadcrumbs = event.breadcrumbs.filter((b) => {
+              const text = b.message || (b.data && (b.data["0"] ?? b.data["1"]));
+              return !isCloakBrowserNoiseText(String(text ?? ""));
+            });
             for (const b of event.breadcrumbs) {
               if (b.message) b.message = redactSensitiveText(b.message);
               if (b.data) b.data = scrubSensitiveData(b.data);

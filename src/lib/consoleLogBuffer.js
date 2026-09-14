@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { CONSOLE_LOG_CONFIG } from "@/shared/constants/config.js";
-import { captureException, captureMessage, isSentryIgnoredMessage, matchesIssueKeyword, redactSensitiveText, scrubSensitiveData } from "@/lib/sentry.js";
+import { captureException, captureMessage, isSentryIgnoredMessage, isCloakBrowserNoiseText, matchesIssueKeyword, redactSensitiveText, scrubSensitiveData } from "@/lib/sentry.js";
 import { isNextjsSpanWarning } from "@/lib/nextjsNoise.js";
 
 const consoleLevels = ["log", "info", "warn", "error", "debug"];
