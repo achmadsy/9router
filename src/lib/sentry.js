@@ -323,6 +323,19 @@ export function initSentry() {
       environment: process.env.NODE_ENV || "production",
       release: "9router@" + (process.env.npm_package_version || "0.5.65"),
       tracesSampleRate: 0.1,
+      // Drop CloakBrowser launcher chatter at record time — the SDK buffers
+      // console breadcrumbs in scope, so filtering only at beforeSend still
+      // lets them ride along on a later event from the same request.
+      beforeBreadcrumb(breadcrumb) {
+        try {
+          const text =
+            breadcrumb?.message ||
+            (breadcrumb?.data && Object.values(breadcrumb.data).join(" ")) ||
+            "";
+          if (isCloakBrowserNoiseText(String(text))) return null;
+        } catch { /* fail-open */ }
+        return breadcrumb;
+      },
       // Scrub sensitive headers & tokens before sending to Sentry
       beforeSend(event) {
         try {
