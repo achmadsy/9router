@@ -55,6 +55,7 @@ vi.mock("@/lib/localDb.js", () => ({
   getProxyPools: vi.fn(async () => ([
     { id: "pool-x", name: "Deleted?", proxyUrl: "http://x" },
   ])),
+  getProviderConnections: vi.fn(async () => sharedConns),
 }));
 
 vi.mock("@/sse/services/antigravityQuota.js", () => ({
@@ -81,6 +82,54 @@ describe("Self-Aware API routes", () => {
     // deleted pool flag
     const proxyRow = data.cooldowns.find((c) => c.scopeType === "proxy");
     expect(proxyRow.proxyPoolDeleted).toBe(false); // pool-x exists in mock
+  });
+
+  it("GET enriches account rows with connectionName / connectionDeleted", async () => {
+    // pure sidecar row without connectionName + orphaned account row
+    boardRows.length = 0;
+    boardRows.push(
+      {
+        id: "row-c1", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "c1",
+        source: "upstream-header", status: 429, reason: "rl",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(), expiresAtMs: Date.now() + 30_000,
+      },
+      {
+        id: "row-ghost", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "gone-uuid",
+        source: "unknown-quota", status: 429, reason: "no header",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(), expiresAtMs: Date.now() + 30_000,
+      },
+    );
+
+    const { GET } = await import("@/app/api/self-aware/route.js");
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const data = await res.json();
+
+    const c1 = data.cooldowns.find((r) => r.scopeId === "c1");
+    expect(c1?.connectionName).toBe("Main");
+    expect(c1?.connectionDeleted).toBe(false);
+    expect(c1?.connectionId).toBe("c1");
+
+    const ghost = data.cooldowns.find((r) => r.scopeId === "gone-uuid");
+    expect(ghost?.connectionDeleted).toBe(true);
+    expect(ghost?.connectionName).toBeNull();
+
+    // restore default board rows for any later tests
+    boardRows.length = 0;
+    boardRows.push(
+      {
+        id: "row-1", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "c1",
+        source: "upstream-header", status: 429, reason: "Rate limit exceeded",
+        headerName: "Retry-After", expiresAt: new Date(Date.now() + 30_000).toISOString(),
+        expiresAtMs: Date.now() + 30_000, connectionName: "Main",
+      },
+      {
+        id: "row-2", provider: "opencode", model: "glm-4.6", scopeType: "proxy", scopeId: "pool-x",
+        source: "upstream-header", status: 429, reason: "too many",
+        expiresAt: new Date(Date.now() + 10_000).toISOString(), expiresAtMs: Date.now() + 10_000,
+        proxyPoolName: null, proxyPoolDeleted: true,
+      },
+    );
   });
 
   it("GET /api/self-aware/policies returns policies", async () => {

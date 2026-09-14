@@ -250,20 +250,39 @@ export async function updateProviderConnection(id, data) {
 export async function deleteProviderConnection(id) {
   const db = await getAdapter();
   let ok = false;
+  let provider = null;
   db.transaction(() => {
     const row = db.get(`SELECT provider FROM providerConnections WHERE id = ?`, [id]);
     if (!row) return;
+    provider = row.provider;
     db.run(`DELETE FROM providerConnections WHERE id = ?`, [id]);
     reorderInTx(db, row.provider);
     ok = true;
   });
+  // Self-Aware: account gone → drop its cooldown sidecar rows (fail-open)
+  if (ok && provider && id) {
+    try {
+      const { deleteByScope } = await import("./selfAwareRepo.js");
+      await deleteByScope(provider, null, "account", id);
+    } catch { /* fail-open */ }
+  }
   return ok;
 }
 
 export async function deleteProviderConnectionsByProvider(providerId) {
   const db = await getAdapter();
+  const rows = db.all(`SELECT id FROM providerConnections WHERE provider = ?`, [providerId]);
   const before = db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?`, [providerId]);
   db.run(`DELETE FROM providerConnections WHERE provider = ?`, [providerId]);
+  // Self-Aware: cascade per-account sidecars so the board has no orphans (fail-open)
+  if (rows?.length) {
+    try {
+      const { deleteByScope } = await import("./selfAwareRepo.js");
+      for (const row of rows) {
+        if (row?.id) await deleteByScope(providerId, null, "account", row.id);
+      }
+    } catch { /* fail-open */ }
+  }
   return before?.n || 0;
 }
 

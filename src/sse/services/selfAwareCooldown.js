@@ -421,11 +421,34 @@ export async function listBoardCooldowns() {
     });
   }
 
-  // Legacy modelLock_* on connections
+  // Load connections once: legacy modelLock_* scan + account-name enrichment
+  let connections = [];
   try {
     const { getProviderConnections } = await import("@/lib/db/index.js");
-    const connections = await getProviderConnections({});
-    for (const c of connections) {
+    connections = await getProviderConnections({});
+  } catch (e) {
+    log.warn("SELF_AWARE", `board connections scan failed: ${e.message}`);
+  }
+
+  const connById = new Map((connections || []).map((c) => [c.id, c]));
+  const connLabel = (c) => c.displayName || c.name || c.email || null;
+
+  // Account-scope sidecar rows: attach live account name; flag deleted accounts
+  for (const entry of byKey.values()) {
+    if (entry.scopeType !== "account") continue;
+    const c = connById.get(entry.scopeId);
+    if (c) {
+      entry.connectionName = connLabel(c);
+      entry.connectionDeleted = false;
+    } else {
+      entry.connectionName = null;
+      entry.connectionDeleted = true;
+    }
+  }
+
+  // Legacy modelLock_* on connections (sidecar overlays when expiry matches within 1s)
+  try {
+    for (const c of connections || []) {
       for (const [k, val] of Object.entries(c)) {
         if (!k.startsWith("modelLock_") || !val) continue;
         const expiryMs = decodeLockExpiry(val);
@@ -434,7 +457,6 @@ export async function listBoardCooldowns() {
         const modelKey = model === "__all" ? "" : model;
         const key = `${c.provider}|${modelKey}|account|${c.id}`;
         const existing = byKey.get(key);
-        // Overlay sidecar only when expiry matches within 1s
         if (existing && Math.abs(existing.expiresAtMs - expiryMs) <= 1000) continue;
         byKey.set(key, {
           id: null,
@@ -449,12 +471,13 @@ export async function listBoardCooldowns() {
           startedAt: existing?.startedAt || null,
           expiresAt: isoOf(expiryMs),
           expiresAtMs: expiryMs,
-          connectionName: c.displayName || c.name || c.email || null,
+          connectionName: connLabel(c),
+          connectionDeleted: false,
         });
       }
     }
   } catch (e) {
-    log.warn("SELF_AWARE", `board connections scan failed: ${e.message}`);
+    log.warn("SELF_AWARE", `board modelLock scan failed: ${e.message}`);
   }
 
   // Antigravity RAM quota/strike blocks (no modelLock_* on this path)
@@ -469,6 +492,7 @@ export async function listBoardCooldowns() {
           if (!resetMs || resetMs <= now) continue;
           const key = `antigravity|${model}|account|${connectionId}`;
           if (byKey.has(key)) continue;
+          const c = connById.get(connectionId);
           byKey.set(key, {
             id: null,
             provider: "antigravity",
@@ -482,6 +506,8 @@ export async function listBoardCooldowns() {
             startedAt: null,
             expiresAt: isoOf(resetMs),
             expiresAtMs: resetMs,
+            connectionName: c ? connLabel(c) : null,
+            connectionDeleted: !c,
           });
         }
       });

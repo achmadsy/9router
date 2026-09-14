@@ -425,7 +425,13 @@ export default function SelfAwarePage() {
                               )}
                             </span>
                           ) : c.scopeType === "account" ? (
-                            c.connectionName || c.scopeId
+                            c.connectionDeleted ? (
+                              <span title={c.scopeId} className="text-gray-500">Deleted account</span>
+                            ) : (
+                              <span title={c.connectionId || c.scopeId}>
+                                {c.connectionName || c.scopeId}
+                              </span>
+                            )
                           ) : (
                             "provider"
                           )}
