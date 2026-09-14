@@ -120,7 +120,11 @@ export function initConsoleLogCapture() {
         // account rotation). Real 5xx/stalls still report.
         if (isSentryIgnoredMessage(line)) return;
         // CloakBrowser launch/download banner + lifecycle info — routine, not errors.
+        // (Banner blank spacer lines are bare console.error() with no args.)
         if (isCloakBrowserNoise(line)) return;
+        // Nothing to report — e.g. cloakbrowser's bare console.error() spacers.
+        // An empty message would land as an "[unlabeled event]" issue.
+        if (!line.trim()) return;
         if (level === "error") {
           // Skip lines already handled by dedicated Sentry reporters (logger.js, zcode executor, etc.)
           if (!line.includes("❌ [") && !line.includes("✗ ERROR") && !line.includes("[ZCode Captcha]")) {
