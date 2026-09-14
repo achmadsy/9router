@@ -84,6 +84,18 @@ export function buildRequestDetail(base, overrides = {}) {
 }
 
 // Build the "done" summary: duration, ttft, in/out tokens with cache breakdown
+/**
+ * IN 0 · OUT 0 on a completed request means the upstream silently failed
+ * (typically 429 rate-limited with an empty body). Callers treat this as a
+ * quota failure, not a successful free generation.
+ */
+export function isEmptyUsage(usage) {
+  const u = usage || {};
+  const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;
+  const outTok = u.completion_tokens ?? u.output_tokens ?? 0;
+  return !inTok && !outTok;
+}
+
 export function formatDoneLine({ usage, latency }) {
   const u = usage || {};
   const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;

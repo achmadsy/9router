@@ -27,6 +27,7 @@ function sourceBadge(source) {
     "manual-policy": { label: "Manual", cls: "bg-purple-500/20 text-purple-400" },
     "provider-reset": { label: "Provider", cls: "bg-cyan-500/20 text-cyan-400" },
     "legacy-backoff": { label: "Auto", cls: "bg-gray-500/20 text-gray-300" },
+    "unknown-quota": { label: "Undefined", cls: "bg-orange-500/20 text-orange-400" },
     "antigravity-quota": { label: "Quota", cls: "bg-amber-500/20 text-amber-400" },
     "antigravity-strike": { label: "Strike", cls: "bg-red-500/20 text-red-400" },
   };

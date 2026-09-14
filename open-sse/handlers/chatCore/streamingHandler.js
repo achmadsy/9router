@@ -5,7 +5,8 @@ import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { PROVIDERS } from "../../config/providers.js";
 import { STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
 import { buildAbortedResponsesTerminalBytes } from "../../utils/responsesStreamHelpers.js";
-import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
+import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine, isEmptyUsage } from "./requestDetail.js";
+import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
 
@@ -110,8 +111,10 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 /**
  * Build onStreamComplete callback for streaming usage tracking.
  */
-export function buildOnStreamComplete({ provider, model, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log }) {
+export function buildOnStreamComplete({ provider, model, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log, providerResponse, onEmptyUsage }) {
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  // Capture wait headers before the body is consumed by the pipe.
+  const responseHeaders = providerResponse?.headers || null;
 
   const onStreamComplete = (contentObj, usage, ttftAt) => {
     const latency = {
@@ -120,6 +123,7 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, a
     };
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
+    const failedEmpty = isEmptyUsage(usage);
 
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKeyId,
@@ -130,7 +134,7 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, a
       providerResponse: safeContent,
       response: { content: safeContent, thinking: safeThinking, type: "streaming" },
       pxpipe,
-      status: "success"
+      status: failedEmpty ? "error" : "success"
     }, { id: streamDetailId })).catch(err => {
       console.error("[RequestDetail] Failed to update streaming content:", err.message);
     });
@@ -138,6 +142,16 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, a
     // Persist stream usage to DB (no console line; the "📊 done" line below is authoritative)
     saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, endpoint: clientRawRequest?.endpoint, label: "STREAM USAGE", silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency }));
+
+    // IN 0 · OUT 0 on a "completed" stream = silent 429. Lock via self-aware
+    // (x-retry-after family first, else unknown-quota until a manual policy).
+    if (failedEmpty && onEmptyUsage) {
+      const cooldownHint = parseWaitHeaderCooldown(responseHeaders, { status: 429 });
+      Promise.resolve(onEmptyUsage({ status: 429, errorText: "empty usage (IN 0 · OUT 0) treated as rate limit", cooldownHint }))
+        .catch(err => {
+          console.error("[ChatCore] onEmptyUsage failed:", err?.message || err);
+        });
+    }
   };
 
   return { onStreamComplete, streamDetailId };

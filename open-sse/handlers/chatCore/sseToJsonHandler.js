@@ -3,7 +3,8 @@ import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
+import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine, isEmptyUsage } from "./requestDetail.js";
+import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { isClaudeClassifierRequest, openAICompletionToClaudeMessage } from "./claudeMessageResponse.js";
 
@@ -194,7 +195,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, clientRawRequest, onRequestSuccess, onEmptyUsage, customToolNames, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -215,12 +216,18 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   if (isCodexResponsesApi) {
     try {
       const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
-      if (onRequestSuccess) await onRequestSuccess();
 
       const usage = jsonResponse.usage || {};
       appendLog({ tokens: usage, status: "200 OK" });
       saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, endpoint: clientRawRequest?.endpoint, silent: true });
       if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
+      const emptyResponsesFail = isEmptyUsage(usage);
+      if (emptyResponsesFail && onEmptyUsage) {
+        const cooldownHint = parseWaitHeaderCooldown(providerResponse.headers, { status: 429 });
+        Promise.resolve(onEmptyUsage({ status: 429, errorText: "empty usage (IN 0 · OUT 0) treated as rate limit", cooldownHint })).catch(() => {});
+      } else if (onRequestSuccess) {
+        await onRequestSuccess();
+      }
 
       // Same cache-inclusive total for the recorded detail, so the DB and the
       // client-facing usage can never disagree.
@@ -327,12 +334,16 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       );
     }
 
-    if (onRequestSuccess) await onRequestSuccess();
-
     const usage = parsed.usage || {};
     appendLog({ tokens: usage, status: "200 OK" });
     saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, endpoint: clientRawRequest?.endpoint, silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
+    if (isEmptyUsage(usage) && onEmptyUsage) {
+      const cooldownHint = parseWaitHeaderCooldown(providerResponse.headers, { status: 429 });
+      Promise.resolve(onEmptyUsage({ status: 429, errorText: "empty usage (IN 0 · OUT 0) treated as rate limit", cooldownHint })).catch(() => {});
+    } else if (onRequestSuccess) {
+      await onRequestSuccess();
+    }
 
     const totalLatency = Date.now() - requestStartTime;
     saveRequestDetail(buildRequestDetail({

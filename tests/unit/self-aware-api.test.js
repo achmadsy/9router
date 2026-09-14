@@ -24,6 +24,7 @@ vi.mock("@/sse/services/selfAwareCooldown.js", () => ({
   upsertSelfAwareCooldown: vi.fn(async () => null),
   clearSelfAwareCooldown: vi.fn(async () => true),
   clearSelfAwareCooldownsForAccount: vi.fn(async () => true),
+  clearSelfAwareCooldownsForUnknownQuota: vi.fn(async () => 0),
   purgeExpiredSelfAwareCooldowns: vi.fn(async () => 0),
   listActiveSelfAwareCooldowns: vi.fn(async () => []),
   getActiveProxyCooldownMap: vi.fn(async () => new Map()),

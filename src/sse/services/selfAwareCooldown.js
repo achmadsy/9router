@@ -19,6 +19,14 @@ const REASON_MAX = 200;
 export const SELF_AWARE_MAX_COOLDOWN_MS = MAX_SELF_AWARE_COOLDOWN_MS;
 
 /**
+ * 429 with no usable wait header / manual policy / provider reset:
+ * lock as "unknown quota" for 999999s (~11.6d, under the 30d cap) until the
+ * user sets a manual policy (or resets the board entry). Matches the
+ * freeMonthlyQuota "Unlimited / undefined" sentinel convention.
+ */
+export const UNKNOWN_QUOTA_DEFAULT_MS = 999999 * 1000;
+
+/**
  * Sanitize free-text reason for storage: redact secrets/proxy URLs, strip
  * control chars, cap length. Fail-open — never throws, always returns string|null.
  */
@@ -184,6 +192,20 @@ export function resolveSelfAwareDecision(input = {}) {
     };
   }
 
+  // 4) Unknown 429 quota (no wait header / manual / reset): park on the board
+  //    as unknown-quota until the user sets a manual policy or resets it.
+  if (status === 429) {
+    const cooldownMs = Math.min(UNKNOWN_QUOTA_DEFAULT_MS, SELF_AWARE_MAX_COOLDOWN_MS);
+    return {
+      ...base,
+      shouldFallback: true,
+      cooldownMs,
+      expiresAt: isoOf(nowMs + cooldownMs),
+      source: "unknown-quota",
+      newBackoffLevel: 0,
+    };
+  }
+
   // Caller falls back to existing checkFallbackError / modelLock path.
   return base;
 }
@@ -282,6 +304,28 @@ export async function upsertSelfAwareCooldown(entry = {}) {
   } catch (e) {
     log.warn("SELF_AWARE", `upsert failed ${entry.provider}/${entry.model}: ${e.message}`);
     return null;
+  }
+}
+
+/**
+ * Drop active unknown-quota park locks for a provider/model after the user
+ * saves a manual policy — the pair is no longer "undefined".
+ */
+export async function clearSelfAwareCooldownsForUnknownQuota(provider, model, nowMs = Date.now()) {
+  try {
+    const r = await repo();
+    const rows = await r.listActiveCooldowns(nowMs);
+    let cleared = 0;
+    for (const row of rows) {
+      if (row.provider !== provider) continue;
+      if ((row.model || "") !== (model || "")) continue;
+      if (row.source !== "unknown-quota") continue;
+      if (await r.deleteCooldown(row.id)) cleared += 1;
+    }
+    return cleared;
+  } catch (e) {
+    log.warn("SELF_AWARE", `clear unknown-quota failed ${provider}/${model}: ${e.message}`);
+    return 0;
   }
 }
 

@@ -59,12 +59,25 @@ describe("resolveSelfAwareDecision — precedence", () => {
     expect(d).toMatchObject({ cooldownMs: 120_000, shouldFallback: true, source: "provider-reset" });
   });
 
-  it("no header, no manual, no resetsAt → no self-aware cooldown (caller falls back)", () => {
+  it("no header, no manual, no resetsAt → unknown-quota lock (999999s) until user sets policy", () => {
     const d = resolveSelfAwareDecision({
       provider: "p", model: "m", status: 429,
       cooldownHint: null, manualPolicyMs: null, nowMs: NOW,
     });
-    expect(d).toMatchObject({ shouldFallback: false, cooldownMs: 0, source: null });
+    expect(d).toMatchObject({
+      shouldFallback: true,
+      source: "unknown-quota",
+      cooldownMs: 999999 * 1000,
+      expiresAt: new Date(NOW + 999999 * 1000).toISOString(),
+    });
+  });
+
+  it("manual policy still wins over unknown-quota when no header", () => {
+    const d = resolveSelfAwareDecision({
+      provider: "p", model: "m", status: 429,
+      cooldownHint: null, manualPolicyMs: 45_000, nowMs: NOW,
+    });
+    expect(d).toMatchObject({ source: "manual-policy", cooldownMs: 45_000 });
   });
 
   it("invalid/expired header hint ignored; manual applies", () => {

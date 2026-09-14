@@ -312,7 +312,20 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         await clearAccountError(credentials.connectionId, credentials, model);
         // "Consecutive" strikes: a success clears the breaker for this pair.
         clearAntigravityStrikes(credentials.connectionId, model);
-      }
+      },
+      // IN 0 · OUT 0 on a "completed" request = silent rate limit. Prefer
+      // x-retry-after family headers; no header → unknown-quota (999999s)
+      // until the user sets a manual self-aware policy.
+      onEmptyUsage: async ({ status, errorText, cooldownHint }) => {
+        await markAccountUnavailable({
+          credentials,
+          status,
+          errorText,
+          provider,
+          model,
+          cooldownHint,
+        });
+      },
     });
 
     if (result.success) return result.response;

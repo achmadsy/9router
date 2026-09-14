@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   listSelfAwarePolicies, upsertSelfAwarePolicy, deleteSelfAwarePolicy,
 } from "@/lib/db/index.js";
+import { clearSelfAwareCooldownsForUnknownQuota } from "@/sse/services/selfAwareCooldown.js";
 
 export const dynamic = "force-dynamic";
 
@@ -42,12 +43,15 @@ export async function PUT(request) {
       const policy = await upsertSelfAwarePolicy({
         provider, model, mode: "daily", resetHour, resetMinute,
       });
+      // Manual policy now governs this pair — drop any unknown-quota park locks.
+      await clearSelfAwareCooldownsForUnknownQuota(provider, model).catch(() => {});
       return NextResponse.json({ policy });
     }
     if (!Number.isFinite(timeoutMs) || timeoutMs < MIN_MS || timeoutMs > MAX_MS) {
       return NextResponse.json({ error: `timeoutMs must be ${MIN_MS}..${MAX_MS}` }, { status: 400 });
     }
     const policy = await upsertSelfAwarePolicy({ provider, model, mode: "duration", timeoutMs });
+    await clearSelfAwareCooldownsForUnknownQuota(provider, model).catch(() => {});
     return NextResponse.json({ policy });
   } catch (e) {
     console.error("[API] self-aware policy upsert failed:", e);
