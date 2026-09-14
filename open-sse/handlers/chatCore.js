@@ -509,12 +509,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
     if (log?.errorLine) {
       const urlStr = providerUrl ? `\n    URL: ${providerUrl}` : "";
-      // Attach the raw upstream body when it isn't already the message source —
-      // extracted messages often drop the payload the provider actually sent.
-      const bodyStr = upstreamBody && !errMsg.includes(upstreamBody.slice(0, 120))
-        ? `\n    Upstream: ${upstreamBody.replace(/\s+/g, " ").trim()}`
-        : "";
-      log.errorLine(reqTag, "✗", `ERROR ${statusCode} · ${provider}/${model} · ${Date.now() - requestStartTime}ms${urlStr}\n    ${errMsg}${bodyStr}`);
+      // Raw upstream body: inline on the console/message for readability, and
+      // as structured extra so it lands under Sentry "Additional Data" too.
+      log.errorLine(
+        reqTag, "✗",
+        `ERROR ${statusCode} · ${provider}/${model} · ${Date.now() - requestStartTime}ms${urlStr}\n    ${errMsg}` +
+          (upstreamBody ? `\n    Upstream: ${upstreamBody.replace(/\s+/g, " ").trim()}` : ""),
+        upstreamBody ? { upstreamBody } : null
+      );
     }
     reqLogger.logError(new Error(message), finalBody || translatedBody);
     return createErrorResult(statusCode, errMsg, { resetsAtMs, cooldownHint });

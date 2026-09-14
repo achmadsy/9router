@@ -27,7 +27,7 @@ export function matchesIssueKeyword(input) {
 //   "❌ codex [429]: [429]: The usage limit has been reached"
 // (status is bracketed, so the bare `429` alternative never matches).
 const SENTRY_IGNORED_RE =
-  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|❌\s*\S+\s*\[429\]|(?:^|[\s\[])429[\]:\s].*usage limit/i;
+  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts|No (?:active )?credentials)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|❌\s*\S+\s*\[429\]|(?:^|[\s\[])429[\]:\s].*usage limit/i;
 
 export function isSentryIgnoredMessage(input) {
   if (!input) return false;

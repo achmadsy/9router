@@ -46,14 +46,19 @@ export function line(tag, symbol, message) {
   console.log(`[${formatTime()}] ${tag} ${symbol} ${message}`);
 }
 
-// Like line() but always printed regardless of LOG_LEVEL (errors must never be hidden)
-export function errorLine(tag, symbol, message) {
+// Like line() but always printed regardless of LOG_LEVEL (errors must never be hidden).
+// `extra` (optional) is attached to the Sentry event as structured Additional
+// Data (e.g. the raw upstream response body) without polluting the message.
+export function errorLine(tag, symbol, message, extra = null) {
   console.log(`[${formatTime()}] ${tag} ${symbol} ${message}`);
   try {
     // Still print to console; skip Sentry for expected multi-account cascade noise
     // (429 locks, combo fallback, account rotation). Real 5xx/stalls still report.
     if (isSentryIgnoredMessage(message)) return;
-    captureMessage(message, "error", { tags: { tag, symbol, kind: "errorLine" } });
+    captureMessage(message, "error", {
+      tags: { tag, symbol, kind: "errorLine" },
+      extra: extra || undefined,
+    });
   } catch { /* fail-open */ }
 }
 
