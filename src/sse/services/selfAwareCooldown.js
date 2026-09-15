@@ -329,6 +329,111 @@ export async function clearSelfAwareCooldownsForUnknownQuota(provider, model, no
   }
 }
 
+/**
+ * Remaining time above which a provider-sourced wait is treated as
+ * "undefined" (absurd header, effectively no real ETA) — a manual policy
+ * may re-date those rows. Real provider clock resets stay authoritative.
+ */
+export const MANUAL_OVERRIDE_THRESHOLD_MS = 7 * 24 * 3600 * 1000;
+
+const MANUAL_RETRO_SOURCES = new Set(["manual-policy", "legacy-backoff", "unknown-quota"]);
+
+function manualOverridesRow(source, remainingMs) {
+  if (MANUAL_RETRO_SOURCES.has(source)) return true;
+  // upstream-header stays authoritative unless absurdly long ("undefined");
+  // provider-reset / antigravity-* are real provider clocks — never override.
+  if (source === "upstream-header") return remainingMs > MANUAL_OVERRIDE_THRESHOLD_MS;
+  return false;
+}
+
+/**
+ * Retro-apply a just-saved manual policy to currently active cooldown rows for
+ * provider(+model): re-date sidecar rows AND the authoritative modelLock_* on
+ * connections. Provider-given times (provider-reset clocks, upstream headers
+ * under the threshold) are left alone.
+ * @returns {Promise<number>} rows/locks re-dated
+ */
+export async function applyManualPolicyToCooldowns(provider, model, policyMs, nowMs = Date.now()) {
+  try {
+    const ms = Number(policyMs);
+    if (!Number.isFinite(ms) || ms <= 0) return 0;
+    const r = await repo();
+    const resolved = resolveProviderId(provider);
+    const targetModel = model || "";
+    const newExpiresAtMs = nowMs + Math.min(ms, SELF_AWARE_MAX_COOLDOWN_MS);
+    const newIso = new Date(newExpiresAtMs).toISOString();
+    let updated = 0;
+
+    // 1) Sidecar rows (account + proxy scopes) — re-date to the manual policy
+    const rows = await r.listActiveCooldowns(nowMs);
+    const sidecarByPair = new Map(); // "accountScopeId|model" → { source }
+    for (const row of rows) {
+      if (resolveProviderId(row.provider) !== resolved) continue;
+      if (targetModel && (row.model || "") !== targetModel) continue;
+      const remaining = new Date(row.expiresAt).getTime() - nowMs;
+      if (!manualOverridesRow(row.source, remaining)) continue;
+      await r.upsertCooldown({
+        id: row.id,
+        provider: row.provider,
+        model: row.model,
+        scopeType: row.scopeType,
+        scopeId: row.scopeId,
+        startedAtMs: new Date(row.startedAt).getTime(),
+        expiresAtMs: newExpiresAtMs,
+        source: "manual-policy",
+        reason: row.reason,
+        status: row.status,
+        headerName: row.headerName,
+        data: row.data,
+      });
+      updated += 1;
+      if (row.scopeType === "account") {
+        sidecarByPair.set(`${row.scopeId}|${row.model || ""}`, { source: row.source });
+      }
+    }
+
+    // 2) Legacy modelLock_* on connections (authoritative for routing).
+    //    Rows without a sidecar mirror are legacy-backoff — always overridden.
+    const { getProviderConnections, updateProviderConnection } = await import("@/lib/db/index.js");
+    const conns = await getProviderConnections({}).catch(() => []);
+    for (const conn of conns || []) {
+      if (resolveProviderId(conn.provider) !== resolved) continue;
+      const update = {};
+      for (const [k, val] of Object.entries(conn)) {
+        if (!k.startsWith("modelLock_") || !val) continue;
+        const t = new Date(val).getTime();
+        if (!Number.isFinite(t) || t <= nowMs) continue;
+        const lockModel = k.slice("modelLock_".length) === "__all" ? "" : k.slice("modelLock_".length);
+        if (targetModel && lockModel !== targetModel) continue;
+        const side = sidecarByPair.get(`${conn.id}|${lockModel}`);
+        const source = side ? side.source : "legacy-backoff";
+        if (!manualOverridesRow(source, t - nowMs)) continue;
+        update[k] = newIso;
+        if (!side) {
+          // Board shows this as Manual from now on
+          await r.upsertCooldown({
+            provider: conn.provider,
+            model: lockModel,
+            scopeType: "account",
+            scopeId: conn.id,
+            expiresAtMs: newExpiresAtMs,
+            source: "manual-policy",
+            status: null,
+          }).catch(() => {});
+          updated += 1;
+        }
+      }
+      if (Object.keys(update).length > 0) {
+        await updateProviderConnection(conn.id, update).catch(() => {});
+      }
+    }
+    return updated;
+  } catch (e) {
+    log.warn("SELF_AWARE", `apply manual policy failed ${provider}/${model}: ${e.message}`);
+    return 0;
+  }
+}
+
 /** Delete one cooldown by id. */
 export async function deleteSelfAwareCooldown(id) {
   try {

@@ -6,7 +6,7 @@ const boardRows = [
     id: "row-1", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "c1",
     source: "upstream-header", status: 429, reason: "Rate limit exceeded",
     headerName: "Retry-After", expiresAt: new Date(Date.now() + 30_000).toISOString(),
-    expiresAtMs: Date.now() + 30_000, connectionName: "Main",
+    expiresAtMs: Date.now() + 30_000, connectionName: "Main", connectionDeleted: false,
   },
   {
     id: "row-2", provider: "opencode", model: "glm-4.6", scopeType: "proxy", scopeId: "pool-x",
@@ -27,6 +27,8 @@ vi.mock("@/sse/services/selfAwareCooldown.js", () => ({
   clearSelfAwareCooldownsForUnknownQuota: vi.fn(async () => 0),
   purgeExpiredSelfAwareCooldowns: vi.fn(async () => 0),
   listActiveSelfAwareCooldowns: vi.fn(async () => []),
+  applyManualPolicyToCooldowns: vi.fn(async () => 0),
+  msUntilDailyReset: vi.fn(() => 60_000),
   getActiveProxyCooldownMap: vi.fn(async () => new Map()),
   resolveSelfAwareDecision: vi.fn(() => ({ shouldFallback: false })),
 }));
@@ -92,11 +94,13 @@ describe("Self-Aware API routes", () => {
         id: "row-c1", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "c1",
         source: "upstream-header", status: 429, reason: "rl",
         expiresAt: new Date(Date.now() + 30_000).toISOString(), expiresAtMs: Date.now() + 30_000,
+        connectionName: "Main", connectionDeleted: false,
       },
       {
         id: "row-ghost", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "gone-uuid",
         source: "unknown-quota", status: 429, reason: "no header",
         expiresAt: new Date(Date.now() + 30_000).toISOString(), expiresAtMs: Date.now() + 30_000,
+        connectionName: null, connectionDeleted: true,
       },
     );
 
@@ -115,13 +119,14 @@ describe("Self-Aware API routes", () => {
     expect(ghost?.connectionName).toBeNull();
 
     // restore default board rows for any later tests
+    // restore default board rows for any later tests
     boardRows.length = 0;
     boardRows.push(
       {
         id: "row-1", provider: "openai", model: "gpt-4o", scopeType: "account", scopeId: "c1",
         source: "upstream-header", status: 429, reason: "Rate limit exceeded",
         headerName: "Retry-After", expiresAt: new Date(Date.now() + 30_000).toISOString(),
-        expiresAtMs: Date.now() + 30_000, connectionName: "Main",
+        expiresAtMs: Date.now() + 30_000, connectionName: "Main", connectionDeleted: false,
       },
       {
         id: "row-2", provider: "opencode", model: "glm-4.6", scopeType: "proxy", scopeId: "pool-x",

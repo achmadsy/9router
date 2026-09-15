@@ -39,7 +39,9 @@ const WALLET_LIMIT_HEADER = "x-freebuff-wallet-spend-limit";
 // Honored by the server only for the Freebuff Web service account; ignored for
 // normal callers, so omitting it when unknown is safe.
 const ACTING_USER_HEADER = "x-freebuff-acting-user-id";
-const AGENT_RUNS_URL = "https://codebuff.com/api/v1/agent-runs";
+// codebuff.com 307-redirects to www. — native fetch drops Authorization on
+// cross-host redirects, so hardcode www. Direct Auth keeps the token.
+const AGENT_RUNS_URL = "https://www.codebuff.com/api/v1/agent-runs";
 const FREEBUFF_SYSTEM_OPENING = "You are Buffy, the strategic coding assistant.";
 const NINEROUTER_SELF_AWARENESS =
   "This request is routed by 9Router through the Freebuff provider. Preserve the caller's requested task and response format; do not claim to be the Freebuff CLI application or to have local tools unless those tools were explicitly supplied.";
@@ -93,12 +95,12 @@ function oauthConfig() {
 function sessionAdmissionUrl() {
   return (
     oauthConfig().sessionAdmissionUrl ||
-    "https://codebuff.com/api/v1/freebuff/session/admission"
+    "https://www.codebuff.com/api/v1/freebuff/session/admission"
   );
 }
 
 function sessionUrl() {
-  return oauthConfig().sessionUrl || "https://codebuff.com/api/v1/freebuff/session";
+  return oauthConfig().sessionUrl || "https://www.codebuff.com/api/v1/freebuff/session";
 }
 
 /** @type {Map<string, { instanceId: string, model: string, expiresAt: number }>} */

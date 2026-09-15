@@ -19,7 +19,9 @@ import { proxyAwareFetch } from "../../utils/proxyFetch.js";
  * usage endpoint is the lightweight path the CLI polls for the banner.
  */
 
-const USAGE_URL = "https://codebuff.com/api/v1/usage";
+// www. host directly — apex codebuff.com 307-redirects and fetch drops the
+// body/auth on cross-host redirects.
+const USAGE_URL = "https://www.codebuff.com/api/v1/usage";
 
 export async function getFreebuffUsage(
   accessToken,

@@ -192,7 +192,7 @@ describe("Freebuff usage", () => {
     expect(result.quotas.balance_paid.total).toBe(1);
 
     const [url, init] = globalThis.fetch.mock.calls[0];
-    expect(url).toBe("https://codebuff.com/api/v1/usage");
+    expect(url).toBe("https://www.codebuff.com/api/v1/usage");
     // Upstream sends NO Authorization header here — token travels in body only.
     expect(init.headers.Authorization).toBeUndefined();
     expect(JSON.parse(init.body)).toEqual({

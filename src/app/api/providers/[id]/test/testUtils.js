@@ -107,7 +107,8 @@ const OAUTH_TEST_CONFIG = {
   // lightweight usage endpoint the CLI uses; 200 proves token works without
   // spending a model session.
   freebuff: {
-    url: "https://codebuff.com/api/v1/usage",
+    // www. directly — apex 307-redirects and fetch drops Authorization.
+    url: "https://www.codebuff.com/api/v1/usage",
     method: "POST",
     authHeader: "Authorization",
     authPrefix: "Bearer ",

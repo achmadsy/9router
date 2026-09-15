@@ -93,40 +93,18 @@ export default function SelfAwarePage() {
     }
   }, []);
 
-  // Initial + tab-scoped load. Loading flags flip inside the async fns after
-  // the first await (network), not synchronously in the effect body.
+  // Initial + tab-scoped load. Deferred one microtask so the loader's
+  // setBoardLoading(true) isn't a direct setState in the effect body.
   useEffect(() => {
     let cancelled = false;
-    const run = async () => {
-      if (tab === "board") {
-        try {
-          const res = await fetch("/api/self-aware", { cache: "no-store" });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          if (!cancelled) {
-            setCooldowns(data.cooldowns || []);
-            setBoardError(null);
-          }
-        } catch (e) {
-          if (!cancelled) setBoardError(e.message || "Failed to load cooldowns");
-        }
-      } else {
-        try {
-          const res = await fetch("/api/self-aware/policies", { cache: "no-store" });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          if (!cancelled) {
-            setPolicies(data.policies || []);
-            setPolError(null);
-          }
-        } catch (e) {
-          if (!cancelled) setPolError(e.message || "Failed to load policies");
-        }
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        if (tab === "board") loadCooldowns();
+        else loadPolicies();
       }
-    };
-    run();
+    });
     return () => { cancelled = true; };
-  }, [tab]);
+  }, [tab, loadCooldowns, loadPolicies]);
 
   // Load provider nodes once for clone/custom labels + policy options
   useEffect(() => {
@@ -244,8 +222,9 @@ export default function SelfAwarePage() {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.error || `HTTP ${res.status}`);
         }
-        setFormMsg({ ok: true, text: "Saved" });
+        setFormMsg({ ok: true, text: "Saved — applied to active rows" });
         loadPolicies();
+        loadCooldowns({ background: true });
       } catch (err) {
         setFormMsg({ ok: false, text: err.message });
       }
@@ -271,8 +250,9 @@ export default function SelfAwarePage() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
-      setFormMsg({ ok: true, text: "Saved" });
+      setFormMsg({ ok: true, text: "Saved — applied to active rows" });
       loadPolicies();
+      loadCooldowns({ background: true });
     } catch (err) {
       setFormMsg({ ok: false, text: err.message });
     }

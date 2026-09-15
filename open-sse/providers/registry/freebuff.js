@@ -20,7 +20,7 @@ export default {
   hasOAuth: true,
   hasProviderSpecificData: true,
   transport: {
-    baseUrl: "https://codebuff.com/api/v1/chat/completions",
+    baseUrl: "https://www.codebuff.com/api/v1/chat/completions",
     format: "openai",
     auth: {
       combined: true,
@@ -52,10 +52,12 @@ export default {
     statusUrl: "https://freebuff.com/api/auth/cli/status",
     // Login lives on freebuff.com. Inference/session/usage use the shared
     // Codebuff backend (`NEXT_PUBLIC_CODEBUFF_APP_URL` in the upstream client).
-    backendBaseUrl: "https://codebuff.com",
-    usageUrl: "https://codebuff.com/api/v1/usage",
-    sessionAdmissionUrl: "https://codebuff.com/api/v1/freebuff/session/admission",
-    sessionUrl: "https://codebuff.com/api/v1/freebuff/session",
+    // Must be www. directly: the apex 307-redirects and native fetch drops
+    // Authorization on cross-host redirects → "invalid token" everywhere.
+    backendBaseUrl: "https://www.codebuff.com",
+    usageUrl: "https://www.codebuff.com/api/v1/usage",
+    sessionAdmissionUrl: "https://www.codebuff.com/api/v1/freebuff/session/admission",
+    sessionUrl: "https://www.codebuff.com/api/v1/freebuff/session",
     // Long-lived account authToken; no refresh token. Codes live 1h.
     expiresInSeconds: null,
     refreshLeadMs: null,

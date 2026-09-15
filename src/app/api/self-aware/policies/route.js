@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import {
   listSelfAwarePolicies, upsertSelfAwarePolicy, deleteSelfAwarePolicy,
 } from "@/lib/db/index.js";
-import { clearSelfAwareCooldownsForUnknownQuota } from "@/sse/services/selfAwareCooldown.js";
+import {
+  clearSelfAwareCooldownsForUnknownQuota, applyManualPolicyToCooldowns, msUntilDailyReset,
+} from "@/sse/services/selfAwareCooldown.js";
 
 export const dynamic = "force-dynamic";
 
@@ -45,14 +47,18 @@ export async function PUT(request) {
       });
       // Manual policy now governs this pair — drop any unknown-quota park locks.
       await clearSelfAwareCooldownsForUnknownQuota(provider, model).catch(() => {});
-      return NextResponse.json({ policy });
+      const applied = await applyManualPolicyToCooldowns(provider, model, msUntilDailyReset(resetHour, resetMinute)).catch(() => 0);
+      return NextResponse.json({ policy, applied });
     }
     if (!Number.isFinite(timeoutMs) || timeoutMs < MIN_MS || timeoutMs > MAX_MS) {
       return NextResponse.json({ error: `timeoutMs must be ${MIN_MS}..${MAX_MS}` }, { status: 400 });
     }
     const policy = await upsertSelfAwarePolicy({ provider, model, mode: "duration", timeoutMs });
     await clearSelfAwareCooldownsForUnknownQuota(provider, model).catch(() => {});
-    return NextResponse.json({ policy });
+    // Retro-apply the new wait to already-registered cooldown rows/locks unless
+    // they carry a real provider-given time (header wait, provider reset clock).
+    const applied = await applyManualPolicyToCooldowns(provider, model, timeoutMs).catch(() => 0);
+    return NextResponse.json({ policy, applied });
   } catch (e) {
     console.error("[API] self-aware policy upsert failed:", e);
     return NextResponse.json({ error: e.message }, { status: 500 });
