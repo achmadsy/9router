@@ -26,8 +26,10 @@ export function matchesIssueKeyword(input) {
 // Also covers auth.js's raw console.error lock line:
 //   "❌ codex [429]: [429]: The usage limit has been reached"
 // (status is bracketed, so the bare `429` alternative never matches).
+// And the GLM empty-usage silent-limit lock line (429 with no body):
+//   "[CHAT] [glm/glm-5.3-flash] empty usage (IN 0 · OUT 0) treated as rate limit (reset after …)"
 const SENTRY_IGNORED_RE =
-  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts|No (?:active )?credentials)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|❌\s*\S+\s*\[429\]|(?:^|[\s\[])429[\]:\s].*usage limit/i;
+  /\[(?:AUTH|FALLBACK|COMBO|CHAT)\].*(?:locked|UNAVAILABLE\s*\(|429|usage limit|failed, trying|All models failed|No more accounts|No (?:active )?credentials)|accounts? locked|modelLock_|ERROR\s+429|⇄\s*ACC:|❌\s*\S+\s*\[429\]|(?:^|[\s\[])429[\]:\s].*usage limit|empty usage \(IN 0/i;
 
 export function isSentryIgnoredMessage(input) {
   if (!input) return false;
