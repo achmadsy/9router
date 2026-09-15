@@ -27,6 +27,7 @@ import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
 import { GlmExecutor } from "./glm.js";
+import { FreebuffExecutor } from "./freebuff.js";
 import { resolveRuntimeProviderId } from "../providers/clones.js";
 
 const executors = {
@@ -63,6 +64,8 @@ const executors = {
   windsurf: new WindsurfExecutor(),
   "devin-cli": new DevinCliExecutor(),
   glm: new GlmExecutor(),
+  freebuff: new FreebuffExecutor(),
+  fb: new FreebuffExecutor(), // Alias for freebuff
 };
 
 const defaultCache = new Map();

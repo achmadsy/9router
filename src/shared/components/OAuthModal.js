@@ -244,6 +244,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         "codebuddy-intl",
         "qoder",
         "grok-cli",
+        "freebuff",
       ];
       if (deviceCodeProviders.includes(provider)) {
         setIsDeviceCode(true);
@@ -267,9 +268,10 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         const verifyUrl = data.verification_uri_complete || data.verification_uri;
         if (verifyUrl) window.open(verifyUrl, "_blank", "noopener,noreferrer");
 
-        // Pass extraData for Kiro (contains _clientId, _clientSecret) and
-        // Qoder (contains _qoderMachineId / _qoderNonce — needed so mapTokens
-        // can persist the machine id alongside the token).
+        // Pass extraData for Kiro (contains _clientId, _clientSecret),
+        // Qoder (machine id / nonce), and Freebuff (fingerprintHash + expiresAt
+        // are the HMAC inputs the status endpoint verifies — must be echoed
+        // byte-for-byte, not recomputed from the client clock).
         const extraData = provider === "kiro"
           ? {
               _clientId: data._clientId,
@@ -286,6 +288,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
             }
           : (provider === "kimi" || provider === "kimi-coding")
           ? { _kimiDeviceId: data._kimiDeviceId }
+          : provider === "freebuff"
+          ? {
+              _freebuffFingerprintHash: data._freebuffFingerprintHash,
+              _freebuffExpiresAt: data._freebuffExpiresAt,
+              _freebuffFingerprintId: data._freebuffFingerprintId,
+              _freebuffLoginUrl: data._freebuffLoginUrl,
+            }
           : null;
         startPolling(
           data.device_code,

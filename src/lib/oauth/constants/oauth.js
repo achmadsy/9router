@@ -124,6 +124,13 @@ export const KIMCHI_CONFIG = { ...PROVIDER_OAUTH["kimchi"] };
 // Endpoint: cli-chat-proxy.grok.com — same client_id as xai, different flow + scopes
 export const GROK_CLI_CONFIG = { ...PROVIDER_OAUTH["grok-cli"] };
 
+// Freebuff / Codebuff custom device-code login (NOT standard OAuth2 device grant).
+//   1) POST /api/auth/cli/code { fingerprintId } → { loginUrl, fingerprintHash, expiresAt }
+//   2) Browser opens loginUrl
+//   3) GET  /api/auth/cli/status?fingerprintId&fingerprintHash&expiresAt → authToken
+// fingerprintId is the device mid (hardware hash or codebuff-cli-* fallback).
+export const FREEBUFF_CONFIG = { ...PROVIDER_OAUTH["freebuff"] };
+
 // Trae (ByteDance marscode) OAuth — authorization_code flow with local callback.
 //   1) POST GetLoginGuidance {loginTraceID} → {Result.LoginHost}
 //   2) Browser opens ${loginHost}/authorization?client_id=...&login_trace_id=...&auth_callback_url=${cb}

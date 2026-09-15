@@ -290,6 +290,15 @@
     "validateUrl": "https://api.fireworks.ai/inference/v1/models",
     "format": "openai"
   },
+  "freebuff": {
+    "baseUrl": "https://codebuff.com/api/v1/chat/completions",
+    "format": "openai",
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer"
+    }
+  },
   "gemini-cli": {
     "baseUrl": "https://cloudcode-pa.googleapis.com/v1internal",
     "format": "gemini-cli",

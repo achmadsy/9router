@@ -103,6 +103,18 @@ const OAUTH_TEST_CONFIG = {
     },
     refreshable: false,
   },
+  // Freebuff authToken is long-lived and has no refresh grant. Probe the same
+  // lightweight usage endpoint the CLI uses; 200 proves token works without
+  // spending a model session.
+  freebuff: {
+    url: "https://codebuff.com/api/v1/usage",
+    method: "POST",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ fingerprintId: "cli-usage" }),
+    refreshable: false,
+  },
   // Grok CLI / Grok Build — probe /v1/user (no inference quota). Headers mirror official CLI.
   "grok-cli": {
     url: PROVIDERS["grok-cli"]?.userUrl || "https://cli-chat-proxy.grok.com/v1/user",
