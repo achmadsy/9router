@@ -128,9 +128,10 @@ const freebuff = {
     const baseUrl = (config.apiBaseUrl || "https://freebuff.com").replace(/\/$/, "");
     const initiateUrl = config.initiateUrl || `${baseUrl}/api/auth/cli/code`;
 
+    // Upstream sends Content-Type only here — no Accept, no auth headers.
     const { ok, status, data } = await fetchJson(initiateUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fingerprintId }),
     });
 
@@ -189,11 +190,11 @@ const freebuff = {
       expiresAt,
     });
 
+    // Upstream sends NO headers on the status GET — query params carry auth.
     let result;
     try {
       result = await fetchJson(`${statusUrl}?${qs.toString()}`, {
         method: "GET",
-        headers: { Accept: "application/json" },
       });
     } catch (err) {
       return {

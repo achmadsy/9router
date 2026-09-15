@@ -193,7 +193,8 @@ describe("Freebuff usage", () => {
 
     const [url, init] = globalThis.fetch.mock.calls[0];
     expect(url).toBe("https://codebuff.com/api/v1/usage");
-    expect(init.headers.Authorization).toBe("Bearer token-123");
+    // Upstream sends NO Authorization header here — token travels in body only.
+    expect(init.headers.Authorization).toBeUndefined();
     expect(JSON.parse(init.body)).toEqual({
       fingerprintId: "cli-usage",
       authToken: "token-123",

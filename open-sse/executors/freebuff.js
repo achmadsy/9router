@@ -35,6 +35,10 @@ import { createHash } from "node:crypto";
 const SESSION_HEADER = "x-freebuff-instance-id";
 const MODEL_HEADER = "x-freebuff-model";
 const WALLET_LIMIT_HEADER = "x-freebuff-wallet-spend-limit";
+// Upstream model-provider.ts sends this on inference + agent-runs (own user id).
+// Honored by the server only for the Freebuff Web service account; ignored for
+// normal callers, so omitting it when unknown is safe.
+const ACTING_USER_HEADER = "x-freebuff-acting-user-id";
 const AGENT_RUNS_URL = "https://codebuff.com/api/v1/agent-runs";
 const FREEBUFF_SYSTEM_OPENING = "You are Buffy, the strategic coding assistant.";
 const NINEROUTER_SELF_AWARENESS =
@@ -155,6 +159,8 @@ function rootAgentForModel(model) {
 
 async function startAgentRun(credentials, model, proxyOptions, signal, log) {
   const token = credentials?.accessToken || credentials?.apiKey;
+  const actingUser =
+    credentials?.providerSpecificData?.userId || credentials?.userId;
   const response = await proxyAwareFetch(
     AGENT_RUNS_URL,
     {
@@ -162,6 +168,9 @@ async function startAgentRun(credentials, model, proxyOptions, signal, log) {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
+        // Same convention as inference: honored only for the Web service
+        // account, ignored for normal callers.
+        ...(actingUser ? { [ACTING_USER_HEADER]: String(actingUser) } : {}),
       },
       body: JSON.stringify({
         action: "START",
@@ -193,6 +202,8 @@ async function startAgentRun(credentials, model, proxyOptions, signal, log) {
 async function finishAgentRun(credentials, runId, status, proxyOptions, log) {
   if (!runId) return;
   const token = credentials?.accessToken || credentials?.apiKey;
+  const actingUser =
+    credentials?.providerSpecificData?.userId || credentials?.userId;
   try {
     const response = await proxyAwareFetch(
       AGENT_RUNS_URL,
@@ -201,6 +212,7 @@ async function finishAgentRun(credentials, runId, status, proxyOptions, log) {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          ...(actingUser ? { [ACTING_USER_HEADER]: String(actingUser) } : {}),
         },
         body: JSON.stringify({
           action: "FINISH",
@@ -279,15 +291,20 @@ export class FreebuffExecutor extends BaseExecutor {
   buildHeaders(credentials, stream = true, extra = {}) {
     const headers = {
       "Content-Type": "application/json",
-      // Upstream sends `ai-sdk/openai-compatible/${VERSION}/codebuff` where
-      // VERSION is build-injected. Keep its recognizable prefix and identify
-      // this client truthfully instead of spoofing an unknown release version.
+      // Upstream inference sends `ai-sdk/openai-compatible/${VERSION}/codebuff`
+      // where VERSION is build-injected. Keep its recognizable prefix and
+      // identify this client truthfully instead of spoofing a release version.
       "user-agent": "ai-sdk/openai-compatible/9router/freebuff-codebuff",
       ...this.config?.headers,
       ...extra,
     };
     const token = credentials?.accessToken || credentials?.apiKey;
     if (token) headers.Authorization = `Bearer ${token}`;
+    // Forward own user id only when known. Server honors this solely for the
+    // Freebuff Web service account; for normal callers it is ignored.
+    const actingUser =
+      credentials?.providerSpecificData?.userId || credentials?.userId;
+    if (actingUser) headers[ACTING_USER_HEADER] = String(actingUser);
     if (stream) headers.Accept = "text/event-stream";
     else headers.Accept = "application/json";
     return headers;
@@ -305,15 +322,19 @@ export class FreebuffExecutor extends BaseExecutor {
     }
 
     // Stale or model mismatch — best-effort end so the next admission is clean.
+    // Upstream sends ONLY Authorization + instance header here (no
+    // Content-Type: no body; no Accept/user-agent/acting-user).
+    const sessionToken = credentials?.accessToken || credentials?.apiKey;
     if (cached?.instanceId) {
       try {
         await proxyAwareFetch(
           sessionUrl(),
           {
             method: "DELETE",
-            headers: this.buildHeaders(credentials, false, {
+            headers: {
+              Authorization: `Bearer ${sessionToken}`,
               [SESSION_HEADER]: cached.instanceId,
-            }),
+            },
             signal: signal || AbortSignal.timeout(10_000),
           },
           proxyOptions,
@@ -324,10 +345,12 @@ export class FreebuffExecutor extends BaseExecutor {
       dropSession(key);
     }
 
-    const headers = this.buildHeaders(credentials, false, {
-      [MODEL_HEADER]: model,
+    // Exact upstream wire: Authorization + model + wallet limit. Nothing else.
+    const headers = {
+      Authorization: `Bearer ${sessionToken}`,
+      ...(model ? { [MODEL_HEADER]: model } : {}),
       [WALLET_LIMIT_HEADER]: "0",
-    });
+    };
 
     let response;
     try {
@@ -600,6 +623,7 @@ export const __test__ = {
   SESSION_HEADER,
   MODEL_HEADER,
   WALLET_LIMIT_HEADER,
+  ACTING_USER_HEADER,
 };
 
 export default FreebuffExecutor;

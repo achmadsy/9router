@@ -32,14 +32,13 @@ export async function getFreebuffUsage(
     return { message: "Freebuff usage requires an OAuth token" };
   }
 
+  // Upstream sends NO Authorization header here — token travels in body only.
   const response = await fetchFn(
     USAGE_URL,
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         fingerprintId: "cli-usage",
