@@ -6,6 +6,29 @@ import CooldownTimer from "@/shared/components/CooldownTimer";
 
 const UNITS = { s: 1000, m: 60 * 1000, h: 3600 * 1000, d: 24 * 3600 * 1000 };
 
+// Stale-while-revalidate: remounting the page (navigate away → back) restores
+// the last board/policies payload instantly from sessionStorage and refreshes
+// in the background, instead of staring at a spinner while the document
+// re-renders behind queued dashboard API traffic.
+const CACHE_KEYS = { board: "self-aware:board", policies: "self-aware:policies", nodes: "self-aware:nodes" };
+
+function readCache(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(key, value) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch { /* quota/private mode — ignore */ }
+}
+
 function parseDuration(value, unit) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -40,8 +63,9 @@ export default function SelfAwarePage() {
   // Lazy initializer — Date.now() must not run during render body on every pass
   const [now, setNow] = useState(() => Date.now());
 
-  // Board state
-  const [cooldowns, setCooldowns] = useState([]);
+  // Board state — hydrated from sessionStorage so a remount (navigate away →
+  // back) renders rows instantly instead of a spinner behind re-fetch.
+  const [cooldowns, setCooldowns] = useState(() => readCache(CACHE_KEYS.board) || []);
   const [boardLoading, setBoardLoading] = useState(false);
   const [boardError, setBoardError] = useState(null);
   const [pendingReset, setPendingReset] = useState(null);
@@ -49,7 +73,7 @@ export default function SelfAwarePage() {
   const [resetAllPending, setResetAllPending] = useState(false);
 
   // Policies state
-  const [policies, setPolicies] = useState([]);
+  const [policies, setPolicies] = useState(() => readCache(CACHE_KEYS.policies) || []);
   const [polLoading, setPolLoading] = useState(false);
   const [polError, setPolError] = useState(null);
   const [form, setForm] = useState({
@@ -59,7 +83,7 @@ export default function SelfAwarePage() {
   const [formMsg, setFormMsg] = useState(null);
 
   // Provider clones (duplicates) + custom nodes for labels + policy dropdown
-  const [providerNodes, setProviderNodes] = useState([]);
+  const [providerNodes, setProviderNodes] = useState(() => readCache(CACHE_KEYS.nodes) || []);
 
   // Session cookie auth — dashboardGuard middleware validates the cookie;
   // same plain-fetch pattern as the rest of the dashboard pages.
@@ -70,6 +94,7 @@ export default function SelfAwarePage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setCooldowns(data.cooldowns || []);
+      writeCache(CACHE_KEYS.board, data.cooldowns || []);
       setBoardError(null);
     } catch (e) {
       setBoardError(e.message || "Failed to load cooldowns");
@@ -85,6 +110,7 @@ export default function SelfAwarePage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setPolicies(data.policies || []);
+      writeCache(CACHE_KEYS.policies, data.policies || []);
       setPolError(null);
     } catch (e) {
       setPolError(e.message || "Failed to load policies");
@@ -114,7 +140,10 @@ export default function SelfAwarePage() {
         const res = await fetch("/api/provider-nodes", { cache: "no-store" });
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setProviderNodes(data.nodes || []);
+        if (!cancelled) {
+          setProviderNodes(data.nodes || []);
+          writeCache(CACHE_KEYS.nodes, data.nodes || []);
+        }
       } catch { /* labels fall back to raw id */ }
     })();
     return () => { cancelled = true; };
