@@ -185,7 +185,7 @@ export async function handleVideoProxyCore({
       status: upstream.status,
       errorText: bodyText,
     });
-    return createErrorResult(upstream.status, `[${provider}] ${message.slice(0, 2000)}`, { cooldownHint });
+    return createErrorResult(upstream.status, `[${provider}] ${message.slice(0, 2000)}`, { cooldownHint, upstreamBody: bodyText.slice(0, 600) || null });
   }
 
   // Success: pass the upstream JSON through untouched (request_id / status / video.url),

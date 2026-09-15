@@ -129,10 +129,16 @@ export function initConsoleLogCapture() {
           // Skip lines already handled by dedicated Sentry reporters (logger.js, zcode executor, etc.)
           if (!line.includes("❌ [") && !line.includes("✗ ERROR") && !line.includes("[ZCode Captcha]")) {
             const firstArg = args[0];
+            // Structured extras like { upstreamBody } ride along on the event
+            // as Additional Data instead of being flattened into the line.
+            const extra = args.find(
+              (a) => a && typeof a === "object" && !(a instanceof Error) && a.upstreamBody
+            );
+            const sentryExtra = extra ? { upstreamBody: extra.upstreamBody } : undefined;
             if (firstArg instanceof Error) {
-              captureException(firstArg, { tags: { source: "console.error" } });
+              captureException(firstArg, { tags: { source: "console.error" }, extra: sentryExtra });
             } else {
-              captureMessage(line, "error", { tags: { source: "console.error" } });
+              captureMessage(line, "error", { tags: { source: "console.error" }, extra: sentryExtra });
             }
           }
         } else if (level === "warn") {

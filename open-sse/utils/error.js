@@ -113,22 +113,25 @@ export async function parseUpstreamError(response, executor = null) {
  * @param {number} statusCode - HTTP status code
  * @param {string} message - Error message
  * @param {number} [resetsAtMs] - Optional precise cooldown expiry (ms epoch) for provider-specific quota errors
- * @param {object} [opts] - Extra metadata: { resetsAtMs, cooldownHint } (object-arg form for new callers)
- * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number, cooldownHint?: object|null }}
+ * @param {object} [opts] - Extra metadata: { resetsAtMs, cooldownHint, upstreamBody } (object-arg form for new callers)
+ * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null }}
  */
 export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOpts) {
-  // New signature: createErrorResult(status, message, { resetsAtMs, cooldownHint })
+  // New signature: createErrorResult(status, message, { resetsAtMs, cooldownHint, upstreamBody })
   // Legacy signature: createErrorResult(status, message, resetsAtMs) — kept working.
   let resetsAtMs;
   let cooldownHint = null;
+  let upstreamBody = null;
   if (resetsAtMsOrOpts !== null && typeof resetsAtMsOrOpts === "object") {
     resetsAtMs = resetsAtMsOrOpts.resetsAtMs;
     cooldownHint = resetsAtMsOrOpts.cooldownHint ?? null;
+    upstreamBody = resetsAtMsOrOpts.upstreamBody ?? null;
   } else {
     resetsAtMs = resetsAtMsOrOpts;
     if (maybeOpts && typeof maybeOpts === "object") {
       cooldownHint = maybeOpts.cooldownHint ?? null;
       if (maybeOpts.resetsAtMs !== undefined) resetsAtMs = maybeOpts.resetsAtMs;
+      if (maybeOpts.upstreamBody !== undefined) upstreamBody = maybeOpts.upstreamBody;
     }
   }
   return {
@@ -137,6 +140,7 @@ export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOp
     error: message,
     resetsAtMs,
     cooldownHint,
+    upstreamBody,
     response: errorResponse(statusCode, message)
   };
 }

@@ -349,6 +349,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       : (await markAccountUnavailable({
           credentials, status: result.status, errorText: result.error,
           provider, model, resetsAtMs, cooldownHint: result.cooldownHint,
+          upstreamBody: result.upstreamBody,
         })).shouldFallback;
 
     if (shouldFallback) {

@@ -519,7 +519,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       );
     }
     reqLogger.logError(new Error(message), finalBody || translatedBody);
-    return createErrorResult(statusCode, errMsg, { resetsAtMs, cooldownHint });
+    return createErrorResult(statusCode, errMsg, { resetsAtMs, cooldownHint, upstreamBody });
   }
 
   const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, clientRawRequest, onRequestSuccess, onEmptyUsage, pxpipe: pxpipeSummary, reqTag, log };

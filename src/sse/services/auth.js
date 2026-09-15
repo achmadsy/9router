@@ -318,6 +318,7 @@ export async function markAccountUnavailable(connectionIdOrOpts, status, errorTe
     resetsAtMs = opts.resetsAtMs ?? null;
   }
   const cooldownHint = opts.cooldownHint ?? null;
+  const upstreamBody = opts.upstreamBody ?? null;
 
   // noauth free providers (OpenCode Free): proxy-scoped cooldowns only — no modelLock
   if (connectionId === "noauth") {
@@ -422,7 +423,8 @@ export async function markAccountUnavailable(connectionIdOrOpts, status, errorTe
   log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}] src=${source || "legacy-backoff"}`);
 
   if (provider && status && reason) {
-    console.error(`❌ ${provider} [${status}]: ${reason}`);
+    const bodySuffix = upstreamBody ? `\n    Upstream: ${String(upstreamBody).replace(/\s+/g, " ").trim()}` : "";
+    console.error(`❌ ${provider} [${status}]: ${reason}${bodySuffix}`, upstreamBody ? { upstreamBody } : null);
   }
 
   return { shouldFallback: true, cooldownMs };

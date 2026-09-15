@@ -50,9 +50,12 @@ function truncate(text, max) {
   return text.length > max ? text.slice(0, max) : text;
 }
 
-/** Attach wait-header cooldownHint to a failure result when the Response has one. */
+/** Attach wait-header cooldownHint + raw upstream body to a failure result. */
 function failWithCooldown(result, res, errorText = "") {
   if (!result || result.success !== false || !res) return result;
+  if (errorText && !result.upstreamBody) {
+    result.upstreamBody = String(errorText).slice(0, 600) || null;
+  }
   if (result.cooldownHint) return result;
   const hint = parseWaitHeaderCooldown(res.headers, { status: result.status ?? res.status, errorText });
   if (hint) result.cooldownHint = hint;

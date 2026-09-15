@@ -218,6 +218,7 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
       model: fetchLockKey,
       resetsAtMs: result.resetsAtMs,
       cooldownHint: result.cooldownHint,
+      upstreamBody: result.upstreamBody,
     });
 
     if (shouldFallback) {

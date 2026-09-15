@@ -32,7 +32,7 @@ async function upstreamError(res) {
   try { const j = JSON.parse(txt); msg = j?.error?.message || j?.error || j?.message || msg; } catch {}
   const errorText = typeof msg === "string" ? msg : JSON.stringify(msg);
   const cooldownHint = parseWaitHeaderCooldown(res.headers, { status: res.status, errorText: txt });
-  return createErrorResult(res.status, errorText, { cooldownHint });
+  return createErrorResult(res.status, errorText, { cooldownHint, upstreamBody: txt.slice(0, 600) || null });
 }
 
 // Deepgram: raw binary POST + model query param
