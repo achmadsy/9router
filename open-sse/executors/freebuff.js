@@ -305,8 +305,8 @@ export class FreebuffExecutor extends BaseExecutor {
     const actingUser =
       credentials?.providerSpecificData?.userId || credentials?.userId;
     if (actingUser) headers[ACTING_USER_HEADER] = String(actingUser);
-    if (stream) headers.Accept = "text/event-stream";
-    else headers.Accept = "application/json";
+    // No Accept header: upstream postJsonToApi sends none on inference.
+    void stream;
     return headers;
   }
 
