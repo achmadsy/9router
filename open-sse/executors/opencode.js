@@ -80,7 +80,7 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   transformRequest(model, body, stream, credentials) {
     this._currentSessionId = resolveOpencodeSession(body, credentials);
-    if (isResponsesModel(model)) {
+    if (isResponsesModel(model) || getModelTargetFormat("oc", model) === "openai-responses") {
       // Responses API names the output cap max_output_tokens and takes thinking
       // as reasoning:{effort,summary} — normalize the Chat fields at this boundary.
       if (body.max_output_tokens === undefined) {
@@ -100,11 +100,12 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
     const base = this.config.baseUrl;
-    if (isResponsesModel(model)) return `${base}/zen/v1/responses`;
+    const format = isResponsesModel(model) ? "openai-responses" : getModelTargetFormat("oc", model);
     // Custom models may declare a targetFormat via the dashboard "Add Custom
-    // Model" endpoint dropdown ("claude" → Anthropic Messages). union-alpha is
-    // messages-only upstream: /chat/completions 500s, /responses errors.
-    if (getModelTargetFormat("oc", model) === "claude") return `${base}/zen/v1/messages`;
+    // Model" endpoint dropdown. union-alpha is messages-only upstream:
+    // /chat/completions 500s, /responses errors.
+    if (format === "openai-responses") return `${base}/zen/v1/responses`;
+    if (format === "claude") return `${base}/zen/v1/messages`;
     return `${base}/zen/v1/chat/completions`;
   }
 

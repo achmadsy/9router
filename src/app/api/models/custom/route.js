@@ -34,8 +34,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "providerAlias and id required" }, { status: 400 });
     }
     // Optional per-model upstream endpoint override (e.g. opencode free
-    // union-alpha needs /messages). Only two values mean anything today.
-    const cleanTargetFormat = targetFormat === "claude" || targetFormat === "openai" ? targetFormat : null;
+    // union-alpha needs /messages). Three values mean something today.
+    const VALID_TARGET_FORMATS = new Set(["claude", "openai", "openai-responses"]);
+    const cleanTargetFormat = VALID_TARGET_FORMATS.has(targetFormat) ? targetFormat : null;
     const cleanCaps = sanitizeCaps(caps);
     const added = await addCustomModel({
       providerAlias, id, type: type || "llm", name,

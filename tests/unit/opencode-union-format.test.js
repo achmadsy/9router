@@ -36,3 +36,14 @@ describe("opencode per-model endpoint override", () => {
     expect(ex.buildUrl("muse-spark-1.3-contributor-free", true, 0, null)).toBe("https://opencode.ai/zen/v1/responses");
   });
 });
+
+describe("opencode openai-responses override", () => {
+  it("custom model with targetFormat openai-responses routes to /zen/v1/responses", async () => {
+    const { installCustomModelFormats: install } = await import("../../open-sse/providers/customModelFormats.js");
+    await install(async () => [
+      { providerAlias: "oc", id: "some-union-model", targetFormat: "openai-responses" },
+    ]);
+    const ex = new OpenCodeExecutor();
+    expect(ex.buildUrl("some-union-model", true, 0, null)).toBe("https://opencode.ai/zen/v1/responses");
+  });
+});

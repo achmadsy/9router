@@ -9,15 +9,23 @@
 
 const EMPTY = new Map();
 
-let loader = null;
-let cache = EMPTY;
-let loading = null;
+// State lives on globalThis: Next/webpack bundles this module into separate
+// chunk graphs (instrumentation vs route chunks) as distinct instances, so
+// module-level lets would not be shared. globalThis is the one shared heap —
+// same pattern as __9router_sentry / __9routerFreebuffState__.
+const STATE_KEY = "__9routerCustomModelFormats__";
+const state = (globalThis[STATE_KEY] ??= {
+  loader: null,
+  cache: EMPTY,   // Map<"alias|modelId", targetFormat>
+  loading: null,  // in-flight refresh promise
+});
 
 function key(providerAlias, modelId) {
   return `${String(providerAlias || "")}|${String(modelId || "")}`;
 }
 
 export function getCustomModelTargetFormat(providerAlias, modelId) {
+  const cache = state.cache;
   if (!cache.size) return null;
   // Exact id first, then the base id without a thinking suffix "model(level)".
   const hit = cache.get(key(providerAlias, modelId))
@@ -26,31 +34,32 @@ export function getCustomModelTargetFormat(providerAlias, modelId) {
 }
 
 async function refresh(force = false) {
-  if (!loader) return;
-  if (loading && !force) return loading;
-  loading = (async () => {
+  if (!state.loader) return;
+  if (state.loading && !force) return state.loading;
+  state.loading = (async () => {
     try {
-      const models = await loader() || [];
+      const models = await state.loader() || [];
       const next = new Map();
       for (const m of models) {
         if (m?.targetFormat && m?.providerAlias && m?.id) {
           next.set(key(m.providerAlias, m.id), m.targetFormat);
         }
       }
-      cache = next;
+      state.cache = next;
     } catch {
       // Fail open: keep the previous cache; format overrides are best-effort.
     } finally {
-      loading = null;
+      state.loading = null;
     }
   })();
-  return loading;
+  return state.loading;
 }
 
 // Server-only install (mirrors catalogOverride.installCatalogSource): loader
-// returns the full custom-model row list.
+// returns the full custom-model row list. A second install (duplicate module
+// instance across chunk graphs) just re-points the shared loader.
 export async function installCustomModelFormats(load) {
-  loader = load;
+  state.loader = load;
   await refresh(true);
 }
 

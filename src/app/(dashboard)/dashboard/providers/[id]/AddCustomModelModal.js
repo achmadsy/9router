@@ -15,6 +15,7 @@ const ENDPOINT_OVERRIDE_PROVIDERS = new Set(["oc", "opencode", "opencode-go", "o
 const ENDPOINT_OPTIONS = [
   { value: "openai", label: "/chat/completions (OpenAI)" },
   { value: "claude", label: "/messages (Claude)" },
+  { value: "openai-responses", label: "/responses (OpenAI Responses)" },
 ];
 
 export default function AddCustomModelModal({ isOpen, providerAlias, providerDisplayAlias, onSave, onClose }) {
