@@ -26,6 +26,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
+import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
 
 /**
  * Handle chat completion request
@@ -50,6 +51,9 @@ export async function handleChat(request, clientRawRequest = null) {
       headers: Object.fromEntries(request.headers.entries())
     };
   }
+  // Capture identity headers from a genuine Claude Code client so executors can
+  // forward them upstream instead of static hardcoded values (claudeHeaderCache).
+  cacheClaudeHeaders(clientRawRequest.headers);
   // Claude Code marks a 1M-context request as `<model>[1m]`; the marker matches
   // no combo, alias or provider/model pair, so it must not reach resolution.
   // The capability travels in the anthropic-beta header, forwarded as-is.
