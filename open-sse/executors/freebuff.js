@@ -944,7 +944,7 @@ export class FreebuffExecutor extends BaseExecutor {
       let engagement = null;
       let stopAds = null;
       if (instanceId && !runLifecycleTimers.has(instanceId)) {
-        runLifecycleTimers.set(instanceId, true);
+        runLifecycleTimers.add(instanceId);
         heartbeat = startSessionHeartbeat(credentials, instanceId, proxyOptions, log);
         engagement = startEngagementHeartbeat({
           token: credentials?.accessToken || credentials?.apiKey,
