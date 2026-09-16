@@ -22,6 +22,9 @@ export default {
   models: [
     // Muse Spark models are served by /zen/v1/responses; the rest stay on
     // /chat/completions, so the format is declared per-model, not per-provider.
+    // Custom models (e.g. union-alpha, messages-only) carry their endpoint via
+    // the dashboard Add Custom Model dropdown — stored on the row as
+    // targetFormat, not here.
     { id: "muse-spark-1.2-contributor-free", name: "Muse Spark 1.2 Contributor Free", targetFormat: "openai-responses" },
     { id: "muse-spark-1.3-contributor-free", name: "Muse Spark 1.3 Contributor Free", targetFormat: "openai-responses" },
   ],

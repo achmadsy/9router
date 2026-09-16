@@ -2,21 +2,33 @@
 
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
-import { Button, Modal, Toggle } from "@/shared/components";
+import { Button, Modal, Toggle, Select } from "@/shared/components";
 import { CAPACITY_META } from "@/shared/constants/models";
 
 const defaultCaps = () => Object.fromEntries(Object.keys(CAPACITY_META).map((key) => [key, false]));
 
+// Providers whose upstream serves some models on different endpoints. The
+// dropdown only renders for these (open-source opencode free: union-alpha is
+// Anthropic-Messages-only while everything else is /chat/completions).
+const ENDPOINT_OVERRIDE_PROVIDERS = new Set(["oc", "opencode", "opencode-go", "ocg"]);
+
+const ENDPOINT_OPTIONS = [
+  { value: "openai", label: "/chat/completions (OpenAI)" },
+  { value: "claude", label: "/messages (Claude)" },
+];
+
 export default function AddCustomModelModal({ isOpen, providerAlias, providerDisplayAlias, onSave, onClose }) {
   const [modelId, setModelId] = useState("");
   const [caps, setCaps] = useState(defaultCaps);
+  const [targetFormat, setTargetFormat] = useState("openai");
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | "ok" | "error"
   const [testError, setTestError] = useState("");
   const [saving, setSaving] = useState(false);
+  const showEndpointPicker = ENDPOINT_OVERRIDE_PROVIDERS.has(providerAlias);
 
   // Reset state when modal opens
   useEffect(() => {
-    if (isOpen) { setModelId(""); setCaps(defaultCaps()); setTestStatus(null); setTestError(""); }
+    if (isOpen) { setModelId(""); setCaps(defaultCaps()); setTargetFormat("openai"); setTestStatus(null); setTestError(""); }
   }, [isOpen]);
 
   // Strip provider's own alias prefix (e.g. "cc/model" -> "model" for cc provider)
@@ -50,7 +62,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     if (!cleanId || saving) return;
     setSaving(true);
     try {
-      await onSave(cleanId, caps);
+      await onSave(cleanId, caps, showEndpointPicker ? targetFormat : undefined);
     } finally {
       setSaving(false);
     }
@@ -89,6 +101,16 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
             Sent to provider as: <code className="font-mono bg-sidebar px-1 rounded">{stripAlias(modelId.trim()) || "model-id"}</code>
           </p>
         </div>
+
+        {showEndpointPicker && (
+          <Select
+            label="Upstream endpoint"
+            value={targetFormat}
+            onChange={(e) => setTargetFormat(e.target.value)}
+            options={ENDPOINT_OPTIONS}
+            hint="Most models use /chat/completions. Pick /messages only for models that require Anthropic Messages upstream (e.g. union-alpha)."
+          />
+        )}
 
         <div>
           <label className="text-sm font-medium mb-1.5 block">Capabilities</label>

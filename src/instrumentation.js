@@ -11,6 +11,13 @@ export async function register() {
     const { installCatalogSource } = await import("open-sse/providers/catalogOverride.js");
     await installCatalogSource();
 
+    // Per-model upstream endpoint overrides stored on custom models
+    // (targetFormat). Sync read side lives in providerModels.js's format
+    // lookup; refresh is re-triggered by the custom-model API routes.
+    const { installCustomModelFormats } = await import("open-sse/providers/customModelFormats.js");
+    const { getCustomModels } = await import("@/lib/db/repos/aliasRepo.js");
+    await installCustomModelFormats(() => getCustomModels());
+
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
   }

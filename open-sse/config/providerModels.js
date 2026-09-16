@@ -6,6 +6,7 @@ import { modelQuotaFamily, modelStrip, modelTargetFormat, modelSupportedFormats,
 import { CODEX_REVIEW_SUFFIX, isMuseSparkModel } from "../providers/models/helpers.js";
 import { FORMATS } from "../translator/formats.js";
 import { stripRecognizedContextSuffix } from "../services/model.js";
+import { getCustomModelTargetFormat } from "../providers/customModelFormats.js";
 export { PROVIDER_MODELS };
 
 
@@ -55,6 +56,11 @@ export function getModelTargetFormat(aliasOrId, modelId) {
   if ((!aliasOrId || aliasOrId === "oc" || aliasOrId === "opencode" || aliasOrId === "ocg" || aliasOrId === "opencode-go") && isMuseSparkModel(modelId)) {
     return FORMATS.OPENAI_RESPONSES;
   }
+  // Custom models may declare an upstream endpoint override (dashboard
+  // "Add Custom Model" dropdown, e.g. opencode free union-alpha → claude
+  // /messages). Declared format wins over provider default.
+  const customFormat = getCustomModelTargetFormat(aliasOrId, modelId);
+  if (customFormat) return customFormat;
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return null;
   return modelTargetFormat(findModel(models, modelId, aliasOrId));

@@ -5,6 +5,7 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
+import { getModelTargetFormat } from "../config/providerModels.js";
 
 const OPENCODE_UA = "opencode";
 // Models served by /zen/v1/responses; every other model stays on /chat/completions.
@@ -89,15 +90,22 @@ export class OpenCodeExecutor extends BaseExecutor {
       delete body.max_tokens;
       delete body.max_completion_tokens;
       normalizeOpencodeReasoning(model, body);
+    } else if (getModelTargetFormat("oc", model) === "claude") {
+      // Claude Messages body (chatCore already translated it) — nothing to
+      // normalize; the session headers in buildHeaders do the rest.
+      return body;
     }
     return injectReasoningContent({ provider: this.provider, model, body });
   }
 
-  buildUrl(model) {
+  buildUrl(model, stream, urlIndex = 0, credentials = null) {
     const base = this.config.baseUrl;
-    return isResponsesModel(model)
-      ? `${base}/zen/v1/responses`
-      : `${base}/zen/v1/chat/completions`;
+    if (isResponsesModel(model)) return `${base}/zen/v1/responses`;
+    // Custom models may declare a targetFormat via the dashboard "Add Custom
+    // Model" endpoint dropdown ("claude" → Anthropic Messages). union-alpha is
+    // messages-only upstream: /chat/completions 500s, /responses errors.
+    if (getModelTargetFormat("oc", model) === "claude") return `${base}/zen/v1/messages`;
+    return `${base}/zen/v1/chat/completions`;
   }
 
   buildHeaders(credentials, stream = true) {

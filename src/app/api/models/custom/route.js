@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCustomModels, addCustomModel, deleteCustomModel } from "@/models";
 import { CAPACITY_META } from "@/shared/constants/models";
+import { refreshCustomModelFormats } from "open-sse/providers/customModelFormats.js";
 
 export const dynamic = "force-dynamic";
 
@@ -28,12 +29,22 @@ export async function GET() {
 // POST /api/models/custom - Add custom model
 export async function POST(request) {
   try {
-    const { providerAlias, id, type, name, caps } = await request.json();
+    const { providerAlias, id, type, name, caps, targetFormat } = await request.json();
     if (!providerAlias || !id) {
       return NextResponse.json({ error: "providerAlias and id required" }, { status: 400 });
     }
+    // Optional per-model upstream endpoint override (e.g. opencode free
+    // union-alpha needs /messages). Only two values mean anything today.
+    const cleanTargetFormat = targetFormat === "claude" || targetFormat === "openai" ? targetFormat : null;
     const cleanCaps = sanitizeCaps(caps);
-    const added = await addCustomModel({ providerAlias, id, type: type || "llm", name, ...(cleanCaps ? { caps: cleanCaps } : {}) });
+    const added = await addCustomModel({
+      providerAlias, id, type: type || "llm", name,
+      ...(cleanCaps ? { caps: cleanCaps } : {}),
+      ...(targetFormat !== undefined ? { targetFormat: cleanTargetFormat } : {}),
+    });
+    // Per-model targetFormat overrides are read synchronously per request —
+    // re-pull the cache so the new/updated row applies without a restart.
+    await refreshCustomModelFormats();
     return NextResponse.json({ success: true, added });
   } catch (error) {
     console.log("Error adding custom model:", error);
@@ -52,6 +63,7 @@ export async function DELETE(request) {
       return NextResponse.json({ error: "providerAlias and id required" }, { status: 400 });
     }
     await deleteCustomModel({ providerAlias, id, type });
+    await refreshCustomModelFormats();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.log("Error deleting custom model:", error);
