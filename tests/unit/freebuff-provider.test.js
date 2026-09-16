@@ -157,6 +157,45 @@ describe("Freebuff inference protocol", () => {
       ),
     ).toMatchObject({ endsTheSession: false });
   });
+
+  it("maps every picker model to its upstream root agent id", async () => {
+    const { __test__ } = await import("../../open-sse/executors/freebuff.js");
+
+    expect(__test__.rootAgentForModel("z-ai/glm-5.3-flash")).toBe(
+      "base2-free-glm-5-3-flash",
+    );
+    expect(__test__.rootAgentForModel("deepseek/deepseek-v4-flash")).toBe(
+      "base2-free-deepseek-flash",
+    );
+    expect(__test__.rootAgentForModel("mimo/mimo-v2.5")).toBe("base2-free-mimo");
+    // Upstream's legacy-caller fallback for unmapped models.
+    expect(__test__.rootAgentForModel("unknown/model")).toBe("base2-free");
+    // Same-model reviewer pairing (session_model_mismatch guard).
+    expect(__test__.reviewerAgentForModel("z-ai/glm-5.3-flash")).toBe(
+      "code-reviewer-glm-5-3-flash",
+    );
+    expect(__test__.reviewerAgentForModel("unknown/model")).toBe(
+      "code-reviewer-deepseek-flash",
+    );
+  });
+
+  it("builds agent steps with child run wiring like upstream addAgentStep", async () => {
+    const { __test__ } = await import("../../open-sse/executors/freebuff.js");
+    const step = __test__.makeAgentStep({
+      stepNumber: 3,
+      childRunIds: ["child-run-9"],
+      messageId: "msg-1",
+      startTime: new Date("2030-01-01T00:00:00Z"),
+    });
+    expect(step.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(step.stepNumber).toBe(3);
+    expect(step.childRunIds).toEqual(["child-run-9"]);
+    expect(step.messageId).toBe("msg-1");
+    expect(step.status).toBe("completed");
+    expect(step.startTime).toBe("2030-01-01T00:00:00.000Z");
+  });
 });
 
 describe("Freebuff usage", () => {
