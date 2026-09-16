@@ -226,6 +226,50 @@ function sessionUrl() {
 /** @type {Map<string, { instanceId: string, model: string, expiresAt: number }>} */
 const sessionCache = new Map();
 
+// Cooldowns for non-reclaimable admission refusals (borrowed from VansRouter):
+// re-admitting a locked/limited pair just spams the upstream gate, so fail fast
+// until the TTL lapses. Keyed per connection (account), not per model — a
+// model_locked session blocks the account's free tier regardless of retry shape.
+/** @type {Map<string, number>} connection key → cooldown expiry (ms epoch). */
+const admissionCooldowns = new Map();
+const ADMISSION_COOLDOWN_MS = 10 * 60 * 1000;
+
+// Lazy-prune expired cooldowns so long-running servers don't accumulate one
+// entry per (account, refusal) forever.
+function setAdmissionCooldown(key, until = Date.now() + ADMISSION_COOLDOWN_MS) {
+  const now = Date.now();
+  for (const [k, v] of admissionCooldowns) {
+    if (v <= now) admissionCooldowns.delete(k);
+  }
+  admissionCooldowns.set(key, until);
+}
+
+function getAdmissionCooldown(key) {
+  const until = admissionCooldowns.get(key);
+  if (until == null) return null;
+  if (until <= Date.now()) {
+    admissionCooldowns.delete(key);
+    return null;
+  }
+  return until;
+}
+
+// Last refusal status per connection, for a human-readable cooldown error.
+const admissionRefusalReasons = new Map();
+
+function rememberRefusalReason(key, status) {
+  admissionRefusalReasons.set(key, status);
+  // Keep the reasons map bounded alongside the cooldown map.
+  if (admissionRefusalReasons.size > 1_000) {
+    const first = admissionRefusalReasons.keys().next().value;
+    admissionRefusalReasons.delete(first);
+  }
+}
+
+function cachedRefusalReason(key) {
+  return admissionRefusalReasons.get(key) || null;
+}
+
 /** @type {Map<string, string>} connection key → stable chat-session id for ad auctions. */
 const adSessionIds = new Map();
 
@@ -709,6 +753,20 @@ export class FreebuffExecutor extends BaseExecutor {
    */
   async ensureSession({ credentials, model, log, proxyOptions = null, signal = null }) {
     const key = connectionKey(credentials);
+
+    // Fail fast while this account is cooling down from a non-reclaimable
+    // admission refusal (model_locked / rate_limited / spend_limited / ip_capped).
+    const cooldownUntil = getAdmissionCooldown(key);
+    if (cooldownUntil) {
+      const err = new Error(
+        `Freebuff ${cachedRefusalReason(key) || "admission refused"} — cooldown until ${new Date(cooldownUntil).toLocaleTimeString()}`,
+      );
+      err.freebuffAdmission = "admission_cooldown";
+      err.resetsAtMs = cooldownUntil;
+      err.retryAfterMs = cooldownUntil - Date.now();
+      throw err;
+    }
+
     const cached = sessionCache.get(key);
     if (isLive(cached, model)) {
       return { instanceId: cached.instanceId, cached: true };
@@ -792,12 +850,36 @@ export class FreebuffExecutor extends BaseExecutor {
         "FREEBUFF",
         `session admission failed (invalid token or limit): HTTP ${response.status} ${msg}`,
       );
-      // Auth problems need re-auth; chat call still fails with real upstream body.
-      if (response.status === 401 || response.status === 403) {
+      // 401 is the only genuine auth failure (verified live: a bad token gets
+      // {"error":"unauthorized"} with HTTP 401). A 403 from the admission
+      // endpoint is a server-side GATE, not a credential problem — the token
+      // authenticated fine or upstream would have said 401 "unauthorized".
+      // Telling the user to re-login on 403 is misleading (seen in prod:
+      // 9ROUTER-TH fired "re-auth required" for a region/limit gate and a
+      // fresh re-login changed nothing). Distinguish the two:
+      if (response.status === 401) {
         log?.warn?.("FREEBUFF", `re-auth required: freebuff token_refresh / re-auth needed`);
         const err = new Error(msg);
         err.freebuffAuth = true;
         err.freebuffReauth = true;
+        throw err;
+      }
+      if (response.status === 403) {
+        // Gate statuses arrive as body.status (country_blocked / banned /
+        // ip_capped / spend_limited / session_limit_reached …); surface those
+        // verbatim, cooldown the account like other non-reclaimable refusals.
+        const gate = body?.status || body?.error || "forbidden";
+        const err = new Error(
+          `Freebuff admission gate ${gate}: ${msg}`.trim(),
+        );
+        err.freebuffAdmission = gate;
+        err.resetsAtMs =
+          body?.retryAfterMs ? Date.now() + Number(body.retryAfterMs) : undefined;
+        setAdmissionCooldown(
+          key,
+          body?.retryAfterMs ? Date.now() + Number(body.retryAfterMs) : undefined,
+        );
+        rememberRefusalReason(key, gate);
         throw err;
       }
       return null;
@@ -826,6 +908,14 @@ export class FreebuffExecutor extends BaseExecutor {
         );
         err.freebuffAdmission = body.status;
         err.retryAfterMs = body.retryAfterMs;
+        // Non-reclaimable refusal — cooldown the account so subsequent requests
+        // fail fast instead of hammering the admission gate (10 min default,
+        // upstream retryAfterMs takes precedence when provided).
+        setAdmissionCooldown(
+          key,
+          body.retryAfterMs ? Date.now() + Number(body.retryAfterMs) : undefined,
+        );
+        rememberRefusalReason(key, body.status);
         throw err;
       }
       return null;
