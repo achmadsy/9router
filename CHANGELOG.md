@@ -1,3 +1,8 @@
+# v0.5.77 (2026-09-16)
+
+## Features
+- **Freebuff**: label the provider `Freebuff (WIP)` in the dashboard (registry `display.name`) — integration paused pending the [Freebuff-2API](https://github.com/lza6/Freebuff-2API) sidecar path; routing still requires active credentials, requests without any active connection keep failing closed with `No active credentials for provider: freebuff`
+
 # v0.5.76 (2026-09-15)
 
 ## Features
