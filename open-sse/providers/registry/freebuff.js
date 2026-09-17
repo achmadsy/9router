@@ -5,7 +5,7 @@ export default {
   aliases: ["freebuff-ai", "codebuff-free"],
   uiAlias: "fb",
   display: {
-    name: "Freebuff (WIP)",
+    name: "Freebuff",
     icon: "auto_awesome",
     color: "#7C3AED",
     textIcon: "FB",
