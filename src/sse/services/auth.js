@@ -183,7 +183,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const earliest = expiries.sort()[0] || null;
       if (earliest) {
         const earliestConn = lockedConns[0];
-        log.warn("AUTH", `${provider} | all ${connections.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${earliestConn?.lastError?.slice(0, 50)}`);
+        log.warn("AUTH", `${provider} | all ${connections.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${earliestConn?.lastError?.slice(0, 500)}`);
         return {
           allRateLimited: true,
           retryAfter: earliest,
@@ -379,7 +379,7 @@ export async function markAccountUnavailable(connectionIdOrOpts, status, errorTe
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
-  const reason = typeof errorText === "string" ? errorText.slice(0, 100) : "Provider error";
+  const reason = typeof errorText === "string" ? errorText.slice(0, 2000) : "Provider error";
   // Single expiry: generate once, reuse for modelLock_* and sidecar
   const finalExpiresAtMs = sidecarExpiresMs || (Date.now() + cooldownMs);
   const lockExpiryIso = new Date(finalExpiresAtMs).toISOString();

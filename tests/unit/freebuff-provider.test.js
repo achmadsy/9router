@@ -135,6 +135,55 @@ describe("Freebuff inference protocol", () => {
     );
   });
 
+  it("matches VansRouter chat wire: end_turn, no-fallback provider, no reasoning knobs", async () => {
+    const { FreebuffExecutor } = await import("../../open-sse/executors/freebuff.js");
+    const executor = new FreebuffExecutor();
+    const body = executor.injectSessionMetadata(
+      {
+        model: "z-ai/glm-5.3-flash",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ type: "function", function: { name: "x", parameters: {} } }],
+        reasoning_effort: "max",
+        reasoning: { effort: "high" },
+      },
+      "instance-123",
+      { id: "connection-1" },
+      "server-run",
+    );
+
+    expect(body.tools.map((t) => t.function.name)).toContain("end_turn");
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.reasoning).toBeUndefined();
+    expect(body.provider).toMatchObject({ allow_fallbacks: false });
+  });
+
+  it("claims sessions on the CLI route without wallet header (VansRouter parity)", async () => {
+    const proxyFetch = await import("../../open-sse/utils/proxyFetch.js");
+    const calls = [];
+    const spy = vi.spyOn(proxyFetch, "proxyAwareFetch").mockImplementation(async (url, init) => {
+      calls.push([url, init]);
+      return new Response(
+        JSON.stringify({ status: "active", instanceId: "i-1", model: "m", expiresAt: "2030-01-01T00:00:00.000Z" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    try {
+      const { FreebuffExecutor } = await import("../../open-sse/executors/freebuff.js");
+      const executor = new FreebuffExecutor();
+      const session = await executor.ensureSession({
+        credentials: { id: "c-adm", accessToken: "tok" },
+        model: "z-ai/glm-5.3-flash",
+        log: null,
+      });
+      expect(session.instanceId).toBe("i-1");
+      expect(calls[0][0]).toBe("https://www.codebuff.com/api/v1/freebuff/session");
+      expect(calls[0][1].headers["x-freebuff-wallet-spend-limit"]).toBeUndefined();
+      expect(calls[0][1].headers["User-Agent"]).toBe("codebuff-cli/0.0.138");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("only classifies gate codes when HTTP status also matches", async () => {
     const { __test__ } = await import("../../open-sse/executors/freebuff.js");
 

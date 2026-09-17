@@ -8,8 +8,9 @@ import { createHash, randomUUID } from "node:crypto";
  *
  * Protocol (from CodebuffAI/freebuff):
  *   Session (required for free-mode models):
- *     POST {sessionAdmissionUrl}
- *       headers: Authorization, x-freebuff-model, x-freebuff-wallet-spend-limit
+ *     POST {sessionUrl}
+ *       headers: Authorization, Content-Type, User-Agent (codebuff-cli),
+ *       x-freebuff-model
  *       → { status: "active", instanceId, model, expiresAt, ... }
  *     GET/DELETE {sessionUrl} with x-freebuff-instance-id
  *
@@ -34,7 +35,6 @@ import { createHash, randomUUID } from "node:crypto";
 
 const SESSION_HEADER = "x-freebuff-instance-id";
 const MODEL_HEADER = "x-freebuff-model";
-const WALLET_LIMIT_HEADER = "x-freebuff-wallet-spend-limit";
 // Upstream model-provider.ts sends this on inference + agent-runs (own user id).
 // Honored by the server only for the Freebuff Web service account; ignored for
 // normal callers, so omitting it when unknown is safe.
@@ -212,12 +212,10 @@ function oauthConfig() {
   return PROVIDER_OAUTH.freebuff || PROVIDERS.freebuff?.oauth || {};
 }
 
-function sessionAdmissionUrl() {
-  return (
-    oauthConfig().sessionAdmissionUrl ||
-    "https://www.codebuff.com/api/v1/freebuff/session/admission"
-  );
-}
+// VansRouter parity: the CLI claims sessions with POST /api/v1/freebuff/session
+// (model in x-freebuff-model, codebuff-cli UA). There is no separate
+// /session/admission route upstream — the wallet header went with it.
+const SESSION_CLI_USER_AGENT = "codebuff-cli/0.0.138";
 
 function sessionUrl() {
   return oauthConfig().sessionUrl || "https://www.codebuff.com/api/v1/freebuff/session";
@@ -334,6 +332,25 @@ function rootAgentForModel(model) {
   return ROOT_AGENT_BY_MODEL[model] || "base2-free";
 }
 
+// The free-tier gate rejects tool-calling turns without the CLI's end_turn
+// tool (backend 404 "No endpoints found"). Append it whenever the caller
+// sends tools, exactly like the CLI/VansRouter wire shape.
+const END_TURN_TOOL = {
+  type: "function",
+  function: {
+    name: "end_turn",
+    description: "Signal the end of the current task.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
+function injectEndTurnTool(body) {
+  const tools = body?.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return body;
+  if (tools.some((tool) => tool?.function?.name === "end_turn")) return body;
+  return { ...body, tools: [...tools, END_TURN_TOOL] };
+}
+
 function reviewerAgentForModel(model) {
   return REVIEWER_AGENT_BY_MODEL[model] || FALLBACK_REVIEWER_AGENT_ID;
 }
@@ -362,6 +379,7 @@ async function startAgentRun(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
+        "User-Agent": SESSION_CLI_USER_AGENT,
         // Same convention as inference: honored only for the Web service
         // account, ignored for normal callers.
         ...(actingUser ? { [ACTING_USER_HEADER]: String(actingUser) } : {}),
@@ -413,6 +431,7 @@ async function finishAgentRun(
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "User-Agent": SESSION_CLI_USER_AGENT,
           ...(actingUser ? { [ACTING_USER_HEADER]: String(actingUser) } : {}),
         },
         body: JSON.stringify({
@@ -796,20 +815,23 @@ export class FreebuffExecutor extends BaseExecutor {
       dropSession(key);
     }
 
-    // Exact upstream wire: Authorization + model + wallet limit. Nothing else.
+    // Exact CLI wire: Authorization + Content-Type + model header + CLI UA.
+    // VansRouter parity: no wallet header, no separate admission route.
     const headers = {
       Authorization: `Bearer ${sessionToken}`,
+      "Content-Type": "application/json",
+      "User-Agent": SESSION_CLI_USER_AGENT,
       ...(model ? { [MODEL_HEADER]: model } : {}),
-      [WALLET_LIMIT_HEADER]: "0",
     };
 
     let response;
     try {
       response = await proxyAwareFetch(
-        sessionAdmissionUrl(),
+        sessionUrl(),
         {
           method: "POST",
           headers,
+          body: "{}",
           signal: signal || AbortSignal.timeout(20_000),
         },
         proxyOptions,
@@ -868,11 +890,16 @@ export class FreebuffExecutor extends BaseExecutor {
         // Gate statuses arrive as body.status (country_blocked / banned /
         // ip_capped / spend_limited / session_limit_reached …); surface those
         // verbatim, cooldown the account like other non-reclaimable refusals.
+        // Log the FULL upstream body untruncated — prod suspensions arrive as
+        // long `account_suspended ... third-party ...` strings and a slice
+        // hides the actionable half.
         const gate = body?.status || body?.error || "forbidden";
+        log?.warn?.("FREEBUFF", `session admission 403 full body: ${text}`);
         const err = new Error(
           `Freebuff admission gate ${gate}: ${msg}`.trim(),
         );
         err.freebuffAdmission = gate;
+        err.freebuffUpstreamBody = text || null;
         err.resetsAtMs =
           body?.retryAfterMs ? Date.now() + Number(body.retryAfterMs) : undefined;
         setAdmissionCooldown(
@@ -956,11 +983,22 @@ export class FreebuffExecutor extends BaseExecutor {
    * getProviderOptions): caller keys first, reserved identifiers overwrite.
    */
   injectSessionMetadata(body, instanceId, credentials, runId) {
-    if (!instanceId) return body;
+    // Static wire shape applies with or without a session (VansRouter parity):
+    // end_turn tool, no-fallback provider block, no client reasoning knobs.
+    // Freebuff agents own reasoning server-side — a client-sent
+    // reasoning_effort / reasoning.effort collides with that default.
+    let next = ensureBuffySystemOpening(body);
+    next = injectEndTurnTool(next);
+    delete next.reasoning_effort;
+    delete next.reasoning;
+    next = {
+      ...next,
+      provider: { ...(next.provider || {}), allow_fallbacks: false },
+    };
+    if (!instanceId) return next;
     if (!runId) {
       throw new Error("Freebuff completion requires a registered agent run ID");
     }
-    const next = ensureBuffySystemOpening(body);
     const existing = next.codebuff_metadata || {};
     const connection = connectionKey(credentials);
     // Per-run step counter: upstream increments llm_step_number for every LLM
@@ -1192,7 +1230,7 @@ export const __test__ = {
   GATE_CODES,
   SESSION_HEADER,
   MODEL_HEADER,
-  WALLET_LIMIT_HEADER,
+  SESSION_CLI_USER_AGENT,
   ACTING_USER_HEADER,
   ROOT_AGENT_BY_MODEL,
   REVIEWER_AGENT_BY_MODEL,

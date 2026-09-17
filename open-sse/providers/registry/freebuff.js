@@ -56,7 +56,6 @@ export default {
     // Authorization on cross-host redirects → "invalid token" everywhere.
     backendBaseUrl: "https://www.codebuff.com",
     usageUrl: "https://www.codebuff.com/api/v1/usage",
-    sessionAdmissionUrl: "https://www.codebuff.com/api/v1/freebuff/session/admission",
     sessionUrl: "https://www.codebuff.com/api/v1/freebuff/session",
     // Long-lived account authToken; no refresh token. Codes live 1h.
     expiresInSeconds: null,
