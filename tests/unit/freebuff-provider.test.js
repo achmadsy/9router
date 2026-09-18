@@ -30,7 +30,10 @@ describe("Freebuff OAuth", () => {
       initiateUrl: "https://freebuff.com/api/auth/cli/code",
     });
 
-    expect(result.device_code).toMatch(/^(enhanced-|codebuff-cli-)/);
+    // VansRouter parity: fingerprintId is crypto.randomUUID().
+    expect(result.device_code).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(result.verification_uri_complete).toBe(
       "https://freebuff.com/login?code=abc",
     );
@@ -99,6 +102,30 @@ describe("Freebuff OAuth", () => {
       deviceMid: "enhanced-device",
     });
   });
+
+  it("uses VansRouter-style UUID fingerprintId on login initiate", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          loginUrl: "https://freebuff.com/login?code=abc",
+          fingerprintHash: "hash-123",
+          expiresAt: "2030-01-02T03:04:05.000Z",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const { default: freebuff } = await import("../../src/lib/oauth/providers/freebuff.js");
+    const result = await freebuff.requestDeviceCode({
+      apiBaseUrl: "https://freebuff.com",
+      initiateUrl: "https://freebuff.com/api/auth/cli/code",
+    });
+
+    expect(result.device_code).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(result.device_code.startsWith("enhanced-")).toBe(false);
+  });
 });
 
 describe("Freebuff inference protocol", () => {
@@ -126,6 +153,10 @@ describe("Freebuff inference protocol", () => {
       client_id: "enhanced-device",
       llm_step_number: "1",
     });
+    // VansRouter parity: stable per-execute trace id.
+    expect(body.codebuff_metadata.trace_session_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(body.messages[0].role).toBe("system");
     expect(body.messages[0].content).toMatch(
       /^You are Buffy, the strategic coding assistant\./,
@@ -210,13 +241,14 @@ describe("Freebuff inference protocol", () => {
   it("maps every picker model to its upstream root agent id", async () => {
     const { __test__ } = await import("../../open-sse/executors/freebuff.js");
 
+    // VansRouter parity: mapped free roots use base3-free-*.
     expect(__test__.rootAgentForModel("z-ai/glm-5.3-flash")).toBe(
-      "base2-free-glm-5-3-flash",
+      "base3-free-glm-5-3-flash",
     );
     expect(__test__.rootAgentForModel("deepseek/deepseek-v4-flash")).toBe(
-      "base2-free-deepseek-flash",
+      "base3-free-deepseek-flash",
     );
-    expect(__test__.rootAgentForModel("mimo/mimo-v2.5")).toBe("base2-free-mimo");
+    expect(__test__.rootAgentForModel("mimo/mimo-v2.5")).toBe("base3-free-mimo");
     // Upstream's legacy-caller fallback for unmapped models.
     expect(__test__.rootAgentForModel("unknown/model")).toBe("base2-free");
     // Same-model reviewer pairing (session_model_mismatch guard).
@@ -226,6 +258,47 @@ describe("Freebuff inference protocol", () => {
     expect(__test__.reviewerAgentForModel("unknown/model")).toBe(
       "code-reviewer-deepseek-flash",
     );
+  });
+
+  it("dedupes concurrent session claims for the same token+model (VansRouter inflight)", async () => {
+    const proxyFetch = await import("../../open-sse/utils/proxyFetch.js");
+    let resolveFirst;
+    let calls = 0;
+    const spy = vi.spyOn(proxyFetch, "proxyAwareFetch").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          calls += 1;
+          resolveFirst = () =>
+            resolve(
+              new Response(
+                JSON.stringify({
+                  status: "active",
+                  instanceId: "i-dedupe",
+                  model: "z-ai/glm-5.3-flash",
+                  expiresAt: "2030-01-01T00:00:00.000Z",
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+            );
+        }),
+    );
+    try {
+      const { FreebuffExecutor, __test__ } = await import("../../open-sse/executors/freebuff.js");
+      __test__.sessionCache.clear();
+      __test__.inflight.clear();
+      const executor = new FreebuffExecutor();
+      const creds = { id: "c-inflight", accessToken: "tok-inflight" };
+      const p1 = executor.ensureSession({ credentials: creds, model: "z-ai/glm-5.3-flash", log: null });
+      const p2 = executor.ensureSession({ credentials: creds, model: "z-ai/glm-5.3-flash", log: null });
+      resolveFirst();
+      const [a, b] = await Promise.all([p1, p2]);
+      expect(calls).toBe(1);
+      expect(a.instanceId).toBe("i-dedupe");
+      expect(b.instanceId).toBe("i-dedupe");
+      expect(__test__.inflight.size).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("builds agent steps with child run wiring like upstream addAgentStep", async () => {
@@ -280,12 +353,11 @@ describe("Freebuff usage", () => {
     expect(result.quotas.balance_paid.total).toBe(1);
 
     const [url, init] = globalThis.fetch.mock.calls[0];
-    expect(url).toBe("https://www.codebuff.com/api/v1/usage");
-    // Upstream sends NO Authorization header here — token travels in body only.
-    expect(init.headers.Authorization).toBeUndefined();
-    expect(JSON.parse(init.body)).toEqual({
-      fingerprintId: "cli-usage",
-      authToken: "token-123",
-    });
+    // Quota poll is GET session status — POST /freebuff/session would claim
+    // a session and burn a daily unit. Token travels as Bearer only.
+    expect(url).toBe("https://www.codebuff.com/api/v1/freebuff/session");
+    expect(init.method).toBe("GET");
+    expect(init.headers.Authorization).toBe("Bearer token-123");
+    expect(init.body).toBeUndefined();
   });
 });

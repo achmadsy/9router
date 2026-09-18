@@ -1,4 +1,4 @@
-import { machineIdSync } from "node-machine-id";
+import crypto from "node:crypto";
 import { FREEBUFF_CONFIG } from "../constants/oauth.js";
 
 /**
@@ -13,84 +13,17 @@ import { FREEBUFF_CONFIG } from "../constants/oauth.js";
  *        → 200 { user, authToken } on success
  *        → still waiting otherwise (authorization_pending).
  *
- * fingerprintId is the device/machine mid: hardware-based (`enhanced-<sha256>`)
- * or a legacy `codebuff-cli-<rand>` fallback. Stable for the process.
+ * VansRouter parity: fingerprintId is a random UUID (crypto.randomUUID()),
+ * stable for the process — not a hardware mid hash.
  */
 
 const fingerprintCache = new Map();
 
-function makeLegacyFingerprint() {
-  const rand = Math.random().toString(36).slice(2, 10);
-  return `codebuff-cli-${rand}`;
-}
-
-/**
- * Stable device fingerprint for this process. Prefer hardware mid when
- * node-machine-id is available; fall back to a random CLI fingerprint.
- */
+/** Stable per-process device fingerprint (VansRouter: crypto.randomUUID()). */
 async function ensureFingerprintId() {
   const key = "default";
   if (fingerprintCache.has(key)) return fingerprintCache.get(key);
-
-  let fingerprintId = null;
-  try {
-    const os = await import("node:os");
-    const { createHash } = await import("node:crypto");
-    const machineId = machineIdSync();
-    if (!machineId || machineId === "unknown" || machineId.length < 8) {
-      throw new Error("Invalid machine ID returned");
-    }
-    const network = os.networkInterfaces();
-    const macAddresses = Object.values(network)
-      .flat()
-      .filter(
-        (iface) =>
-          iface &&
-          !iface.internal &&
-          iface.mac &&
-          iface.mac !== "00:00:00:00:00:00",
-      )
-      .map((iface) => iface.mac)
-      .sort();
-    const fingerprintInfo = {
-      system: { manufacturer: "", model: "", serial: "", uuid: "" },
-      cpu: {
-        manufacturer: "",
-        brand: os.cpus()?.[0]?.model || "",
-        cores: os.cpus().length,
-        physicalCores: 0,
-      },
-      os: {
-        platform: os.platform(),
-        distro: "",
-        arch: os.arch(),
-        hostname: os.hostname(),
-      },
-      runtime: {
-        nodeVersion: process.version,
-        platform: process.platform,
-        arch: process.arch,
-        shell: process.env.SHELL || "",
-        cpuCount: os.cpus().length,
-      },
-      network: {
-        macAddresses,
-        interfaceCount: Object.keys(network).length,
-      },
-      machineId,
-      fingerprintVersion: "2.0",
-    };
-    fingerprintId = `enhanced-${createHash("sha256")
-      .update(JSON.stringify(fingerprintInfo))
-      .digest("base64url")}`;
-  } catch {
-    fingerprintId = makeLegacyFingerprint();
-  }
-
-  if (!fingerprintId || fingerprintId === "enhanced-" || fingerprintId.length < 8) {
-    fingerprintId = makeLegacyFingerprint();
-  }
-
+  const fingerprintId = crypto.randomUUID();
   fingerprintCache.set(key, fingerprintId);
   return fingerprintId;
 }

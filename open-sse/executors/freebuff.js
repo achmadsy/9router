@@ -51,22 +51,23 @@ const NINEROUTER_SELF_AWARENESS =
 // (FREEBUFF_ROOT_AGENT_ID_BY_MODEL). Model+root pairing is enforced server-side
 // (`free_mode_invalid_agent_model`); an unmapped model falls back to the bare
 // `base2-free` root exactly like upstream's legacy-caller fallback.
+// VansRouter parity: mapped free roots use the `base3-free-*` generation.
 const ROOT_AGENT_BY_MODEL = {
-  "mimo/mimo-v2.5": "base2-free-mimo",
-  "minimax/minimax-m3": "base2-free-minimax-m3",
-  "openai/gpt-5.6-luna": "base2-free-luna",
-  "openai/gpt-5.6-luna-es": "base2-free-luna-es",
-  "upstage/solar-pro4": "base2-free-solar-pro4",
-  "deepseek/deepseek-v4-pro": "base2-free-deepseek",
-  "deepseek/deepseek-v4-flash": "base2-free-deepseek-flash",
-  "z-ai/glm-5.2": "base2-free-glm",
-  "z-ai/glm-5.3-flash": "base2-free-glm-5-3-flash",
-  "crof/kimi-k3-eco": "base2-free-kimi-k3-eco",
-  "anthropic/claude-fable-5": "base2-free-fable",
-  "meta/muse-spark-1.2-contributor": "base2-free-muse-spark",
-  "meta/muse-spark-1.3-contributor": "base2-free-muse-spark-1-3",
-  "stealth/ox-alpha": "base2-free-ox-alpha",
-  "google/gemini-3.8-flash": "base2-free-gemini-3-8-flash",
+  "mimo/mimo-v2.5": "base3-free-mimo",
+  "minimax/minimax-m3": "base3-free-minimax-m3",
+  "openai/gpt-5.6-luna": "base3-free-luna",
+  "openai/gpt-5.6-luna-es": "base3-free-luna-es",
+  "upstage/solar-pro4": "base3-free-solar-pro4",
+  "deepseek/deepseek-v4-pro": "base3-free-deepseek",
+  "deepseek/deepseek-v4-flash": "base3-free-deepseek-flash",
+  "z-ai/glm-5.2": "base3-free-glm",
+  "z-ai/glm-5.3-flash": "base3-free-glm-5-3-flash",
+  "crof/kimi-k3-eco": "base3-free-kimi-k3-eco",
+  "anthropic/claude-fable-5": "base3-free-fable",
+  "meta/muse-spark-1.2-contributor": "base3-free-muse-spark",
+  "meta/muse-spark-1.3-contributor": "base3-free-muse-spark-1-3",
+  "stealth/ox-alpha": "base3-free-ox-alpha",
+  "google/gemini-3.8-flash": "base3-free-gemini-3-8-flash",
 };
 
 // Child (sub-agent) run agent ids. The backend enforces same-session model
@@ -223,6 +224,8 @@ function sessionUrl() {
 
 /** @type {Map<string, { instanceId: string, model: string, expiresAt: number }>} */
 const sessionCache = new Map();
+/** @type {Map<string, Promise<{instanceId: string|null, cached?: boolean}>>} */
+const inflight = new Map();
 
 // Cooldowns for non-reclaimable admission refusals (borrowed from VansRouter):
 // re-admitting a locked/limited pair just spams the upstream gate, so fail fast
@@ -231,6 +234,14 @@ const sessionCache = new Map();
 /** @type {Map<string, number>} connection key → cooldown expiry (ms epoch). */
 const admissionCooldowns = new Map();
 const ADMISSION_COOLDOWN_MS = 10 * 60 * 1000;
+// VansRouter parity: model lock is per (token, model); limited-IP is per
+// (proxy, model) so another pool can still serve the pair.
+const MODEL_LOCK_COOLDOWN_MS = 10 * 60 * 1000;
+const POOL_LIMITED_COOLDOWN_MS = 5 * 60 * 1000;
+/** @type {Map<string, number>} `${token}::${model}` → expiry ms. */
+const modelLockCooldowns = new Map();
+/** @type {Map<string, number>} `${proxyKey}::${model}` → expiry ms. */
+const poolLimitCooldowns = new Map();
 
 // Lazy-prune expired cooldowns so long-running servers don't accumulate one
 // entry per (account, refusal) forever.
@@ -250,6 +261,114 @@ function getAdmissionCooldown(key) {
     return null;
   }
   return until;
+}
+
+function setCooldown(map, key, until) {
+  const now = Date.now();
+  for (const [k, v] of map) {
+    if (v <= now) map.delete(k);
+  }
+  map.set(key, until);
+}
+
+function getCooldown(map, key) {
+  const until = map.get(key);
+  if (until == null) return null;
+  if (until <= Date.now()) {
+    map.delete(key);
+    return null;
+  }
+  return until;
+}
+
+function proxyKeyOf(proxyOptions) {
+  return proxyOptions?.vercelRelayUrl || proxyOptions?.connectionProxyUrl || "direct";
+}
+
+function sessionCacheKey(token, model) {
+  return `${token}::${model}`;
+}
+
+function sessionGateFromText(text) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(String(text || ""));
+  } catch {
+    parsed = {};
+  }
+  return classifySessionGate(
+    parsed.error || parsed.error_type || "",
+    parsed.message || "",
+    parsed.currentModel || null,
+  );
+}
+
+// Parse a 409/428/410 body embedded in an Error message (requestSession /
+// ensureSession errors often stringify the upstream body into message).
+function sessionGateFromError(error) {
+  const msg = String(error?.message || "");
+  const start = msg.indexOf("{");
+  if (start < 0) return null;
+  try {
+    const parsed = JSON.parse(msg.slice(start));
+    return classifySessionGate(
+      parsed.error || parsed.error_type || "",
+      parsed.message || "",
+      parsed.currentModel || null,
+    );
+  } catch {
+    return null;
+  }
+}
+
+function classifySessionGate(code, message, currentModel) {
+  if (code === "session_superseded") return { kind: "superseded" };
+  if (code === "model_locked") return { kind: "model_locked", currentModel };
+  // session_model_mismatch with the limited-tier message is an IP-tier refusal;
+  // without it (or unknown) treat it as a model lock so we don't reclaim in a loop.
+  if (code === "session_model_mismatch") {
+    return /limited/i.test(String(message || ""))
+      ? { kind: "limited_ip" }
+      : { kind: "model_locked", currentModel };
+  }
+  return { kind: "stale" }; // 428/410/unknown → reclaim
+}
+
+// Applies cooldowns and throws for non-reclaimable gates. Never returns for them.
+async function throwSessionGateError(gate, { token, model, proxyKey, poolId, log }) {
+  if (gate.kind === "model_locked") {
+    const until = Date.now() + MODEL_LOCK_COOLDOWN_MS;
+    setCooldown(modelLockCooldowns, `${token}::${model}`, until);
+    const label = gate.currentModel ? `"${gate.currentModel}"` : "another model";
+    const err = new Error(
+      `Freebuff session is locked to ${label} — it cannot serve ${model}. End the session on freebuff.com or wait for it to expire (~1h).`,
+    );
+    err.status = 409;
+    err.resetsAtMs = until;
+    log?.warn?.(
+      "AUTH",
+      `Freebuff model_locked (session=${label}, requested=${model}) — model cooldown ${MODEL_LOCK_COOLDOWN_MS / 60000}min`,
+    );
+    throw err;
+  }
+  if (gate.kind === "limited_ip") {
+    const until = Date.now() + POOL_LIMITED_COOLDOWN_MS;
+    setCooldown(poolLimitCooldowns, `${proxyKey}::${model}`, until);
+    const scope = `freebuff::${model}`;
+    // Pool-scoped, not account-scoped: the caller retries via another pool
+    // instead of locking the account (resetsAtMs intentionally absent).
+    // Fork has no proxyPoolFitness module — cooldown alone marks the pair.
+    const err = new Error(
+      `Freebuff limited-mode IP rejected ${model} — this IP only allows DeepSeek V4 Flash / MiMo 2.5. Use a full-access proxy or a different model.`,
+    );
+    err.status = 409;
+    err.poolScoped = { poolId, scope, reason: "limited_ip" };
+    log?.warn?.(
+      "AUTH",
+      `Freebuff limited-IP refused ${model} (proxy=${String(proxyKey).slice(0, 40)}…) — cooldown ${POOL_LIMITED_COOLDOWN_MS / 60000}min`,
+    );
+    throw err;
+  }
 }
 
 // Last refusal status per connection, for a human-readable cooldown error.
@@ -772,6 +891,9 @@ export class FreebuffExecutor extends BaseExecutor {
    */
   async ensureSession({ credentials, model, log, proxyOptions = null, signal = null }) {
     const key = connectionKey(credentials);
+    const token = credentials?.accessToken || credentials?.apiKey || "";
+    const cacheKey = sessionCacheKey(token, model);
+    const proxyKey = proxyKeyOf(proxyOptions);
 
     // Fail fast while this account is cooling down from a non-reclaimable
     // admission refusal (model_locked / rate_limited / spend_limited / ip_capped).
@@ -785,17 +907,61 @@ export class FreebuffExecutor extends BaseExecutor {
       err.retryAfterMs = cooldownUntil - Date.now();
       throw err;
     }
+    const lockUntil = getCooldown(modelLockCooldowns, cacheKey);
+    if (lockUntil) {
+      const err = new Error(
+        `Freebuff session locked to another model — retry after ${new Date(lockUntil).toLocaleTimeString()}`,
+      );
+      err.status = 409;
+      err.freebuffAdmission = "model_locked";
+      err.resetsAtMs = lockUntil;
+      throw err;
+    }
+    const poolUntil = getCooldown(poolLimitCooldowns, `${proxyKey}::${model}`);
+    if (poolUntil) {
+      const err = new Error(
+        `Freebuff limited-mode IP rejected ${model} — retry with a full-access proxy after ${new Date(poolUntil).toLocaleTimeString()}`,
+      );
+      err.status = 409;
+      err.freebuffAdmission = "limited_ip";
+      err.poolScoped = { poolId: proxyOptions?.proxyPoolId || null, scope: `freebuff::${model}`, reason: "limited_ip" };
+      throw err;
+    }
 
     const cached = sessionCache.get(key);
     if (isLive(cached, model)) {
       return { instanceId: cached.instanceId, cached: true };
     }
 
+    // VansRouter parity: dedupe concurrent claims for the same (token, model)
+    // so parallel requests never race a second POST /session.
+    if (inflight.has(cacheKey)) {
+      return inflight.get(cacheKey);
+    }
+    const claim = this.#claimSession({
+      credentials,
+      model,
+      log,
+      proxyOptions,
+      signal,
+      key,
+      token,
+      proxyKey,
+    }).finally(() => {
+      inflight.delete(cacheKey);
+    });
+    inflight.set(cacheKey, claim);
+    return claim;
+  }
+
+  async #claimSession({ credentials, model, log, proxyOptions, signal, key, token, proxyKey }) {
+
     // Stale or model mismatch — best-effort end so the next admission is clean.
     // Upstream sends ONLY Authorization + instance header here (no
     // Content-Type: no body; no Accept/user-agent/acting-user).
-    const sessionToken = credentials?.accessToken || credentials?.apiKey;
-    if (cached?.instanceId) {
+    const sessionToken = token;
+    const cachedBeforeClaim = sessionCache.get(key);
+    if (cachedBeforeClaim?.instanceId) {
       try {
         await proxyAwareFetch(
           sessionUrl(),
@@ -803,7 +969,7 @@ export class FreebuffExecutor extends BaseExecutor {
             method: "DELETE",
             headers: {
               Authorization: `Bearer ${sessionToken}`,
-              [SESSION_HEADER]: cached.instanceId,
+              [SESSION_HEADER]: cachedBeforeClaim.instanceId,
             },
             signal: signal || AbortSignal.timeout(10_000),
           },
@@ -815,8 +981,9 @@ export class FreebuffExecutor extends BaseExecutor {
       dropSession(key);
     }
 
-    // Exact CLI wire: Authorization + Content-Type + model header + CLI UA.
-    // VansRouter parity: no wallet header, no separate admission route.
+    // Exact CLI / VansRouter wire: Authorization + Content-Type + model header
+    // + CLI UA. No wallet header, no separate admission route, and NO body
+    // (VansRouter requestSession POSTs with headers only).
     const headers = {
       Authorization: `Bearer ${sessionToken}`,
       "Content-Type": "application/json",
@@ -831,7 +998,6 @@ export class FreebuffExecutor extends BaseExecutor {
         {
           method: "POST",
           headers,
-          body: "{}",
           signal: signal || AbortSignal.timeout(20_000),
         },
         proxyOptions,
@@ -895,6 +1061,22 @@ export class FreebuffExecutor extends BaseExecutor {
         // hides the actionable half.
         const gate = body?.status || body?.error || "forbidden";
         log?.warn?.("FREEBUFF", `session admission 403 full body: ${text}`);
+        // VansRouter parity: model_locked / limited-tier mismatches get their
+        // own scoped cooldowns (account+model / proxy+model).
+        if (gate === "model_locked" || (gate === "session_model_mismatch" && /limited/i.test(String(body?.message || "")))) {
+          await throwSessionGateError(
+            gate === "model_locked"
+              ? { kind: "model_locked", currentModel: body?.model || body?.currentModel || null }
+              : { kind: "limited_ip" },
+            {
+              token,
+              model,
+              proxyKey,
+              poolId: proxyOptions?.proxyPoolId || null,
+              log,
+            },
+          );
+        }
         const err = new Error(
           `Freebuff admission gate ${gate}: ${msg}`.trim(),
         );
@@ -930,6 +1112,18 @@ export class FreebuffExecutor extends BaseExecutor {
         body.status === "country_blocked" ||
         body.status === "ip_capped"
       ) {
+        if (body.status === "model_locked") {
+          await throwSessionGateError(
+            { kind: "model_locked", currentModel: body.model || body.currentModel || null },
+            {
+              token,
+              model,
+              proxyKey,
+              poolId: proxyOptions?.proxyPoolId || null,
+              log,
+            },
+          );
+        }
         const err = new Error(
           `Freebuff ${body.status}: ${msg}`.trim(),
         );
@@ -982,7 +1176,7 @@ export class FreebuffExecutor extends BaseExecutor {
    * Merge order is upstream-load-bearing (sdk/src/impl/llm.ts
    * getProviderOptions): caller keys first, reserved identifiers overwrite.
    */
-  injectSessionMetadata(body, instanceId, credentials, runId) {
+  injectSessionMetadata(body, instanceId, credentials, runId, traceSessionId = null) {
     // Static wire shape applies with or without a session (VansRouter parity):
     // end_turn tool, no-fallback provider block, no client reasoning knobs.
     // Freebuff agents own reasoning server-side — a client-sent
@@ -995,12 +1189,21 @@ export class FreebuffExecutor extends BaseExecutor {
       ...next,
       provider: { ...(next.provider || {}), allow_fallbacks: false },
     };
-    if (!instanceId) return next;
+    const existingMeta = next.codebuff_metadata || {};
+    // VansRouter parity: one trace_session_id per execute() run, stable across
+    // chat retries (mirrors the CLI's extraCodebuffMetadata).
+    const traceId =
+      traceSessionId ||
+      existingMeta.trace_session_id ||
+      randomUUID();
+    if (!instanceId) {
+      next.codebuff_metadata = { ...existingMeta, trace_session_id: traceId };
+      return next;
+    }
     if (!runId) {
       throw new Error("Freebuff completion requires a registered agent run ID");
     }
-    const existing = next.codebuff_metadata || {};
-    const connection = connectionKey(credentials);
+    const existing = existingMeta;
     // Per-run step counter: upstream increments llm_step_number for every LLM
     // call inside one run (run-agent-step.ts llmStepNumber++); each 9router
     // request is one step of its freshly-registered run.
@@ -1016,6 +1219,7 @@ export class FreebuffExecutor extends BaseExecutor {
       freebuff_instance_id: instanceId,
       cost_mode: "free",
       run_id: runId,
+      trace_session_id: traceId,
       client_id:
         existing.client_id ||
         credentials?.providerSpecificData?.deviceMid ||
@@ -1042,6 +1246,8 @@ export class FreebuffExecutor extends BaseExecutor {
     let lastUrl = this.buildUrl(model, stream);
     let lastHeaders = null;
     let lastBody = body;
+    // VansRouter parity: one trace id per execute(), stable across retries.
+    const traceSessionId = randomUUID();
 
     while (attempt < 2) {
       attempt += 1;
@@ -1061,7 +1267,18 @@ export class FreebuffExecutor extends BaseExecutor {
           instanceId = session?.instanceId || null;
           sessionWasCached = Boolean(session?.cached);
         } catch (err) {
-          // Admission refusal (rate limit / unavailable / auth).
+          // Admission refusal. If the error embeds a non-reclaimable gate
+          // (model_locked / limited_ip), apply scoped cooldowns before rethrow.
+          const gate = sessionGateFromError(err);
+          if (gate && (gate.kind === "model_locked" || gate.kind === "limited_ip")) {
+            await throwSessionGateError(gate, {
+              token,
+              model,
+              proxyKey,
+              poolId: proxyOptions?.proxyPoolId || null,
+              log,
+            });
+          }
           throw err;
         }
       }
@@ -1111,7 +1328,13 @@ export class FreebuffExecutor extends BaseExecutor {
       );
 
       // 4) Build body with server-minted run/session IDs and Buffy marker.
-      lastBody = this.injectSessionMetadata(body, instanceId, credentials, runId);
+      lastBody = this.injectSessionMetadata(
+        body,
+        instanceId,
+        credentials,
+        runId,
+        traceSessionId,
+      );
 
       // 5) POST chat/completions
       lastUrl = this.buildUrl(model, stream);
@@ -1178,6 +1401,19 @@ export class FreebuffExecutor extends BaseExecutor {
       // 6) Gate rejection? Drop session and retry once after re-admit.
       if (lastResponse.status >= 400 && lastResponse.status < 500) {
         const text = await lastResponse.text().catch(() => "");
+        // VansRouter parity: model_locked / limited-tier mismatches are NOT
+        // reclaimable — set scoped cooldowns and fail fast instead of looping.
+        const hardGate = sessionGateFromText(text);
+        if (hardGate.kind === "model_locked" || hardGate.kind === "limited_ip") {
+          await finishAll("failed");
+          await throwSessionGateError(hardGate, {
+            token,
+            model,
+            proxyKey,
+            poolId: proxyOptions?.proxyPoolId || null,
+            log,
+          });
+        }
         const gate = parseErrorGate(text, lastResponse.status);
         if (gate?.endsTheSession && attempt < 2) {
           log?.warn?.(
@@ -1203,6 +1439,10 @@ export class FreebuffExecutor extends BaseExecutor {
         };
       }
 
+      // Healthy pair again — lift any scoped cooldowns (VansRouter parity).
+      modelLockCooldowns.delete(`${token}::${model}`);
+      poolLimitCooldowns.delete(`${proxyKey}::${model}`);
+
       return {
         response: finishRunWithStream(lastResponse, finishAll),
         url: lastUrl,
@@ -1223,9 +1463,16 @@ export class FreebuffExecutor extends BaseExecutor {
 
 export const __test__ = {
   sessionCache,
+  inflight,
+  modelLockCooldowns,
+  poolLimitCooldowns,
   dropSession,
   isLive,
   parseErrorGate,
+  sessionGateFromText,
+  sessionGateFromError,
+  classifySessionGate,
+  throwSessionGateError,
   ENDS_THE_SESSION,
   GATE_CODES,
   SESSION_HEADER,
@@ -1237,6 +1484,8 @@ export const __test__ = {
   makeAgentStep,
   reviewerAgentForModel,
   rootAgentForModel,
+  sessionCacheKey,
+  proxyKeyOf,
 };
 
 export default FreebuffExecutor;
