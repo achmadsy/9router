@@ -1234,6 +1234,8 @@ export class FreebuffExecutor extends BaseExecutor {
 
   async execute({ model, body, stream, credentials, signal, log, proxyOptions = null }) {
     const key = connectionKey(credentials);
+    const token = credentials?.accessToken || credentials?.apiKey || "";
+    const proxyKey = proxyKeyOf(proxyOptions);
     // Ad-session identity: upstream sends useChatStore().chatSessionId —
     // stable per conversation thread, distinct from the freebuff instance id.
     let adSessionId = adSessionIds.get(key);
