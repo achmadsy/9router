@@ -34,6 +34,8 @@ vi.mock("@/shared/constants/providers", () => ({
     beta: { id: "beta", alias: "b", name: "Beta" },
   },
   getProviderAlias: (provider) => ({ alpha: "a", beta: "b" })[provider] || provider,
+  isOpenAICompatibleProvider: (provider) => provider.startsWith("openai-compatible-"),
+  isAnthropicCompatibleProvider: (provider) => provider.startsWith("anthropic-compatible-"),
 }));
 vi.mock("open-sse/providers/capabilities.js", () => ({ getCapabilitiesForModel }));
 
@@ -87,6 +89,23 @@ describe("models API pagination", () => {
     expect(data.models[0]).toEqual(expect.objectContaining({
       providerName: "Work API",
       providerPrefix: "work",
+      model: "custom-model",
+    }));
+  });
+
+  it("uses a readable compatible-provider label when no configured name exists", async () => {
+    db.getCustomModels.mockResolvedValue([{
+      providerAlias: "openai-compatible-chat-uuid",
+      id: "custom-model",
+      type: "llm",
+    }]);
+
+    const response = await GET(new Request("http://localhost/api/models?page=1&pageSize=20&search=compatible"));
+    const data = await response.json();
+
+    expect(data.models[0]).toEqual(expect.objectContaining({
+      providerName: "OpenAI Compatible",
+      providerPrefix: "OpenAI Compatible",
       model: "custom-model",
     }));
   });

@@ -9,7 +9,12 @@ import {
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { getModelCapabilityOverrides } from "@/lib/db/repos/modelCapabilityRepo.js";
 import { AI_MODELS } from "@/shared/constants/config";
-import { AI_PROVIDERS, getProviderAlias } from "@/shared/constants/providers";
+import {
+  AI_PROVIDERS,
+  getProviderAlias,
+  isAnthropicCompatibleProvider,
+  isOpenAICompatibleProvider,
+} from "@/shared/constants/providers";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -33,15 +38,22 @@ function buildProviderMetadata(nodes, connections) {
     const node = nodesById.get(provider);
     const connection = connectionsByProvider.get(provider);
     const staticProvider = AI_PROVIDERS[provider];
+    const compatibleLabel = isOpenAICompatibleProvider(provider)
+      ? "OpenAI Compatible"
+      : isAnthropicCompatibleProvider(provider)
+        ? "Anthropic Compatible"
+        : null;
     const providerName = node?.name
       || connection?.providerSpecificData?.nodeName
       || connection?.name
       || staticProvider?.name
+      || compatibleLabel
       || providerAlias
       || provider;
     const providerPrefix = connection?.providerSpecificData?.prefix
       || node?.prefix
       || staticProvider?.alias
+      || compatibleLabel
       || providerAlias
       || provider;
     return { providerName, providerPrefix };
