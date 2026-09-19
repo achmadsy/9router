@@ -44,9 +44,9 @@ function buildProviderMetadata(nodes, connections) {
         ? "Anthropic Compatible"
         : null;
     const providerName = node?.name
+      || staticProvider?.name
       || connection?.providerSpecificData?.nodeName
       || connection?.name
-      || staticProvider?.name
       || compatibleLabel
       || providerAlias
       || provider;

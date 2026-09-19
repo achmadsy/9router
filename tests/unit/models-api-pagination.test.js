@@ -32,8 +32,9 @@ vi.mock("@/shared/constants/providers", () => ({
   AI_PROVIDERS: {
     alpha: { id: "alpha", alias: "a", name: "Alpha" },
     beta: { id: "beta", alias: "b", name: "Beta" },
+    glm: { id: "glm", alias: "glm", name: "GLM Coding" },
   },
-  getProviderAlias: (provider) => ({ alpha: "a", beta: "b" })[provider] || provider,
+  getProviderAlias: (provider) => ({ alpha: "a", beta: "b", glm: "glm" })[provider] || provider,
   isOpenAICompatibleProvider: (provider) => provider.startsWith("openai-compatible-"),
   isAnthropicCompatibleProvider: (provider) => provider.startsWith("anthropic-compatible-"),
 }));
@@ -107,6 +108,27 @@ describe("models API pagination", () => {
       providerName: "OpenAI Compatible",
       providerPrefix: "OpenAI Compatible",
       model: "custom-model",
+    }));
+  });
+
+  it("prefers static provider name over account email", async () => {
+    db.getCustomModels.mockResolvedValue([{
+      providerAlias: "glm",
+      id: "glm-5.3-flash",
+      type: "llm",
+    }]);
+    db.getProviderConnections.mockResolvedValue([{
+      provider: "glm",
+      name: "arif792pu.bgm@gmail.com",
+    }]);
+
+    const response = await GET(new Request("http://localhost/api/models?page=1&pageSize=20&search=glm-5.3-flash"));
+    const data = await response.json();
+
+    expect(data.models[0]).toEqual(expect.objectContaining({
+      providerName: "GLM Coding",
+      providerPrefix: "glm",
+      model: "glm-5.3-flash",
     }));
   });
 
