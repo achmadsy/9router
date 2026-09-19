@@ -7,12 +7,19 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(async () => ({ ok: true, status: 200, headers: { get: () => "" } })),
 }));
 
-// Break caught: opencode/muse-spark-1.3-contributor-free 400 vì upstream
+// Break caught: Muse Spark free Responses models 400 vì upstream
 // chỉ nhận tool_choice "auto"; named/required/none phải demote sang "auto".
+// Live 2026-09-19: both 1.2-free and 1.3-free reject non-auto with 400, and any
+// Responses request without both 'bash'+'read' tools returns 403 FreeTierError.
+// Master also injects the full fingerprint quartet {bash,glob,grep,read} on
+// every Responses request (superset of bash+read — see ensureResponsesFingerprintTools).
+const FREE_12 = "muse-spark-1.2-contributor-free";
 const FREE_13 = "muse-spark-1.3-contributor-free";
 const CREDS = { connectionId: "opencode-free-tool-choice-test" };
 const INPUT = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
 const TOOLS = [{ type: "function", name: "get_weather", description: "w", parameters: { type: "object", properties: {} } }];
+const FINGERPRINT = ["bash", "glob", "grep", "read"];
+const TOOL_NAMES = ["get_weather", ...FINGERPRINT];
 
 function responsesBody(model, tool_choice) {
   const body = { model, input: structuredClone(INPUT), tools: structuredClone(TOOLS) };
@@ -20,9 +27,9 @@ function responsesBody(model, tool_choice) {
   return body;
 }
 
-describe("opencode Free 1.3 tool_choice auto-only", () => {
-  it("khai quirk đúng model 1.3-Free trong registry", () => {
-    expect(PROVIDERS.opencode.quirks?.forceAutoToolChoiceModels).toEqual([FREE_13]);
+describe("opencode Free tool_choice auto-only", () => {
+  it("khai quirk đúng model Free trong registry", () => {
+    expect(PROVIDERS.opencode.quirks?.forceAutoToolChoiceModels).toEqual([FREE_12, FREE_13]);
   });
 
   it.each([
@@ -32,33 +39,34 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     ["required", "required"],
     ["none", "none"],
   ])("demote %s sang auto (plain và max)", (_label, choice) => {
-    for (const model of [FREE_13, `${FREE_13}(max)`]) {
+    for (const model of [FREE_12, FREE_13, `${FREE_13}(max)`]) {
       const body = responsesBody(model, structuredClone(choice));
       const out = new OpenCodeExecutor().transformRequest(model, body, true, CREDS);
       expect(out.tool_choice).toBe("auto");
-      expect(out.tools).toEqual(TOOLS);
+      // Fingerprint quartet + cloak: original tool preserved, bash/glob/grep/read injected (prevents 403 FreeTierError)
+      expect(out.tools.map((t) => t.name)).toEqual(TOOL_NAMES);
       expect(out.input).toEqual(INPUT);
     }
   });
 
-  it("giữ auto và absent; tools/input nguyên vẹn", () => {
+  it("giữ auto và default absent sang auto; tools/input nguyên vẹn + fingerprint", () => {
     const autoOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, "auto"), true, CREDS,
     );
     expect(autoOut.tool_choice).toBe("auto");
-    expect(autoOut.tools).toEqual(TOOLS);
+    expect(autoOut.tools.map((t) => t.name)).toEqual(TOOL_NAMES);
     expect(autoOut.input).toEqual(INPUT);
 
     const absentOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, undefined), true, CREDS,
     );
-    expect("tool_choice" in absentOut).toBe(false);
-    expect(absentOut.tools).toEqual(TOOLS);
+    // Cloak defaults missing choice to auto so upstream never sees absent + tools
+    expect(absentOut.tool_choice).toBe("auto");
+    expect(absentOut.tools.map((t) => t.name)).toEqual(TOOL_NAMES);
     expect(absentOut.input).toEqual(INPUT);
   });
 
   it.each([
-    ["1.2-Free", "muse-spark-1.2-contributor-free"],
     ["future 1.4-Free", "muse-spark-1.4-contributor-free"],
     ["Go id", "muse-spark-1.3-contributor"],
     ["non-Muse", "big-pickle"],
@@ -69,7 +77,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     expect(out.tool_choice).toEqual(choice);
   });
 
-  it("wire: execute gửi choice auto tới /zen/v1/responses", async () => {
+  it("wire: execute gửi choice auto + fingerprint tới /zen/v1/responses", async () => {
     proxyAwareFetch.mockClear();
     const ex = new OpenCodeExecutor();
     const body = responsesBody(FREE_13, { type: "function", name: "get_weather" });
@@ -84,7 +92,20 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     const sent = JSON.parse(actualInit.body);
     expect(sent.tool_choice).toBe("auto");
     expect(sent.model).toBe(FREE_13);
-    expect(sent.tools).toEqual(TOOLS);
+    expect(sent.tools.map((t) => t.name)).toEqual(TOOL_NAMES);
     expect(sent.input).toEqual(INPUT);
+  });
+
+  it("cloak 46 external tools: tambah fingerprint quartet agar lolos FreeTierError", () => {
+    const tools46 = Array.from({ length: 46 }, (_, i) => ({
+      type: "function", name: `ext_tool_${i}`, description: "d", parameters: { type: "object", properties: {} },
+    }));
+    const body = { model: FREE_13, input: structuredClone(INPUT), tools: tools46 };
+    const out = new OpenCodeExecutor().transformRequest(FREE_13, body, true, CREDS);
+    expect(out.tools).toHaveLength(50);
+    const names = new Set(out.tools.map((t) => t.name));
+    for (const fp of FINGERPRINT) expect(names.has(fp)).toBe(true);
+    expect(names.has("ext_tool_0")).toBe(true);
+    expect(out.tool_choice).toBe("auto");
   });
 });

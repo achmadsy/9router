@@ -587,6 +587,14 @@ export class OpenCodeExecutor extends BaseExecutor {
       ensureResponsesFingerprintTools(body);
       normalizeResponsesTools(body);
       sanitizeResponsesItems(body);
+      // Free tier gates on both 'bash' and 'read' being present in the tools
+      // payload (verified live: any Responses request without both returns 403
+      // FreeTierError "can only be used from within OpenCode", with both +
+      // tool_choice auto it returns 200). ensureResponsesFingerprintTools
+      // already injects the quartet {bash,glob,grep,read} on every request
+      // (superset of bash+read); cloak still runs so absent tool_choice
+      // defaults to auto and external clients sending 1..N tools pass.
+      cloakOpencodeTools(body, true);
     } else if (getModelTargetFormat("oc", model) === "claude") {
       // Claude Messages body (chatCore already translated it) — nothing to
       // normalize; the session headers in buildHeaders do the rest.
