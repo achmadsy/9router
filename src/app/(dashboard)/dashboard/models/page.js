@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Card, CardSkeleton, Input } from "@/shared/components";
+import Pagination from "@/shared/components/Pagination";
+
+const DEFAULT_PAGE_SIZE = 20;
 
 function modelKey(provider, model) {
   return `${provider}|${model}`;
@@ -13,62 +16,73 @@ function formatTokens(value) {
 
 export default function ModelsPage() {
   const [models, setModels] = useState([]);
-  const [overrides, setOverrides] = useState(new Map());
   const [drafts, setDrafts] = useState({});
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: DEFAULT_PAGE_SIZE, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(null);
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const load = useCallback(async (signal) => {
     try {
       setError("");
-      const [modelsResponse, overridesResponse] = await Promise.all([
-        fetch("/api/models"),
-        fetch("/api/models/capabilities"),
-      ]);
-      if (!modelsResponse.ok || !overridesResponse.ok) throw new Error("Failed to load model metadata");
-      const modelsData = await modelsResponse.json();
-      const overridesData = await overridesResponse.json();
-      const nextOverrides = new Map();
-      for (const item of overridesData.overrides || []) {
-        nextOverrides.set(modelKey(item.provider, item.model), item.caps || {});
-      }
-      setModels(modelsData.models || []);
-      setOverrides(nextOverrides);
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (debouncedQuery) params.set("search", debouncedQuery);
+      const response = await fetch(`/api/models?${params}`, { signal });
+      if (!response.ok) throw new Error("Failed to load model metadata");
+      const data = await response.json();
+      setModels(data.models || []);
+      setPagination(data.pagination || { page, pageSize, total: 0, totalPages: 1 });
+      if (data.pagination?.page && data.pagination.page !== page) setPage(data.pagination.page);
     } catch (loadError) {
-      setError(loadError.message);
+      if (loadError.name !== "AbortError") setError(loadError.message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  }, []);
+  }, [debouncedQuery, page, pageSize]);
 
   useEffect(() => {
+    const controller = new AbortController();
     // Async loader owns state updates after network I/O.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
+    load(controller.signal);
+    return () => controller.abort();
   }, [load]);
-
-  const filteredModels = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return models;
-    return models.filter((model) =>
-      `${model.provider} ${model.model} ${model.name || ""}`.toLowerCase().includes(needle));
-  }, [models, query]);
 
   const draftFor = (model) => {
     const key = modelKey(model.provider, model.model);
     if (drafts[key]) return drafts[key];
-    const override = overrides.get(key);
     return {
-      contextWindow: String(override?.contextWindow ?? model.caps?.contextWindow ?? ""),
-      maxOutput: String(override?.maxOutput ?? model.caps?.maxOutput ?? ""),
+      contextWindow: String(model.caps?.contextWindow ?? ""),
+      maxOutput: String(model.caps?.maxOutput ?? ""),
     };
   };
 
   const updateDraft = (model, field, value) => {
     const key = modelKey(model.provider, model.model);
     setDrafts((current) => ({ ...current, [key]: { ...draftFor(model), [field]: value } }));
+  };
+
+  const clearDraft = (key) => {
+    setDrafts((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   };
 
   const save = async (model) => {
@@ -92,12 +106,8 @@ export default function ModelsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to save model metadata");
       window.dispatchEvent(new Event("customModelChanged"));
+      clearDraft(key);
       await load();
-      setDrafts((current) => {
-        const next = { ...current };
-        delete next[key];
-        return next;
-      });
     } catch (saveError) {
       setError(saveError.message);
     } finally {
@@ -116,17 +126,22 @@ export default function ModelsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to reset model metadata");
       window.dispatchEvent(new Event("customModelChanged"));
-      setDrafts((current) => {
-        const next = { ...current };
-        delete next[key];
-        return next;
-      });
+      clearDraft(key);
       await load();
     } catch (resetError) {
       setError(resetError.message);
     } finally {
       setSaving(null);
     }
+  };
+
+  const handleSearchChange = (event) => {
+    setQuery(event.target.value);
+  };
+
+  const handlePageSizeChange = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    setPage(1);
   };
 
   if (loading) return <CardSkeleton />;
@@ -144,29 +159,31 @@ export default function ModelsPage() {
           <Input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search models"
+            onChange={handleSearchChange}
+            placeholder="Search provider or model"
             icon="search"
-            className="w-full sm:w-72"
+            className="w-full sm:w-80"
           />
         </div>
         {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
       </Card>
 
       <div className="space-y-3">
-        {filteredModels.map((model) => {
+        {models.map((model) => {
           const key = modelKey(model.provider, model.model);
           const draft = draftFor(model);
-          const overridden = overrides.has(key);
           return (
             <Card key={model.fullModel || key} padding="sm">
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(220px,1fr)_180px_180px_auto] lg:items-end">
                 <div className="min-w-0">
                   <p className="font-medium text-text-main truncate">{model.name || model.model}</p>
-                  <p className="text-xs font-mono text-text-muted truncate">{model.provider}/{model.model}</p>
+                  <p className="text-xs text-text-muted truncate">{model.providerName || model.provider}</p>
+                  <p className="text-xs font-mono text-text-muted truncate">
+                    {model.providerPrefix || model.provider}/{model.model}
+                  </p>
                   <p className="text-xs text-text-muted mt-1">
                     Resolved: {formatTokens(model.caps?.contextWindow || 0)} context / {formatTokens(model.caps?.maxOutput || 0)} output
-                    {overridden ? " · overridden" : ""}
+                    {model.overridden ? " · overridden" : ""}
                   </p>
                 </div>
                 <Input
@@ -186,7 +203,7 @@ export default function ModelsPage() {
                   onChange={(event) => updateDraft(model, "maxOutput", event.target.value)}
                 />
                 <div className="flex gap-2">
-                  {overridden && (
+                  {model.overridden && (
                     <Button variant="ghost" size="sm" onClick={() => reset(model)} disabled={saving === key}>
                       Reset
                     </Button>
@@ -199,10 +216,18 @@ export default function ModelsPage() {
             </Card>
           );
         })}
-        {filteredModels.length === 0 && (
+        {models.length === 0 && (
           <Card padding="lg" className="text-center text-sm text-text-muted">No models found.</Card>
         )}
       </div>
+
+      <Pagination
+        currentPage={pagination.page}
+        pageSize={pagination.pageSize}
+        totalItems={pagination.total}
+        onPageChange={setPage}
+        onPageSizeChange={handlePageSizeChange}
+      />
     </div>
   );
 }
