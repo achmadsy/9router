@@ -192,6 +192,39 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
 }
 
 /**
+ * Read a body to string, tolerating mid-stream network aborts.
+ * When the reader throws (undici TypeError: terminated on TLS/socket death),
+ * return whatever bytes were already received so delta accumulation can
+ * salvage partial output. Throws only when nothing was received.
+ */
+async function readBodyWithSalvage(body) {
+  if (!body || typeof body.getReader !== "function") return "";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let readError = null;
+  try {
+    while (true) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        readError = err;
+        break;
+      }
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
+  if (readError && !text) throw readError;
+  if (readError) console.warn("[ChatCore] SSE body read aborted mid-stream; salvaging partial text:", readError?.message || readError);
+  return text;
+}
+
+/**
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
@@ -237,13 +270,22 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       const { msgItem, textContent } = pickAssistantMessageForChatCompletion(jsonResponse.output);
       const reasoningText = reasoningTextFromResponsesOutput(jsonResponse.output);
       const totalLatency = Date.now() - requestStartTime;
+      const salvagedPartial = jsonResponse.status === "incomplete";
+      if (salvagedPartial && log?.line) {
+        log.line(reqTag, "⚠", `SSE salvaged incomplete · ${jsonResponse.output?.length || 0} item(s) · ${jsonResponse.error?.message || "stream_disconnected"}`);
+      }
 
       saveRequestDetail(buildRequestDetail({
         ...ctx,
         latency: { ttft: totalLatency, total: totalLatency },
         tokens: { prompt_tokens: inTokensForLog, completion_tokens: usage.output_tokens || 0 },
-        response: { content: textContent, thinking: reasoningText || null, finish_reason: jsonResponse.status || "unknown" },
-        status: "success"
+        response: {
+          content: textContent,
+          thinking: reasoningText || null,
+          finish_reason: salvagedPartial ? "incomplete" : (jsonResponse.status || "unknown"),
+          ...(salvagedPartial ? { error: jsonResponse.error?.message || "stream_disconnected" } : {}),
+        },
+        status: salvagedPartial ? "error" : "success"
       }, { endpoint: clientRawRequest?.endpoint || null })).catch(() => {});
 
       // Client is Responses API → return as-is
@@ -294,7 +336,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         if (reasoningText) message.reasoning_content = reasoningText;
         if (hasToolCalls) message.tool_calls = toolCalls;
         const responseDone = jsonResponse.status === "completed" || jsonResponse.status === "done";
-        const finishReason = hasToolCalls ? "tool_calls" : (responseDone ? "stop" : (jsonResponse.status || "stop"));
+        const isPartial = jsonResponse.status === "incomplete";
+        // Salvaged mid-stream TLS abort: chat clients only understand
+        // stop/length/tool_calls/… — map incomplete → stop so strict SDKs accept
+        // the usable partial body, and flag truncation via `incomplete`.
+        const finishReason = hasToolCalls ? "tool_calls" : ((responseDone || isPartial) ? "stop" : (jsonResponse.status || "stop"));
         finalResp = {
           id: jsonResponse.id || `chatcmpl-${Date.now()}`,
           object: "chat.completion",
@@ -303,6 +349,10 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
           choices: [{ index: 0, message, finish_reason: finishReason }],
           usage: { prompt_tokens: inTokens, completion_tokens: outTokens, total_tokens: inTokens + outTokens, ...cacheDetails }
         };
+        if (isPartial) {
+          finalResp.incomplete = true;
+          finalResp.incomplete_reason = jsonResponse.error?.message || "stream_disconnected";
+        }
       }
 
       if (sourceFormat === FORMATS.CLAUDE) {
@@ -317,14 +367,23 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       return { success: true, response: new Response(JSON.stringify(finalResp), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
     } catch (err) {
+      // TypeError: terminated = undici TLS/socket abort mid-body (upstream closed
+      // during forced SSE→JSON). Surface the real cause; empty salvage still 502s.
+      const detail = err?.message || String(err);
       console.error("[ChatCore] Responses API SSE→JSON failed:", err);
-      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");
+      return createErrorResult(
+        HTTP_STATUS.BAD_GATEWAY,
+        `Failed to convert streaming response to JSON: ${detail}`
+      );
     }
   }
 
   // Standard Chat Completions SSE path
   try {
-    const sseText = await providerResponse.text();
+    // Read via reader (not .text()) so a mid-stream TLS abort (undici
+    // "TypeError: terminated") still yields the bytes received so far —
+    // parseSSEToOpenAIResponse accumulates deltas, so partial output survives.
+    const sseText = await readBodyWithSalvage(providerResponse.body);
     const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
     if (parsed.error) {
