@@ -7,6 +7,10 @@ export default {
   captchaHeadlessTimeoutMs: parseInt(process.env.CAPTCHA_HEADLESS_TIMEOUT_MS || "45000", 10),
   captchaInteractiveTimeoutMs: parseInt(process.env.CAPTCHA_INTERACTIVE_TIMEOUT_MS || "300000", 10),
   captchaConfigCacheTTL: parseInt(process.env.CAPTCHA_CONFIG_CACHE_TTL || "600000", 10),
+  /** Delay before tearing down the browser after a solved captcha (page posts token). */
+  captchaTeardownDelayMs: parseInt(process.env.CAPTCHA_TEARDOWN_DELAY_MS || "3000", 10),
+  /** Reap browser when no verification is pending for this long. 0 disables. */
+  captchaIdleTeardownMs: parseInt(process.env.CAPTCHA_IDLE_TEARDOWN_MS || "300000", 10),
   codingPlanUrl:
     process.env.ZAI_CODING_PLAN_URL ||
     "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages",

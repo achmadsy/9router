@@ -1,4 +1,4 @@
-import { launch as launchBrowser } from "./browser.js";
+import { launch as launchBrowser, close as closeBrowser } from "./browser.js";
 import config from "./config.js";
 
 export class CaptchaManager {
@@ -18,6 +18,7 @@ export class CaptchaManager {
     this._verificationPhase = null;
     this._headedFallbackAttempted = false;
     this._activePort = config.captchaPort;
+    this._teardownTimer = null;
   }
 
   /**
@@ -82,6 +83,7 @@ export class CaptchaManager {
     this.rejectCallback = null;
     this._verificationPhase = null;
     this._headedFallbackAttempted = false;
+    this._scheduleTeardown();
   }
 
   _resolvePending(verifyParam) {
@@ -94,6 +96,25 @@ export class CaptchaManager {
     this.rejectCallback = null;
     this._verificationPhase = null;
     this._headedFallbackAttempted = false;
+    this._scheduleTeardown();
+  }
+
+  /**
+   * Headless Chrome idles at high CPU (SwiftShader software GL running the
+   * captcha page's animations). The browser is only needed while a captcha
+   * is being solved, so tear it down after success and reap it after an
+   * idle period. launch() recreates it on demand.
+   */
+  _scheduleTeardown(delayMs = config.captchaTeardownDelayMs) {
+    if (this._teardownTimer) {
+      clearTimeout(this._teardownTimer);
+    }
+    this._teardownTimer = setTimeout(() => {
+      this._teardownTimer = null;
+      if (this.pendingPromise) return; // a new verification started meanwhile
+      closeBrowser().catch(() => {});
+      this.captchaPage = null;
+    }, delayMs).unref?.();
   }
 
   _armPhaseTimeout(phase) {
@@ -144,6 +165,12 @@ export class CaptchaManager {
     this._activePort = port;
     this._verificationPhase = headless ? "headless" : "headed";
 
+    // A verification is (re)starting — cancel any pending browser teardown.
+    if (this._teardownTimer) {
+      clearTimeout(this._teardownTimer);
+      this._teardownTimer = null;
+    }
+
     if (this.captchaPage && !this.captchaPage.isClosed()) {
       if (!interactive) {
         try {
@@ -178,6 +205,9 @@ export class CaptchaManager {
     });
 
     this._armPhaseTimeout(this._verificationPhase);
+    // Safety net: if this run neither resolves nor rejects (hung page, killed
+    // SDK), reap the browser after the idle window instead of spinning forever.
+    this._scheduleTeardown(config.captchaIdleTeardownMs);
 
     if (!headless) {
       console.log(
@@ -243,10 +273,18 @@ export class CaptchaManager {
       clearTimeout(this._clearCacheTimer);
       this._clearCacheTimer = null;
     }
+    // Param rejected upstream (or gate state changed) — reap the browser on
+    // the idle timer so it doesn't sit spinning between captcha events.
+    this._scheduleTeardown();
   }
 
   async close() {
+    if (this._teardownTimer) {
+      clearTimeout(this._teardownTimer);
+      this._teardownTimer = null;
+    }
     this._clearVerificationTimers();
     await this._closeCaptchaPage();
+    await closeBrowser();
   }
 }
