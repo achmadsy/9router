@@ -1,8 +1,8 @@
 import { detectFormat, getTargetFormat, resolveTransport } from "../services/provider.js";
 import { translateRequest } from "../translator/index.js";
+import { applyClaudeMaxTokens, normalizeClaudePassthrough, anchorClaudeCache } from "../translator/formats/claude.js";
 import { applyThinking, extractThinking, stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
 import { FORMATS } from "../translator/formats.js";
-import { normalizeClaudePassthrough, anchorClaudeCache } from "../translator/formats/claude.js";
 import { createStreamController } from "../utils/streamHandler.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { createRequestLogger } from "../utils/requestLogger.js";
@@ -175,6 +175,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
   const passthrough = isNativePassthrough(clientTool, runtimeProvider);
 
+  // Claude Code uses one conservative client-wide max_tokens value. Raise its
+  // outbound request to this routed model's metadata limit before any format
+  // conversion, including Claude → OpenAI provider paths.
+  if (clientTool === "claude") applyClaudeMaxTokens(body, runtimeProvider, true, model);
+
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
 
@@ -217,7 +222,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         delete translatedBody.reasoning_effort;
       }
     }
-    // Normalize newer Cowork/CC beta shapes (adaptive thinking, mid-conversation system) the API rejects
+    // Normalize newer Cowork/CC beta shapes (adaptive thinking, mid-conversation system) the API rejects.
     if (clientTool === "claude") normalizeClaudePassthrough(translatedBody, translatedBody.model);
   } else {
     translatedBody = translateRequest(sourceFormat, targetFormat, upstreamModel, body, stream, credentials, runtimeProvider, reqLogger, stripList, connectionId, clientTool);

@@ -437,34 +437,34 @@ export function hoistToolResultImages(body) {
   return touched ? { ...body, messages } : body;
 }
 
-export function prepareClaudeRequest(body, provider = null, apiKey = null, connectionId = null, rawHeaders = null, sessionId = null) {
+export function applyClaudeMaxTokens(body, provider = null, raiseToCeiling = false, model = body?.model) {
+  if (!body?.max_tokens) return body;
+
+  const ceiling = getCapabilitiesForModel(provider, model).maxOutput || DEFAULT_MAX_TOKENS;
+  if (raiseToCeiling && body.max_tokens < ceiling) body.max_tokens = ceiling;
+  if (body.max_tokens > ceiling) body.max_tokens = ceiling;
+
+  // applyThinking runs after the generic clamp and can produce a thinking budget
+  // greater than max_tokens. Anthropic requires max_tokens > budget_tokens.
+  if (body.thinking?.type === "enabled" && body.thinking.budget_tokens && body.thinking.budget_tokens >= body.max_tokens) {
+    body.max_tokens = Math.min(body.thinking.budget_tokens + 1024, ceiling);
+    if (body.thinking.budget_tokens >= body.max_tokens) {
+      body.thinking.budget_tokens = Math.max(1024, body.max_tokens - 1024);
+    }
+  }
+  return body;
+}
+
+export function prepareClaudeRequest(body, provider = null, apiKey = null, connectionId = null, rawHeaders = null, sessionId = null, clientTool = null, capabilityModel = body?.model) {
   // quirk: MiniMax's Claude-compatible endpoint rejects Anthropic's output_config (400 invalid params)
   if (PROVIDERS[provider]?.quirks?.dropOutputConfig) {
     delete body.output_config;
   }
 
-  // Clamp max_tokens to the model's real output ceiling. Models whose caps
-  // declare a higher maxOutput (e.g. Opus 4.8 / Sonnet 4.6 = 128000) are allowed
-  // up to it, so max-effort thinking gets full budget; others fall back to the
-  // conservative 64000 default.
-  if (body.max_tokens) {
-    const ceiling = getCapabilitiesForModel(provider, body.model).maxOutput || DEFAULT_MAX_TOKENS;
-    if (body.max_tokens > ceiling) body.max_tokens = ceiling;
-
-    // Reconcile against thinking budget. applyThinking (thinkingUnified.js) runs
-    // AFTER adjustMaxTokens capped max_tokens, and the claude-budget format maps
-    // max effort → budget_tokens 128000 — larger than the clamped max_tokens.
-    // Anthropic requires max_tokens strictly greater than budget_tokens (else 400).
-    // Prefer raising max_tokens to preserve the requested thinking depth; if the
-    // budget alone meets/exceeds the ceiling, cap output and shrink the budget so
-    // some tokens remain for the answer.
-    if (body.thinking?.type === "enabled" && body.thinking.budget_tokens && body.thinking.budget_tokens >= body.max_tokens) {
-      body.max_tokens = Math.min(body.thinking.budget_tokens + 1024, ceiling);
-      if (body.thinking.budget_tokens >= body.max_tokens) {
-        body.thinking.budget_tokens = Math.max(1024, body.max_tokens - 1024);
-      }
-    }
-  }
+  // Claude Code uses 64k as a safe client-wide floor. Raise only that client's
+  // outbound body when model metadata declares more; every other client retains
+  // its requested lower limit. All clients still clamp to upstream ceiling.
+  applyClaudeMaxTokens(body, provider, clientTool === "claude", capabilityModel);
 
   // 1. System: remove all cache_control, add only to last block with ttl 1h
   if (body.system && Array.isArray(body.system)) {

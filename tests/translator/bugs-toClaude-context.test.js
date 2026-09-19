@@ -181,6 +181,24 @@ describe("OpenAI → Claude context mapping", () => {
       }, "anthropic");
       expect(out.max_tokens).toBe(100000);
     });
+
+    it("raises Claude Code max_tokens to a model's 128k ceiling", () => {
+      const out = prepareClaudeRequest({
+        model: "claude-fable-5",
+        max_tokens: 64000,
+        messages: [{ role: "user", content: "q" }],
+      }, "anthropic", null, null, null, null, "claude");
+      expect(out.max_tokens).toBe(128000);
+    });
+
+    it("does not raise a non-Claude client's intentional lower limit", () => {
+      const out = prepareClaudeRequest({
+        model: "claude-fable-5",
+        max_tokens: 32000,
+        messages: [{ role: "user", content: "q" }],
+      }, "anthropic", null, null, null, null, "github-copilot");
+      expect(out.max_tokens).toBe(32000);
+    });
   });
 
   it("DeepSeek Claude transport adds a thinking placeholder before tool_use in thinking mode", () => {

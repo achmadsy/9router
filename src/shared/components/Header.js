@@ -77,6 +77,13 @@ const getPageInfo = (pathname) => {
       icon: "dns",
       breadcrumbs: [],
     };
+  if (pathname.includes("/models"))
+    return {
+      title: "Models",
+      description: "Configure per-model context and output limits",
+      icon: "model_training",
+      breadcrumbs: [],
+    };
   if (pathname.includes("/combos"))
     return {
       title: "Combos",

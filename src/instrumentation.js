@@ -18,6 +18,23 @@ export async function register() {
     const { getCustomModels } = await import("@/lib/db/repos/aliasRepo.js");
     await installCustomModelFormats(() => getCustomModels());
 
+    const { installModelCapabilityOverrides } = await import("open-sse/providers/modelCapabilityOverrides.js");
+    const { getModelCapabilityOverrides } = await import("@/lib/db/repos/modelCapabilityRepo.js");
+    await installModelCapabilityOverrides(async () => {
+      const [overrides, customModels] = await Promise.all([
+        getModelCapabilityOverrides(),
+        getCustomModels(),
+      ]);
+      return [
+        ...customModels.map((model) => ({
+          provider: model.providerAlias,
+          model: model.id,
+          caps: model.caps,
+        })),
+        ...overrides,
+      ];
+    });
+
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
   }

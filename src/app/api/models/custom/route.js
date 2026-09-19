@@ -2,16 +2,18 @@ import { NextResponse } from "next/server";
 import { getCustomModels, addCustomModel, deleteCustomModel } from "@/models";
 import { CAPACITY_META } from "@/shared/constants/models";
 import { refreshCustomModelFormats } from "open-sse/providers/customModelFormats.js";
+import { refreshModelCapabilityOverrides, sanitizeModelTokenCaps } from "open-sse/providers/modelCapabilityOverrides.js";
 
 export const dynamic = "force-dynamic";
 
-// Whitelist capability keys to boolean values — ignore anything else
-function sanitizeCaps(caps) {
+// Whitelist capability keys and positive integer token limits.
+export function sanitizeCaps(caps) {
   if (!caps || typeof caps !== "object") return null;
   const clean = {};
   for (const key of Object.keys(CAPACITY_META)) {
     if (typeof caps[key] === "boolean") clean[key] = caps[key];
   }
+  Object.assign(clean, sanitizeModelTokenCaps(caps) || {});
   return Object.keys(clean).length ? clean : null;
 }
 
@@ -46,6 +48,7 @@ export async function POST(request) {
     // Per-model targetFormat overrides are read synchronously per request —
     // re-pull the cache so the new/updated row applies without a restart.
     await refreshCustomModelFormats();
+    await refreshModelCapabilityOverrides();
     return NextResponse.json({ success: true, added });
   } catch (error) {
     console.log("Error adding custom model:", error);
@@ -65,6 +68,7 @@ export async function DELETE(request) {
     }
     await deleteCustomModel({ providerAlias, id, type });
     await refreshCustomModelFormats();
+    await refreshModelCapabilityOverrides();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.log("Error deleting custom model:", error);

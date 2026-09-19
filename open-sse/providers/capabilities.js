@@ -34,6 +34,7 @@
 
 import { matchPattern } from "./pricing.js";
 import { looksLikeVisionModel } from "./visionPatterns.js";
+import { getModelCapabilityOverride } from "./modelCapabilityOverrides.js";
 import { stripRecognizedContextSuffix } from "../services/model.js";
 
 /**
@@ -536,7 +537,7 @@ function isCommandCodeTextOnly(model) {
   }
   return false;
 }
-export function getCapabilitiesForModel(provider, model) {
+function resolveCapabilitiesForModel(provider, model) {
   if (!model) return { ...DEFAULT_CAPABILITIES };
 
   // Canonical exact lookup strips vendor prefix: "anthropic/claude-opus-4.7" -> "claude-opus-4.7".
@@ -582,4 +583,10 @@ export function getCapabilitiesForModel(provider, model) {
 
   // 4. Floor
   return refine(null, provider, model);
+}
+
+export function getCapabilitiesForModel(provider, model) {
+  const resolved = resolveCapabilitiesForModel(provider, model);
+  const override = getModelCapabilityOverride(provider, model);
+  return override ? { ...resolved, ...override } : resolved;
 }
