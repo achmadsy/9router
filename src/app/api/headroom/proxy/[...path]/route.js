@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/localDb";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
+import { headroomTokenHeaders } from "open-sse/rtk/headroom.js";
 
 export const dynamic = "force-dynamic";
 
@@ -18,14 +19,14 @@ const HOP_BY_HOP_HEADERS = new Set([
 const DASHBOARD_PREFIX = "/api/headroom/proxy";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
-async function getTargetBase() {
+async function getTargetContext() {
   const settings = await getSettings();
   const url = settings.headroomUrl || DEFAULT_HEADROOM_URL;
   const target = new URL(url);
   if (!["http:", "https:"].includes(target.protocol)) {
     throw new Error("Headroom URL must use http or https");
   }
-  return target;
+  return { target, token: settings.headroomToken };
 }
 
 function buildTargetUrl(base, path, search) {
@@ -35,7 +36,7 @@ function buildTargetUrl(base, path, search) {
   return target;
 }
 
-function forwardedHeaders(request, target) {
+function forwardedHeaders(request, target, token) {
   const headers = new Headers(request.headers);
   for (const header of headers.keys()) {
     if (HOP_BY_HOP_HEADERS.has(header.toLowerCase())) headers.delete(header);
@@ -45,6 +46,12 @@ function forwardedHeaders(request, target) {
   if (!LOOPBACK_HOSTS.has(target.hostname.replace(/^\[|\]$/g, "").toLowerCase())) {
     headers.delete("cookie");
     headers.delete("authorization");
+  }
+  // Replace any inbound proxy token with settings/env token so callers
+  // cannot inject or spoof Headroom auth.
+  headers.delete("x-headroom-proxy-token");
+  for (const [name, value] of Object.entries(headroomTokenHeaders(token))) {
+    headers.set(name, value);
   }
   return headers;
 }
@@ -58,7 +65,7 @@ function rewriteDashboardHtml(html) {
 
 async function proxy(request, { params }) {
   try {
-    const base = await getTargetBase();
+    const { target: base, token } = await getTargetContext();
     const { search } = new URL(request.url);
     const path = (await params).path || [];
     const target = buildTargetUrl(base, path, search);
@@ -67,7 +74,7 @@ async function proxy(request, { params }) {
 
     const response = await fetch(target, {
       method,
-      headers: forwardedHeaders(request, target),
+      headers: forwardedHeaders(request, target, token),
       body: hasBody ? request.body : undefined,
       duplex: hasBody ? "half" : undefined,
       redirect: "manual",

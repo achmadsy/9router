@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog } from "../../open-sse/rtk/headroom.js";
+import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, headroomTokenHeaders } from "../../open-sse/rtk/headroom.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  delete process.env.HEADROOM_TOKEN;
 });
 
 describe("compressWithHeadroom", () => {
@@ -34,6 +35,65 @@ describe("compressWithHeadroom", () => {
     expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toMatchObject({
       model: "gpt-4o",
       messages: [{ role: "user", content: "long" }],
+    });
+  });
+
+  it("sends X-Headroom-Proxy-Token when HEADROOM_TOKEN is set", async () => {
+    process.env.HEADROOM_TOKEN = "test-token-abc";
+    global.fetch = vi.fn(async () => new Response(JSON.stringify({
+      messages: [{ role: "user", content: "short" }],
+    }), { status: 200 }));
+    const body = { messages: [{ role: "user", content: "long" }] };
+
+    await compressWithHeadroom(body, { enabled: true, url: "http://headroom:8787", model: "gpt-4o" });
+
+    expect(global.fetch.mock.calls[0][1].headers).toMatchObject({
+      "Content-Type": "application/json",
+      "X-Headroom-Proxy-Token": "test-token-abc",
+    });
+  });
+
+  it("omits X-Headroom-Proxy-Token when HEADROOM_TOKEN is unset", async () => {
+    delete process.env.HEADROOM_TOKEN;
+    global.fetch = vi.fn(async () => new Response(JSON.stringify({
+      messages: [{ role: "user", content: "short" }],
+    }), { status: 200 }));
+    const body = { messages: [{ role: "user", content: "long" }] };
+
+    await compressWithHeadroom(body, { enabled: true, url: "http://headroom:8787" });
+
+    expect(global.fetch.mock.calls[0][1].headers).not.toHaveProperty("X-Headroom-Proxy-Token");
+  });
+
+  it("headroomTokenHeaders prefers non-empty override then env", () => {
+    delete process.env.HEADROOM_TOKEN;
+    expect(headroomTokenHeaders("  tok  ")).toEqual({ "X-Headroom-Proxy-Token": "tok" });
+    expect(headroomTokenHeaders("")).toEqual({});
+    expect(headroomTokenHeaders("   ")).toEqual({});
+    expect(headroomTokenHeaders(undefined)).toEqual({});
+    expect(headroomTokenHeaders(null)).toEqual({});
+
+    process.env.HEADROOM_TOKEN = "env-tok";
+    expect(headroomTokenHeaders("ui-tok")).toEqual({ "X-Headroom-Proxy-Token": "ui-tok" });
+    expect(headroomTokenHeaders("")).toEqual({ "X-Headroom-Proxy-Token": "env-tok" });
+    expect(headroomTokenHeaders(undefined)).toEqual({ "X-Headroom-Proxy-Token": "env-tok" });
+  });
+
+  it("uses settings token override over env for compress", async () => {
+    process.env.HEADROOM_TOKEN = "env-token";
+    global.fetch = vi.fn(async () => new Response(JSON.stringify({
+      messages: [{ role: "user", content: "short" }],
+    }), { status: 200 }));
+    const body = { messages: [{ role: "user", content: "long" }] };
+
+    await compressWithHeadroom(body, {
+      enabled: true,
+      url: "http://headroom:8787",
+      token: "settings-token",
+    });
+
+    expect(global.fetch.mock.calls[0][1].headers).toMatchObject({
+      "X-Headroom-Proxy-Token": "settings-token",
     });
   });
 

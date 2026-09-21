@@ -60,7 +60,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onEmptyUsage, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onEmptyUsage, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomToken, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
   const { provider, model } = modelInfo;
   // Clones (codex-clone-…) keep credentials under the clone id but use the
   // base provider for transport, models, capabilities, and special-cases.
@@ -299,6 +299,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     timeoutMs: headroomTimeoutMs,
     mode: headroomMode,
     protectRecent: headroomProtectRecent,
+    token: headroomToken,
     diagnostics: headroomDiagnostics,
   });
   const headroomLine = formatHeadroomLog(headroomStats);

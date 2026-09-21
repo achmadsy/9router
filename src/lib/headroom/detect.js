@@ -1,5 +1,6 @@
 import { execFileSync, execSync } from "child_process";
 import path from "path";
+import { headroomTokenHeaders } from "open-sse/rtk/headroom.js";
 
 // Extras that improve headroom compression quality. `proxy` is the base;
 // `code` adds tree-sitter AST compression; `ml` adds Kompress-v2 HF model.
@@ -121,11 +122,15 @@ export function findPython310() {
 }
 
 // Probe whether a Headroom proxy is reachable at the given URL by hitting /health.
-export async function probeProxyRunning(url) {
+// `token` is the optional settings/UI override (falls back to HEADROOM_TOKEN env).
+export async function probeProxyRunning(url, token) {
   if (!url) return false;
   const base = String(url).replace(/\/$/, "");
   try {
-    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(HEADROOM_HEALTH_TIMEOUT_MS) });
+    const res = await fetch(`${base}/health`, {
+      headers: headroomTokenHeaders(token),
+      signal: AbortSignal.timeout(HEADROOM_HEALTH_TIMEOUT_MS),
+    });
     return res.ok;
   } catch {
     return false;
@@ -142,11 +147,11 @@ export function isLoopbackHeadroomUrl(url) {
 }
 
 // Aggregate status for the dashboard: installed, running, python interpreter.
-export async function getHeadroomStatus(url) {
+export async function getHeadroomStatus(url, token) {
   const path = findHeadroomBinary();
   const python = findPython310();
   const installed = Boolean(path);
-  const running = await probeProxyRunning(url);
+  const running = await probeProxyRunning(url, token);
   const localUrl = isLoopbackHeadroomUrl(url);
   const extrasStatus = installed ? getInstalledHeadroomExtras(python) : { installed: false, version: null, extras: { code: false, ml: false } };
   return {

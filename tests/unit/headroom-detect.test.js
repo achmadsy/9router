@@ -19,6 +19,7 @@ import { findPython310, getHeadroomStatus, getInstalledHeadroomExtras, isLoopbac
 
 afterEach(() => {
   vi.clearAllMocks();
+  delete process.env.HEADROOM_TOKEN;
 });
 
 describe("headroom detect", () => {
@@ -96,6 +97,33 @@ describe("headroom detect", () => {
     expect(status.localUrl).toBe(false);
     expect(status.canStart).toBe(false);
     expect(global.fetch).toHaveBeenCalledWith("http://headroom:8787/health", expect.any(Object));
+  });
+
+  it("sends X-Headroom-Proxy-Token on /health when HEADROOM_TOKEN is set", async () => {
+    process.env.HEADROOM_TOKEN = "status-token";
+    global.fetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    mocks.execSync.mockImplementation(() => { throw new Error("not found"); });
+    mocks.execFileSync.mockImplementation(() => { throw new Error("pip unavailable"); });
+
+    const status = await getHeadroomStatus("http://headroom:8787");
+
+    expect(status.running).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith("http://headroom:8787/health", expect.objectContaining({
+      headers: { "X-Headroom-Proxy-Token": "status-token" },
+    }));
+  });
+
+  it("prefers settings token override over env on /health", async () => {
+    process.env.HEADROOM_TOKEN = "env-health";
+    global.fetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    mocks.execSync.mockImplementation(() => { throw new Error("not found"); });
+    mocks.execFileSync.mockImplementation(() => { throw new Error("pip unavailable"); });
+
+    await getHeadroomStatus("http://headroom:8787", "settings-health");
+
+    expect(global.fetch).toHaveBeenCalledWith("http://headroom:8787/health", expect.objectContaining({
+      headers: { "X-Headroom-Proxy-Token": "settings-health" },
+    }));
   });
 
   it("recognizes loopback URLs for managed local mode", () => {

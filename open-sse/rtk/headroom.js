@@ -98,6 +98,18 @@ function maskEndpoint(endpoint) {
   }
 }
 
+// Headroom proxy inbound auth (docs.headroomlabs.ai/docs/proxy): when the
+// server sets HEADROOM_PROXY_TOKEN, non-loopback callers must send
+// X-Headroom-Proxy-Token. Settings `headroomToken` (UI) overrides env
+// HEADROOM_TOKEN when non-empty; empty/null falls back to env.
+export function headroomTokenHeaders(override) {
+  const raw = typeof override === "string" && override.trim()
+    ? override
+    : process.env.HEADROOM_TOKEN;
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value ? { "X-Headroom-Proxy-Token": value } : {};
+}
+
 // Project only compressible plain-text message parts out of a Responses
 // body.input. function_call*, reasoning (encrypted_content), images and other
 // structural items must stay in body.input verbatim — the OpenAI-bridge
@@ -298,7 +310,7 @@ function applyKiroHeadroomMessages(projection, compressedMessages, diagnostics) 
 }
 
 // POST messages to Headroom /v1/compress; returns compressed messages + stats or null.
-async function callCompress(url, messages, model, timeoutMs, compressUserMessages, diagnostics, { mode = "", protectRecent = 0 } = {}) {
+async function callCompress(url, messages, model, timeoutMs, compressUserMessages, diagnostics, { mode = "", protectRecent = 0, token } = {}) {
   const endpoint = buildCompressEndpoint(url);
   diagnostics.endpoint = maskEndpoint(endpoint);
   const payload = { messages, model };
@@ -312,7 +324,7 @@ async function callCompress(url, messages, model, timeoutMs, compressUserMessage
   try {
     res = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headroomTokenHeaders(token) },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -335,7 +347,7 @@ async function callCompress(url, messages, model, timeoutMs, compressUserMessage
 // Compress request body via Headroom proxy. Fail-open: returns null on any error.
 // /v1/compress only understands OpenAI shape, so Claude bodies are translated
 // to OpenAI, compressed, then translated back using 9Router's own translators.
-export async function compressWithHeadroom(body, { enabled, url, model, format, compressUserMessages, mode, protectRecent, timeoutMs = DEFAULT_TIMEOUT_MS, diagnostics = null } = {}) {
+export async function compressWithHeadroom(body, { enabled, url, model, format, compressUserMessages, mode, protectRecent, timeoutMs = DEFAULT_TIMEOUT_MS, diagnostics = null, token } = {}) {
   timeoutMs = normalizeTimeout(timeoutMs);
   if (!enabled) {
     setDiagnostic(diagnostics, "disabled");
@@ -350,7 +362,7 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
     return null;
   }
 
-  const compressOpts = { mode, protectRecent };
+  const compressOpts = { mode, protectRecent, token };
 
   try {
     if (diagnostics) diagnostics.before = captureSizeSnapshot(body);

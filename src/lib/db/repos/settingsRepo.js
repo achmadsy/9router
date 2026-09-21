@@ -52,6 +52,7 @@ const DEFAULT_SETTINGS = {
   rtkEnabled: true,
   headroomEnabled: false,
   headroomUrl: DEFAULT_HEADROOM_URL,
+  headroomToken: "",
   headroomCompressUserMessages: false,
   headroomTimeoutMs: 15000,
   headroomMode: "",
