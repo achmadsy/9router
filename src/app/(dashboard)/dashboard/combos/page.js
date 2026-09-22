@@ -568,7 +568,10 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
-  const comboCaps = aggregateComboCapabilities(combo.models, comboByName);
+  const comboCaps = aggregateComboCapabilities(combo.models, comboByName, 0, (provider, model) => {
+    const full = provider ? `${provider}/${model}` : model;
+    return getCaps?.(full) || getCaps?.(model);
+  });
 
   return (
     <Card padding="sm" className={`group ${selected ? "ring-1 ring-primary/40 bg-primary/[0.03]" : ""}`}>
