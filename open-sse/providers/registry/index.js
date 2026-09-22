@@ -67,7 +67,7 @@ import p64 from "./nvidia.js";
 import p65 from "./ollama-local.js";
 import p66 from "./ollama.js";
 import p123 from "./ollama-search.js";
-import p124 from "./freebuff.js";
+import p101 from "./freebuff.js";
 import p67 from "./openai.js";
 import p68 from "./opencode-go.js";
 import p68z from "./opencode-zen.js";
@@ -78,7 +78,7 @@ import p72 from "./perplexity.js";
 import p73 from "./perplexity-agent.js";
 import p74 from "./playht.js";
 import p75 from "./qoder.js";
-import p124 from "./qoder-cn.js";
+import p76 from "./qoder-cn.js";
 import p77 from "./recraft.js";
 import p78 from "./runwayml.js";
 import p79 from "./sdwebui.js";
@@ -196,7 +196,7 @@ export default [
   p65,
   p66,
   p123,
-  p124,
+  p101,
   p67,
   p68,
   p68z,
@@ -207,6 +207,7 @@ export default [
   p73,
   p74,
   p75,
+  p76,
   p77,
   p78,
   p79,
@@ -231,7 +232,7 @@ export default [
   p98,
   p99,
   p100,
-  p124,
+  p101,
   // p102, // trae — hidden, no tool calling
   p103,
   p105,
