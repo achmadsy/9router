@@ -6,7 +6,7 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
-import { getModelTargetFormat } from "../config/providerModels.js";
+import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -16,84 +16,14 @@ import {
 } from "../translator/formats/responsesApi.js";
 
 const OPENCODE_UA = "opencode/1.18.31";
-const MAX_TOOL_NAME_LEN = 128;
 const MAX_SESSION_LENGTH = 256;
+const MAX_TOOL_NAME_LEN = 128;
 const SESSION_HEADER = "x-opencode-session";
 const SESSION_FIELD = "_opencodeSession";
 const REQ_FIELD = "_opencodeRequest";
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 export const OPENCODE_REQUEST_RE = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-// Upstream free-tier gate (verified live 2026-09-18): /zen/v1/chat/completions
-// and /zen/v1/responses with `Authorization: Bearer public` reject requests
-// that do not look like the official OpenCode agentic client, even when
-// User-Agent/session shape are valid. Concretely enforced:
-// - stream must be true (stream:false → 403 FreeTierError);
-// - tools must include the file-search quartet {bash, glob, grep, read}
-//   (0–3 of them → 403; the remaining six builtins are optional extras).
-// Missing-tool requests are the common 9router case: plain chat callers send
-// no tools, so without injection every such request 403s.
-const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
-
-// Cloak decoys (upstream) — kept for Responses path when fingerprint not used.
-const OPENCODE_DECOY_CHAT_TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "bash",
-      description: "This tool is currently unavailable and must not be used.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read",
-      description: "This tool is currently unavailable and must not be used.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-];
-
-const OPENCODE_DECOY_RESPONSES_TOOLS = [
-  {
-    type: "function",
-    name: "bash",
-    description: "This tool is currently unavailable and must not be used.",
-    parameters: { type: "object", properties: {} },
-  },
-  {
-    type: "function",
-    name: "read",
-    description: "This tool is currently unavailable and must not be used.",
-    parameters: { type: "object", properties: {} },
-  },
-];
-
-function cloakOpencodeTools(body, isResponses) {
-  if (!body || typeof body !== "object") return;
-  if (isResponses) {
-    if (!Array.isArray(body.tools)) body.tools = [];
-    const names = new Set(body.tools.map((t) => t.name || t.function?.name));
-    for (const tool of OPENCODE_DECOY_RESPONSES_TOOLS) {
-      if (!names.has(tool.name)) body.tools.push({ ...tool });
-    }
-    if (!body.tool_choice) body.tool_choice = "auto";
-  } else {
-    const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
-    if (!hasTools) {
-      body.tools = OPENCODE_DECOY_CHAT_TOOLS.map((t) => ({ ...t, function: { ...t.function } }));
-      if (!body.tool_choice) body.tool_choice = "none";
-    } else {
-      const names = new Set(body.tools.map((t) => t.function?.name || t.name));
-      for (const tool of OPENCODE_DECOY_CHAT_TOOLS) {
-        if (!names.has(tool.function.name)) {
-          body.tools.push({ ...tool, function: { ...tool.function } });
-        }
-      }
-    }
-  }
-}
 
 function hasValidOpencodeVersion(ua) {
   const m = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
@@ -183,13 +113,12 @@ function nativeSession(headers) {
   return null;
 }
 
-
 // Upstream free-tier quota is accounted per session. Minting a fresh
-// x-opencode-session on every request burns through surfaces that return
+// x-opencode-session on every request burns through it and surfaces as
 // 429 FreeUsageLimitError with growing reset-after delays, while the real
 // CLI reuses one long-lived canonical session per conversation. Mirror
-// that: one stable canonical session per downstream identity, evicted by
-// MEMORY_CONFIG.sessionTtlMs like other session stores.
+// that: one stable canonical session per downstream identity, evicted
+// after MEMORY_CONFIG.sessionTtlMs like the other session stores.
 const stableOpencodeSessions = new Map();
 const MAX_STABLE_SESSIONS = 1000;
 const stableSessionCleanup = setInterval(() => {
@@ -238,14 +167,12 @@ function lastUserText(body) {
       ? body.messages
       : Array.isArray(body.input)
         ? body.input
-        : body.input && Array.isArray(body.input)
-          ? body.input
-          : null;
-    if (!arr || arr.length < 1) return "";
-    const start = Math.max(0, arr.length - 1);
-    for (let i = arr.length - 1; i >= start; i--) {
+        : null;
+    if (!arr) return typeof body.input === "string" ? body.input.slice(-600) : "";
+    for (let i = arr.length - 1; i >= 0; i--) {
       const msg = arr[i];
-      if (!msg || msg.role !== "user") continue;
+      if (!msg) continue;
+      if (msg.role && msg.role !== "user") continue;
       const content = msg.content;
       if (typeof content === "string" && content.trim()) return content.trim().slice(-600);
       if (Array.isArray(content)) {
@@ -262,9 +189,9 @@ function lastUserText(body) {
   return "";
 }
 
-// Real CLI sends the current user message id (stable per turn, same on
-// retries) as x-opencode-request. Derive it deterministically from
-// session plus last user message so retries share the id.
+// The real CLI sends the current user message id (stable per turn, same on
+// retries) as x-opencode-request. Derive it deterministically from the
+// session plus the last user message so retries share the id.
 export function deriveRequestId(sessionId, body) {
   const text = lastUserText(body);
   if (!text) return generateRequestId();
@@ -307,17 +234,17 @@ function bodyHasSessionHints(body) {
         if (msg?.role === "assistant") {
           const content = msg.content;
           if (typeof content === "string") assistantText += content;
-          if (Array.isArray(content)) {
+          else if (Array.isArray(content)) {
             for (const part of content) assistantText += part?.text || part?.output || "";
           }
+          if (assistantText.length >= 50) return true;
         }
       }
-      if (assistantText.length >= 50) return true;
     }
+    return false;
   } catch {
     return false;
   }
-  return false;
 }
 
 // Strip the thinking suffix "model(level)" so registry lookups hit the base id.
@@ -410,69 +337,6 @@ function normalizeResponsesTools(body) {
   }
 }
 
-function toolNameOf(tool) {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return "";
-  const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
-  const raw = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
-  return raw.trim();
-}
-
-// Merge the upstream-mandated file-search quartet into Chat Completions
-// bodies. Caller tools are preserved verbatim (extras are allowed upstream);
-// only the missing fingerprint names are appended as no-op declarations the
-// model may ignore. Without this, plain chat callers that send no tools get
-// 403 FreeTierError on every request.
-function ensureChatFingerprintTools(body) {
-  if (!body || typeof body !== "object") return;
-  const present = new Set();
-  if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      const name = toolNameOf(tool);
-      if (name) present.add(name);
-    }
-  } else {
-    body.tools = [];
-  }
-  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
-    if (present.has(name)) continue;
-    body.tools.push({
-      type: "function",
-      function: {
-        name,
-        description: `OpenCode built-in ${name} tool`,
-        parameters: { type: "object", properties: {} },
-      },
-    });
-    present.add(name);
-  }
-}
-
-// Same fingerprint for the Responses flat tool shape. Runs before
-// normalizeResponsesTools so injected declarations get the same coercion as
-// caller tools.
-function ensureResponsesFingerprintTools(body) {
-  if (!body || typeof body !== "object") return;
-  const present = new Set();
-  if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      const name = toolNameOf(tool);
-      if (name) present.add(name);
-    }
-  } else {
-    body.tools = [];
-  }
-  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
-    if (present.has(name)) continue;
-    body.tools.push({
-      type: "function",
-      name,
-      description: `OpenCode built-in ${name} tool`,
-      parameters: { type: "object", properties: {} },
-    });
-    present.add(name);
-  }
-}
-
 function sanitizeResponsesItems(body) {
   if (!Array.isArray(body.input)) return;
   body.input = body.input.filter((item) => {
@@ -519,12 +383,6 @@ function normalizeOpencodeReasoning(model, body) {
   const cleanModel = baseModelId(model || body.model);
   const supportedLevels = getThinkingLevels("opencode", cleanModel);
   let effort = requestedEffort.toLowerCase().trim();
-  // Responses rejects effort:"none"/"off" — omit reasoning so upstream default applies.
-  if (effort === "none" || effort === "off") {
-    delete body.reasoning;
-    delete body.reasoning_effort;
-    return;
-  }
   if ((effort === "max" || effort === "ultra") && supportedLevels?.length && !supportedLevels.includes(effort)) {
     if (effort === "ultra" && supportedLevels.includes("max")) effort = "max";
     else if (supportedLevels.includes("xhigh")) effort = "xhigh";
@@ -553,22 +411,15 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   transformRequest(model, body, stream, credentials) {
     if (body && typeof body === "object" && model && !body.model) body.model = model;
-  if (body && typeof body === "object") {
-    // Upstream rejects non-streaming free-tier requests with 403 even when
-    // everything else is valid. chatCore already forces SSE for
-    // forceStream providers and converts back for non-stream clients, so
-    // always send stream:true upstream here.
-    body.stream = true;
-  }
-  const wantsResponses = body && typeof body === "object" && (
-    isResponsesModel(model || body?.model) ||
-    getModelTargetFormat("oc", model) === "openai-responses"
-  );
-  if (wantsResponses) {
-    // ponytail: only models confirmed auto-only; open allowlist with evidence.
-    if (body && "tool_choice" in body && body.tool_choice !== "auto" && this.config.quirks?.forceAutoToolChoiceModels?.includes(baseModelId(model))) {
-      body.tool_choice = "auto";
-    }
+    // Zen rejects non-streaming requests on free models with 403 FreeTierError;
+    // always stream upstream and let the handler layer aggregate for non-stream clients.
+    if (body && typeof body === "object") body.stream = true;
+    if (isResponsesModel(model || body?.model) && body && typeof body === "object") {
+      // ponytail: chỉ model đã xác nhận auto-only; mở allowlist khi có bằng chứng.
+      if ("tool_choice" in body && body.tool_choice !== "auto"
+        && this.config.quirks?.forceAutoToolChoiceModels?.includes(baseModelId(model))) {
+        body.tool_choice = "auto";
+      }
       const normalized = normalizeResponsesInput(body.input);
       if (normalized) body.input = normalized;
       if (!Array.isArray(body.input) || body.input.length === 0) {
@@ -583,24 +434,16 @@ export class OpenCodeExecutor extends BaseExecutor {
       delete body.max_tokens;
       delete body.max_completion_tokens;
       normalizeOpencodeReasoning(model, body);
+      body.stream = true;
       body.store = false;
-      ensureResponsesFingerprintTools(body);
       normalizeResponsesTools(body);
       sanitizeResponsesItems(body);
-      // Free tier gates on both 'bash' and 'read' being present in the tools
-      // payload (verified live: any Responses request without both returns 403
-      // FreeTierError "can only be used from within OpenCode", with both +
-      // tool_choice auto it returns 200). ensureResponsesFingerprintTools
-      // already injects the quartet {bash,glob,grep,read} on every request
-      // (superset of bash+read); cloak still runs so absent tool_choice
-      // defaults to auto and external clients sending 1..N tools pass.
-      cloakOpencodeTools(body, true);
-    } else if (getModelTargetFormat("oc", model) === "claude") {
-      // Claude Messages body (chatCore already translated it) — nothing to
-      // normalize; the session headers in buildHeaders do the rest.
-      return body;
+      // Free-tier fingerprint tools are required even when an agent client
+      // already supplied tools. ZCode/Claude Code requests normally have
+      // non-empty tool arrays; skipping cloaking here triggers 403 FreeTierError.
+      applyFingerprintTools(body, true);
     } else if (body && typeof body === "object") {
-      ensureChatFingerprintTools(body);
+      applyFingerprintTools(body, false);
     }
     return injectReasoningContent({ provider: this.provider, model, body });
   }
@@ -609,14 +452,10 @@ export class OpenCodeExecutor extends BaseExecutor {
     return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
   }
 
-  buildUrl(model, stream, urlIndex = 0, credentials = null) {
+  buildUrl(model) {
     const base = this.config.baseUrl;
-    const format = isResponsesModel(model) ? "openai-responses" : getModelTargetFormat("oc", model);
-    // Custom models may declare a targetFormat via the dashboard "Add Custom
-    // Model" endpoint dropdown. union-alpha is messages-only upstream:
-    // /chat/completions 500s, /responses errors.
-    if (format === "openai-responses") return `${base}/zen/v1/responses`;
-    if (format === "claude") return `${base}/zen/v1/messages`;
+    if (isResponsesModel(model)) return `${base}/zen/v1/responses`;
+    if (isMessagesModel(model)) return `${base}/zen/v1/messages`;
     return `${base}/zen/v1/chat/completions`;
   }
 

@@ -204,68 +204,6 @@ describe("OpenCode Free User-Agent Validation", () => {
   });
 });
 
-describe("OpenCode Free Upstream Gates (stream + tool fingerprint)", () => {
-  it("forces stream:true upstream on chat bodies even for non-stream clients", () => {
-    const executor = getExecutor("opencode");
-    const out = executor.transformRequest(
-      "mimo-v2.5-free",
-      { model: "mimo-v2.5-free", messages: [{ role: "user", content: "hi" }] },
-      false,
-      { rawHeaders: {} },
-    );
-    expect(out.stream).toBe(true);
-  });
-
-  it("injects the file-search quartet into chat bodies without tools", () => {
-    const executor = getExecutor("opencode");
-    const out = executor.transformRequest(
-      "mimo-v2.5-free",
-      { model: "mimo-v2.5-free", messages: [{ role: "user", content: "hi" }] },
-      true,
-      { rawHeaders: {} },
-    );
-    const names = out.tools.map((t) => t.function?.name);
-    for (const required of ["bash", "glob", "grep", "read"]) {
-      expect(names).toContain(required);
-    }
-  });
-
-  it("preserves caller chat tools and only appends the missing fingerprint names", () => {
-    const executor = getExecutor("opencode");
-    const out = executor.transformRequest(
-      "mimo-v2.5-free",
-      {
-        model: "mimo-v2.5-free",
-        messages: [{ role: "user", content: "hi" }],
-        tools: [{ type: "function", function: { name: "my_tool", description: "m", parameters: { type: "object", properties: {} } } }],
-      },
-      true,
-      { rawHeaders: {} },
-    );
-    const names = out.tools.map((t) => t.function?.name);
-    expect(names[0]).toBe("my_tool");
-    for (const required of ["bash", "glob", "grep", "read"]) {
-      expect(names).toContain(required);
-    }
-  });
-
-  it("injects the fingerprint into Responses bodies and keeps stream/store gates", () => {
-    const executor = getExecutor("opencode");
-    const out = executor.transformRequest(
-      "muse-spark-1.3-contributor-free",
-      { input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] },
-      false,
-      { rawHeaders: {} },
-    );
-    expect(out.stream).toBe(true);
-    expect(out.store).toBe(false);
-    const names = out.tools.map((t) => t.name);
-    for (const required of ["bash", "glob", "grep", "read"]) {
-      expect(names).toContain(required);
-    }
-  });
-});
-
 describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
   function anonymousCredentials(auth) {
     return makeCredentials({ connectionId: undefined, rawHeaders: { authorization: `Bearer ${auth}` } });
@@ -339,44 +277,68 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
     expect(second).toBe(first);
   });
 
-  it("injects free-tier fingerprint quartet into chat bodies", () => {
+  it("applies the full lowercase free-tier fingerprint quartet", () => {
+  const executor = getExecutor("opencode");
+
+  const chatNoTools = executor.transformRequest("nemotron-3-ultra-free", {
+    messages: [{ role: "user", content: "hi" }],
+  });
+  expect(chatNoTools.stream).toBe(true);
+  expect(chatNoTools.tool_choice).toBe("none");
+  expect(chatNoTools.tools.map((t) => t.function?.name)).toEqual([
+    "bash", "glob", "grep", "read",
+  ]);
+
+  const chatWithTools = executor.transformRequest("nemotron-3-ultra-free", {
+    messages: [{ role: "user", content: "hi" }],
+    tools: [
+      { type: "function", function: { name: "Bash", description: "Claude Code tool" } },
+      { type: "function", function: { name: "Glob", description: "Claude Code tool" } },
+      { type: "function", function: { name: "Grep", description: "Claude Code tool" } },
+      { type: "function", function: { name: "Read", description: "Claude Code tool" } },
+    ],
+    tool_choice: "auto",
+  });
+  expect(chatWithTools.tool_choice).toBe("auto");
+  expect(chatWithTools.tools.map((t) => t.function?.name)).toEqual([
+    "bash", "glob", "grep", "read",
+  ]);
+
+  const chatPartial = executor.transformRequest("nemotron-3-ultra-free", {
+    messages: [{ role: "user", content: "hi" }],
+    tools: [
+      { type: "function", function: { name: "bash", description: "existing" } },
+      { type: "function", function: { name: "read", description: "existing" } },
+    ],
+  });
+  expect(chatPartial.tools.map((t) => t.function?.name)).toEqual([
+    "bash", "read", "glob", "grep",
+  ]);
+  expect(chatPartial.tools[0].function.description).toBe("existing");
+});
+
+  it("cloaks Muse Responses requests even when the client already supplies tools", () => {
     const executor = getExecutor("opencode");
-
-    // Case 1: no tools sent by client -> injects bash/glob/grep/read
-    const chatNoTools = executor.transformRequest("nemotron-3-ultra-free", {
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(chatNoTools.stream).toBe(true);
-    const noToolNames = chatNoTools.tools.map((t) => t.function?.name);
-    for (const required of ["bash", "glob", "grep", "read"]) {
-      expect(noToolNames).toContain(required);
-    }
-
-    // Case 2: external CLI tools preserved; missing fingerprint names appended
-    const chatWithTools = executor.transformRequest("nemotron-3-ultra-free", {
-      messages: [{ role: "user", content: "hi" }],
-      tools: [{ type: "function", function: { name: "Bash", description: "Claude Code tool" } }],
+    const transformed = executor.transformRequest("muse-spark-1.3-contributor-free(xhigh)", {
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      tools: [{
+        type: "function",
+        name: "zcode_search",
+        description: "client-provided tool",
+        parameters: { type: "object", properties: {} },
+      }],
       tool_choice: "auto",
-    });
-    expect(chatWithTools.tool_choice).toBe("auto");
-    const names = chatWithTools.tools.map((t) => t.function?.name);
-    expect(names).toContain("Bash");
-    for (const required of ["bash", "glob", "grep", "read"]) {
-      expect(names).toContain(required);
-    }
+      reasoning_effort: "xhigh",
+    }, true, {});
 
-    // Case 3: full quartet already present -> no duplicates
-    const chatFull = executor.transformRequest("nemotron-3-ultra-free", {
-      messages: [{ role: "user", content: "hi" }],
-      tools: [
-        { type: "function", function: { name: "bash", description: "existing" } },
-        { type: "function", function: { name: "glob", description: "existing" } },
-        { type: "function", function: { name: "grep", description: "existing" } },
-        { type: "function", function: { name: "read", description: "existing" } },
-      ],
-    });
-    expect(chatFull.tools.length).toBe(4);
-    expect(chatFull.tools[0].function.description).toBe("existing");
+    expect(transformed.stream).toBe(true);
+    expect(transformed.reasoning?.effort).toBe("xhigh");
+    const names = transformed.tools.map((tool) => tool.name);
+    expect(names).toContain("zcode_search");
+    expect(names).toContain("bash");
+    expect(names).toContain("read");
+    expect(names.filter((name) => name === "bash")).toHaveLength(1);
+    expect(names.filter((name) => name === "read")).toHaveLength(1);
   });
 
   it("declares forceStream on the opencode transport so chatCore serves SSE upstream", async () => {
