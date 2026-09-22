@@ -246,25 +246,25 @@ describe("OpenCode Free Muse Spark thinking", () => {
       {
         type: "function",
         name: "bash",
-        description: "OpenCode built-in bash tool",
+        description: "This tool is currently unavailable and must not be used.",
         parameters: { type: "object", properties: {} },
       },
       {
         type: "function",
         name: "glob",
-        description: "OpenCode built-in glob tool",
+        description: "This tool is currently unavailable and must not be used.",
         parameters: { type: "object", properties: {} },
       },
       {
         type: "function",
         name: "grep",
-        description: "OpenCode built-in grep tool",
+        description: "This tool is currently unavailable and must not be used.",
         parameters: { type: "object", properties: {} },
       },
       {
         type: "function",
         name: "read",
-        description: "OpenCode built-in read tool",
+        description: "This tool is currently unavailable and must not be used.",
         parameters: { type: "object", properties: {} },
       },
     ]);

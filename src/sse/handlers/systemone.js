@@ -3,8 +3,8 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  isValidApiKey,
 } from "../services/auth.js";
+import { resolveApiKeyContext, authorizeOriginalResource } from "../services/apiKeyPolicy.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
@@ -42,18 +42,20 @@ export async function handleSystemone(request) {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // Enforce API key if enabled in settings
+  // Enforce API key if enabled in settings. Presented-but-invalid keys always 401.
+  // Trusted local self-calls (x-9r-cli-token) bypass via resolveApiKeyContext.
   const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) {
-      log.warn("AUTH", "Missing API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    }
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) {
-      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
-      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-    }
+  const keyCtx = await resolveApiKeyContext(request);
+  if (keyCtx.errorResponse) {
+    log.warn("AUTH", `API key rejected: ${keyCtx.errorResponse.status}`);
+    return keyCtx.errorResponse;
+  }
+  const keyRow = keyCtx.keyRow;
+
+  // Early authorization against ORIGINAL exposed model — before alias/provider resolution.
+  if (keyRow && modelStr) {
+    const denied = await authorizeOriginalResource(keyRow, modelStr);
+    if (denied) return denied;
   }
 
   if (!modelStr) {
@@ -125,7 +127,8 @@ export async function handleSystemone(request) {
           provider,
           model,
           connectionId: credentials.connectionId,
-          apiKey,
+          apiKeyId: keyRow?.id || undefined,
+          apiKeyNameSnapshot: keyRow?.name || undefined,
           endpoint: url.pathname,
           tokens: {
             ...result.usage,

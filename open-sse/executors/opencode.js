@@ -7,6 +7,7 @@ import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
+import { getModelTargetFormat } from "../config/providerModels.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -383,6 +384,12 @@ function normalizeOpencodeReasoning(model, body) {
   const cleanModel = baseModelId(model || body.model);
   const supportedLevels = getThinkingLevels("opencode", cleanModel);
   let effort = requestedEffort.toLowerCase().trim();
+  // Responses rejects effort:"none"/"off" — omit reasoning so upstream default applies.
+  if (effort === "none" || effort === "off") {
+    delete body.reasoning;
+    delete body.reasoning_effort;
+    return;
+  }
   if ((effort === "max" || effort === "ultra") && supportedLevels?.length && !supportedLevels.includes(effort)) {
     if (effort === "ultra" && supportedLevels.includes("max")) effort = "max";
     else if (supportedLevels.includes("xhigh")) effort = "xhigh";
@@ -414,7 +421,11 @@ export class OpenCodeExecutor extends BaseExecutor {
     // Zen rejects non-streaming requests on free models with 403 FreeTierError;
     // always stream upstream and let the handler layer aggregate for non-stream clients.
     if (body && typeof body === "object") body.stream = true;
-    if (isResponsesModel(model || body?.model) && body && typeof body === "object") {
+    const format = getModelTargetFormat("oc", model);
+    if (format === "claude") {
+      return body;
+    }
+    if ((isResponsesModel(model || body?.model) || format === "openai-responses") && body && typeof body === "object") {
       // ponytail: chỉ model đã xác nhận auto-only; mở allowlist khi có bằng chứng.
       if ("tool_choice" in body && body.tool_choice !== "auto"
         && this.config.quirks?.forceAutoToolChoiceModels?.includes(baseModelId(model))) {
@@ -454,8 +465,9 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   buildUrl(model) {
     const base = this.config.baseUrl;
-    if (isResponsesModel(model)) return `${base}/zen/v1/responses`;
-    if (isMessagesModel(model)) return `${base}/zen/v1/messages`;
+    const format = isResponsesModel(model) ? "openai-responses" : getModelTargetFormat("oc", model);
+    if (format === "openai-responses") return `${base}/zen/v1/responses`;
+    if (format === "claude" || isMessagesModel(model)) return `${base}/zen/v1/messages`;
     return `${base}/zen/v1/chat/completions`;
   }
 

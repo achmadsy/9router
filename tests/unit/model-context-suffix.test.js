@@ -63,6 +63,11 @@ describe("recognized 1M context suffix routing", () => {
     expect(getCapabilitiesForModel("claude", "claude-opus-4-8[1M]").contextWindow).toBe(1000000);
   });
 
+  it("bumps contextWindow to 1M when [1m] suffix is present on a sub-1M model", () => {
+    expect(getCapabilitiesForModel("codex", "gpt-5.5").contextWindow).toBe(400000);
+    expect(getCapabilitiesForModel("codex", "gpt-5.5[1m]").contextWindow).toBe(1000000);
+  });
+
   it("does not strip unrecognized suffixes", async () => {
     await expect(getModelInfoCore("cc-gpt-main-agent[preview]", {
       "cc-gpt-main-agent": "cx/gpt-5.6-terra",

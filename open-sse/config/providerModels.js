@@ -30,11 +30,14 @@ const DOT_VERSION_PROVIDERS = new Set(["kr", "kiro"]);
 function findModel(models, modelId, aliasOrId) {
   if (!models) return undefined;
   const rawModelId = stripRecognizedContextSuffix(modelId);
-  const found = models.find(m => m.id === modelId) || models.find(m => m.id === rawModelId);
+  const baseModelId = typeof rawModelId === "string"
+    ? rawModelId.replace(/\([^()]+\)\s*$/, "").trim()
+    : rawModelId;
+  const found = models.find(m => m.id === modelId || m.id === rawModelId || m.id === baseModelId);
   if (found) return found;
   if (!DOT_VERSION_PROVIDERS.has(aliasOrId)) return undefined;
-  const normalized = normalizeModelId(rawModelId);
-  if (normalized === rawModelId) return undefined;
+  const normalized = normalizeModelId(baseModelId);
+  if (normalized === rawModelId || normalized === baseModelId) return undefined;
   return models.find(m => m.id === normalized);
 }
 

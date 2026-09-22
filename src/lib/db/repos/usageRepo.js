@@ -720,7 +720,7 @@ function historyBucketRows(db, { startIso, apiKeyId }) {
 }
 
 function bucketsFromHistoryRows(rows, { startTime, endTime, bucketCount, bucketMs, labelFn, clampLast }) {
-  const buckets = Array.from({ length: bucketCount }, (_, i) => ({ label: labelFn(startTime + i * bucketMs), tokens: 0, cost: 0 }));
+  const buckets = Array.from({ length: bucketCount }, (_, i) => ({ label: labelFn(startTime + i * bucketMs), tokens: 0, cost: 0, requests: 0 }));
   for (const r of rows) {
     const t = new Date(r.timestamp).getTime();
     if (t < startTime || t >= endTime) continue;
@@ -729,6 +729,7 @@ function bucketsFromHistoryRows(rows, { startTime, endTime, bucketCount, bucketM
     if (idx >= 0 && idx < bucketCount) {
       buckets[idx].tokens += (r.promptTokens || 0) + (r.completionTokens || 0);
       buckets[idx].cost += r.cost || 0;
+      buckets[idx].requests += 1;
     }
   }
   return buckets;
@@ -786,12 +787,13 @@ export async function getChartData(period = "7d", options = {}) {
         label: labelFn(d),
         tokens: dayData ? (dayData.promptTokens || 0) + (dayData.completionTokens || 0) : 0,
         cost: dayData ? (dayData.cost || 0) : 0,
+        requests: dayData ? (dayData.requests || 0) : 0,
       };
     });
   }
 
   const rows = historyBucketRows(db, { startIso: startDay.toISOString(), apiKeyId });
-  const byDate = new Map(days.map(({ dateKey }) => [dateKey, { tokens: 0, cost: 0 }]));
+  const byDate = new Map(days.map(({ dateKey }) => [dateKey, { tokens: 0, cost: 0, requests: 0 }]));
   const endExclusive = today.getTime() + 86400000;
   for (const r of rows) {
     const t = new Date(r.timestamp).getTime();
@@ -802,11 +804,13 @@ export async function getChartData(period = "7d", options = {}) {
     if (!acc) continue;
     acc.tokens += (r.promptTokens || 0) + (r.completionTokens || 0);
     acc.cost += r.cost || 0;
+    acc.requests += 1;
   }
   return days.map(({ d, dateKey }) => ({
     label: labelFn(d),
     tokens: byDate.get(dateKey)?.tokens || 0,
     cost: byDate.get(dateKey)?.cost || 0,
+    requests: byDate.get(dateKey)?.requests || 0,
   }));
 }
 
