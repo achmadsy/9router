@@ -90,18 +90,22 @@ http.createServer = (...args) => {
     const xff = req.headers["x-forwarded-for"];
     const xRealIp = req.headers["x-real-ip"];
     const viaProxy = !!(xff || xRealIp);
-    const isLoopbackProxy = socketIp === "127.0.0.1" || socketIp === "::1" || socketIp === "::ffff:127.0.0.1";
-    // Trust forwarding headers only when the TCP peer is a local reverse proxy.
-    // Direct/public sockets remain keyed by the unspoofable peer address.
+    const trustedProxyIps = new Set([
+      "127.0.0.1", "::1", "::ffff:127.0.0.1",
+      ...(process.env.NINEROUTER_TRUSTED_PROXY_IPS || "").split(",").map((value) => value.trim()).filter(Boolean),
+    ]);
+    const isTrustedProxy = trustedProxyIps.has(socketIp);
+    // Trust forwarding headers only when the TCP peer is an explicitly trusted
+    // reverse proxy. Direct/public sockets remain keyed by the peer address.
     const proxyIp = xRealIp || (xff ? String(xff).split(",")[0].trim() : "");
-    const ip = isLoopbackProxy && proxyIp ? proxyIp : socketIp;
+    const ip = isTrustedProxy && proxyIp ? proxyIp : socketIp;
     delete req.headers["x-9r-real-ip"];
     delete req.headers["x-forwarded-for"];
     delete req.headers["x-9r-via-proxy"];
     delete req.headers["x-9r-peer-token"];
     req.headers["x-9r-real-ip"] = ip;
     req.headers["x-9r-peer-token"] = PEER_TOKEN;
-    if (viaProxy) req.headers["x-9r-via-proxy"] = "1";
+    if (viaProxy && isTrustedProxy) req.headers["x-9r-via-proxy"] = "1";
     try {
       if (inferenceAccessLog.isInferencePath(new URL(req.url, "http://localhost").pathname)) {
         const startedAt = new Date().toISOString();
