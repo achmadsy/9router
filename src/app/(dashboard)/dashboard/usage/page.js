@@ -4,6 +4,7 @@ import { Suspense, useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { UsageStats, RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/components";
 import RequestDetailsTab from "./components/RequestDetailsTab";
+import IpAccessTab from "./components/IpAccessTab";
 
 const PERIODS = [
   { value: "today", label: "Today" },
@@ -46,12 +47,13 @@ function UsageContent() {
   }, []);
 
   const tabFromUrl = searchParams.get("tab");
-  const activeTab = tabFromUrl && ["overview", "logs", "details"].includes(tabFromUrl)
+  const activeTab = tabFromUrl && ["overview", "logs", "details", "ips"].includes(tabFromUrl)
     ? tabFromUrl
     : "overview";
 
   const handleTabChange = (value) => {
     if (value === activeTab) return;
+    if (value !== "ips" && apiKeyId === "none") setApiKeyId("");
     const params = new URLSearchParams(searchParams);
     params.set("tab", value);
     router.push(`/dashboard/usage?${params.toString()}`, { scroll: false });
@@ -65,6 +67,7 @@ function UsageContent() {
           options={[
             { value: "overview", label: "Overview" },
             { value: "details", label: "Details" },
+            { value: "ips", label: "IPs" },
           ]}
           value={activeTab}
           onChange={handleTabChange}
@@ -80,6 +83,7 @@ function UsageContent() {
             style={{ colorScheme: "auto" }}
           >
             <option value="">All API Keys</option>
+            {activeTab === "ips" && <option value="none">No API key</option>}
             {apiKeys.map((k) => (
               <option key={k.id} value={k.id}>
                 {k.name || k.keyHint || k.id}
@@ -109,7 +113,8 @@ function UsageContent() {
         </Suspense>
       )}
       {activeTab === "logs" && <RequestLogger />}
-      {activeTab === "details" && <RequestDetailsTab apiKeyId={apiKeyId} />}
+      {activeTab === "details" && <RequestDetailsTab apiKeyId={apiKeyId === "none" ? "" : apiKeyId} />}
+      {activeTab === "ips" && <IpAccessTab apiKeyId={apiKeyId} />}
     </div>
   );
 }

@@ -35,6 +35,7 @@ export function copyStandaloneAssets({ projectRoot = process.cwd(), distDir = pr
   const serverWrapperSource = resolve(projectRoot, "custom-server.js");
   const serverWrapperDestination = resolve(standaloneDir, "custom-server.js");
   copyIfExists(serverWrapperSource, serverWrapperDestination, "custom-server.js");
+  copyIfExists(resolve(projectRoot, "inference-access-log.cjs"), resolve(standaloneDir, "inference-access-log.cjs"), "inference-access-log.cjs");
 
   // open-sse ships as raw ESM (Dockerfile copies ./open-sse). Its executors
   // and token-refresh code import sibling src/lib files at Node runtime —

@@ -3,8 +3,9 @@
 // ⚠️ AGENT/DEV NOTES:
 // - Backups are a best-effort safety net before schema migrations. There is NO
 //   automated restore path; recovery is manual (copy a backup file back).
-// - Backups intentionally EXCLUDE the `requestDetails` table (observability log,
-//   auto-pruned, non-critical) so a multi-hundred-MB DB backs up as a few MB.
+// - Backups intentionally EXCLUDE `requestDetails` and `inferenceAccess`
+//   (observability logs, auto-pruned, non-critical) so backup stays small and
+//   cannot preserve client IPs beyond retention.
 // - Only the newest KEEP_BACKUPS are kept; older ones are pruned automatically.
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +15,7 @@ import { timestampSlug, getAppVersion } from "./version.js";
 const KEEP_BACKUPS = 3;
 
 // Tables excluded from safety backups (large, non-critical, reproducible).
-const BACKUP_EXCLUDE_TABLES = ["requestDetails"];
+const BACKUP_EXCLUDE_TABLES = ["requestDetails", "inferenceAccess"];
 
 export function makeBackupDir(label) {
   ensureDirs();

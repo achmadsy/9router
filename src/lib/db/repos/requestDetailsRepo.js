@@ -60,7 +60,7 @@ let isFlushing = false;
 
 function sanitizeHeaders(headers) {
   if (!headers || typeof headers !== "object") return {};
-  const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token", "api-key"];
+  const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token", "api-key", "x-9r-real-ip", "x-real-ip", "x-forwarded-for", "forwarded", "cf-connecting-ip", "true-client-ip"];
   const sanitized = { ...headers };
   for (const key of Object.keys(sanitized)) {
     if (sensitiveKeys.some((s) => key.toLowerCase().includes(s))) delete sanitized[key];

@@ -81,6 +81,6 @@ describe("custom-server peer header sanitizing", () => {
     expect(sanitized["x-9r-peer-token"]).toBeUndefined();
     expect(sanitized["x-9r-cli-token"]).toBeUndefined();
     expect(sanitized["authorization"]).toBeUndefined();
-    expect(sanitized["x-9r-real-ip"]).toBe("127.0.0.1");
+    expect(sanitized["x-9r-real-ip"]).toBeUndefined();
   });
 });

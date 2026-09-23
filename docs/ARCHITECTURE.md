@@ -510,6 +510,12 @@ Translations are selected dynamically based on source payload shape and provider
 - DB shape migration/repair for missing keys
 - corrupt JSON reset safeguards for localDb and usageDb
 
+## Inference IP access records
+
+The production `custom-server.js` records inbound `/v1/*`, `/v1beta/*`, `/api/v1/*`, `/api/v1beta/*`, `/responses`, `/codex/*`, and `/systemone` requests in `${DATA_DIR}/db/data.sqlite` (`~/.9router/db/data.sqlite` by default). `inferenceAccess` stores start time (UTC), trusted socket/proxy IP, method, pathname, HTTP status, and active API-key ID when a valid key was presented. It does not store key secrets, query parameters, headers, or prompts. Requests rejected before routing are also recorded. This capture requires `custom-server.js`, not bare `next dev`.
+
+`/dashboard/usage?tab=ips` shows recent IPs and per-request metadata with the page's shared API-key filter. `/api/usage/ip-access` uses the same dashboard auth rules as other Usage APIs (including `requireLogin=false`). The IP table retains seven rolling days: startup, daily, and read-path cleanup delete **only** old `inferenceAccess` rows; normal usage history, daily aggregates, and request details are never deleted by that cleanup. SQLite safety backups exclude the IP table. Request details redact IP headers for new records, but old request details, external proxy logs, and Sentry have separate retention. No IP data can be reconstructed for requests before this feature was deployed.
+
 ## Observability and Operational Signals
 
 Runtime visibility sources:

@@ -4,6 +4,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 const { AsyncLocalStorage } = require("async_hooks");
+const inferenceAccessLog = require("./inference-access-log.cjs");
 
 // Initialize Sentry early if configured in environment
 if (process.env.SENTRY_DSN) {
@@ -101,12 +102,29 @@ http.createServer = (...args) => {
     req.headers["x-9r-real-ip"] = ip;
     req.headers["x-9r-peer-token"] = PEER_TOKEN;
     if (viaProxy) req.headers["x-9r-via-proxy"] = "1";
+    try {
+      if (inferenceAccessLog.isInferencePath(new URL(req.url, "http://localhost").pathname)) {
+        const startedAt = new Date().toISOString();
+        const keyHeaders = {
+          authorization: req.headers.authorization,
+          "x-api-key": req.headers["x-api-key"],
+          "x-goog-api-key": req.headers["x-goog-api-key"],
+        };
+        res.once("finish", () => inferenceAccessLog.recordRequest({
+          ip, method: req.method, url: req.url, status: res.statusCode, headers: keyHeaders, timestamp: startedAt,
+        }));
+      }
+    } catch { /* Malformed URL must not interrupt the HTTP handler. */ }
     // ALS store for Sentry / async capture during this request tree
     return globalThis.__9router_request_als.run({ clientIp: ip || null }, () => handler(req, res));
   };
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
+    inferenceAccessLog.purgeExpiredSafely();
+    const cleanup = setInterval(() => inferenceAccessLog.purgeExpiredSafely(), 24 * 60 * 60 * 1000);
+    cleanup.unref?.();
+    server.once("close", () => clearInterval(cleanup));
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.
