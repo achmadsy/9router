@@ -3,6 +3,7 @@ import { DefaultExecutor } from "./default.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { modelTargetFormat } from "../providers/models/schema.js";
 import { getProviderModels } from "../config/providerModels.js";
+import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import {
   normalizeResponsesInput,
   clampResponsesCallId,
@@ -185,6 +186,7 @@ export class OpenCodeGoExecutor extends DefaultExecutor {
     delete out.reasoning_effort;
     out.stream = true;
     out.store = false;
+    applyFingerprintTools(out, true);
     normalizeResponsesTools(out);
     sanitizeResponsesItems(out);
     return out;

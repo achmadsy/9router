@@ -6,6 +6,8 @@ import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.j
 import { getThinkingLevels } from "../../open-sse/providers/thinkingLevels.js";
 import { getExecutor } from "../../open-sse/executors/index.js";
 import { OpenCodeGoExecutor } from "../../open-sse/executors/opencode-go.js";
+import { OpenCodeZenExecutor } from "../../open-sse/executors/opencode-zen.js";
+import { restoreToolNames, takeRenamedToolNames } from "../../open-sse/utils/opencodeFingerprint.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import "../translator/registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
@@ -48,6 +50,25 @@ describe("ocg/muse-spark-1.3-contributor catalog", () => {
 });
 
 describe("OpenCodeGoExecutor routing + sanitization", () => {
+  it("restores Claude Code fingerprint tool names after Responses normalization", () => {
+    const ex = new OpenCodeGoExecutor();
+    const body = {
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "inspect" }] }],
+      tools: [
+        { type: "function", name: "Bash", description: "run", parameters: { type: "object", properties: {} } },
+        { type: "function", name: "Read", description: "read", parameters: { type: "object", properties: {} } },
+      ],
+    };
+    const out = ex.transformRequest(MODEL, body, true, {});
+    expect(out.tools.map((tool) => tool.name)).toContain("bash");
+    expect(out.tools.map((tool) => tool.name)).toContain("read");
+    const map = takeRenamedToolNames(body);
+    expect(map.get("bash")).toBe("Bash");
+    expect(map.get("read")).toBe("Read");
+    const restored = restoreToolNames({ output: [{ type: "function_call", name: "read" }] }, map);
+    expect(restored.output[0].name).toBe("Read");
+  });
+
   it("routes gpt-5.6-luna to /responses", () => {
     const ex = new OpenCodeGoExecutor();
     expect(ex.buildUrl("gpt-5.6-luna")).toBe("https://opencode.ai/zen/go/v1/responses");
@@ -109,7 +130,7 @@ describe("OpenCodeGoExecutor routing + sanitization", () => {
     expect(out.stream).toBe(true);
     expect(out.store).toBe(false);
     // nameless declaration dropped, nameless call dropped
-    expect(out.tools.map((t) => t.name)).toEqual(["read"]);
+    expect(out.tools.map((t) => t.name)).toEqual(["read", "bash", "glob", "grep"]);
     const calls = out.input.filter((i) => i.type === "function_call");
     expect(calls.map((c) => c.name)).toEqual(["read", "exec"]);
     // overlong id clamped, object args stringified exactly once
@@ -157,6 +178,21 @@ describe("OpenCodeGoExecutor routing + sanitization", () => {
     expect(out.input.some((i) => i.type === "reasoning")).toBe(false);
     expect(JSON.stringify(out.input)).not.toContain("ENC_BLOB_TURN_1");
     expect(out.input.map((i) => i.type)).toEqual(["message", "function_call", "function_call_output"]);
+  });
+});
+
+describe("OpenCodeZenExecutor fingerprint restoration", () => {
+  it("restores Claude Code tool names for Muse Spark Responses requests", () => {
+    const ex = new OpenCodeZenExecutor();
+    const body = {
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "inspect" }] }],
+      tools: [{ type: "function", name: "Bash", parameters: { type: "object", properties: {} } }],
+    };
+    const out = ex.transformRequest("muse-spark-1.3", body, true, {});
+    expect(out.tools.map((tool) => tool.name)).toContain("bash");
+    const map = takeRenamedToolNames(body);
+    expect(map.get("bash")).toBe("Bash");
+    expect(restoreToolNames({ output: [{ type: "function_call", name: "bash" }] }, map).output[0].name).toBe("Bash");
   });
 });
 

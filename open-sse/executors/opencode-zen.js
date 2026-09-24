@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { DefaultExecutor } from "./default.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
+import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import {
   normalizeResponsesInput,
   clampResponsesCallId,
@@ -20,8 +21,6 @@ export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 // Free-tier fingerprint (mirrors opencode executor, PR #4132): upstream 403s
 // requests without the file-search quartet and without stream:true.
-const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
-
 function hasValidOpencodeVersion(ua) {
   const m = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
   if (!m) return false;
@@ -75,61 +74,6 @@ export function translateSessionId(sessionId, clientTool = "") {
     randomPart += BASE62_CHARS[digest[i] % 62];
   }
   return `ses_${timeHex}${randomPart}`;
-}
-
-function toolNameOf(tool) {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return "";
-  const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
-  const raw = typeof tool.name === "string" ? tool.name : (typeof fn?.name === "string" ? fn.name : "");
-  return raw.trim();
-}
-
-function ensureChatFingerprintTools(body) {
-  if (!body || typeof body !== "object") return;
-  const present = new Set();
-  if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      const name = toolNameOf(tool);
-      if (name) present.add(name);
-    }
-  } else {
-    body.tools = [];
-  }
-  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
-    if (present.has(name)) continue;
-    body.tools.push({
-      type: "function",
-      function: {
-        name,
-        description: `OpenCode built-in ${name} tool`,
-        parameters: { type: "object", properties: {} },
-      },
-    });
-    present.add(name);
-  }
-}
-
-function ensureResponsesFingerprintTools(body) {
-  if (!body || typeof body !== "object") return;
-  const present = new Set();
-  if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      const name = toolNameOf(tool);
-      if (name) present.add(name);
-    }
-  } else {
-    body.tools = [];
-  }
-  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
-    if (present.has(name)) continue;
-    body.tools.push({
-      type: "function",
-      name,
-      description: `OpenCode built-in ${name} tool`,
-      parameters: { type: "object", properties: {} },
-    });
-    present.add(name);
-  }
 }
 
 function normalizeSession(value) {
@@ -307,7 +251,7 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     delete out.reasoning_effort;
     out.stream = true;
     out.store = false;
-    ensureResponsesFingerprintTools(out);
+    applyFingerprintTools(out, true);
     normalizeResponsesTools(out);
     sanitizeResponsesItems(out);
     return out;

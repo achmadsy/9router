@@ -7,6 +7,7 @@ import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLin
 import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { isClaudeClassifierRequest, openAICompletionToClaudeMessage } from "./claudeMessageResponse.js";
+import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -228,7 +229,7 @@ async function readBodyWithSalvage(body) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, clientRawRequest, onRequestSuccess, onEmptyUsage, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, apiKeyId, apiKeyNameSnapshot, clientRawRequest, onRequestSuccess, onEmptyUsage, customToolNames, toolNameMap, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -290,7 +291,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       // Client is Responses API → return as-is
       if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
-        return { success: true, response: new Response(JSON.stringify(jsonResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
+        const restoredResponse = restoreToolNames(jsonResponse, toolNameMap);
+        return { success: true, response: new Response(JSON.stringify(restoredResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
       // Build client-format response.
@@ -357,6 +359,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       if (sourceFormat === FORMATS.CLAUDE) {
         try {
+          finalResp = restoreToolNames(finalResp, toolNameMap);
           finalResp = openAICompletionToClaudeMessage(finalResp, {
             classifierMode: isClaudeClassifierRequest(body),
           });
@@ -428,7 +431,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
     if (sourceFormat === FORMATS.CLAUDE) {
       try {
-        const finalResp = openAICompletionToClaudeMessage(parsed, {
+        const finalResp = openAICompletionToClaudeMessage(restoreToolNames(parsed, toolNameMap), {
           classifierMode: isClaudeClassifierRequest(body),
         });
         return { success: true, response: new Response(JSON.stringify(finalResp), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
@@ -456,8 +459,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     // nonStreamingHandler.js) to avoid a circular import: nonStreamingHandler
     // already imports parseSSEToOpenAIResponse from this module.
     const finalBody = sourceFormat === FORMATS.OPENAI_RESPONSES
-      ? chatCompletionToResponses(parsed, customToolNames)
-      : parsed;
+      ? chatCompletionToResponses(restoreToolNames(parsed, toolNameMap), customToolNames)
+      : restoreToolNames(parsed, toolNameMap);
 
     return { success: true, response: new Response(JSON.stringify(finalBody), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {
