@@ -9,6 +9,7 @@ let connection;
 let lastCleanup = 0;
 
 function isInferencePath(pathname) {
+  if (pathname === "/v1/api/hello") return false;
   return ["/v1", "/v1beta", "/api/v1", "/api/v1beta", "/codex", "/responses", "/systemone"]
     .some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }

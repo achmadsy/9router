@@ -85,6 +85,11 @@ describe("inference access records", () => {
     expect(log.queryAccess().rows).toMatchObject([{ status: 401, endpoint: "/v1/reject" }]);
   });
 
+  it("excludes Claude hello probes from access records", () => {
+    expect(log.isInferencePath("/v1/api/hello")).toBe(false);
+    expect(log.isInferencePath("/v1/chat/completions")).toBe(true);
+  });
+
   it("purges only IP rows older than seven days", () => {
     const DatabaseSync = require("better-sqlite3");
     const db = new DatabaseSync(join(dir, "db", "data.sqlite"));
