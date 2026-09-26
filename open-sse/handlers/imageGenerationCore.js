@@ -1,4 +1,4 @@
-import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
+import { createErrorResult, parseUpstreamError, formatProviderError, reportUpstreamError } from "../utils/error.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { getExecutor } from "../executors/index.js";
@@ -157,7 +157,14 @@ export async function handleImageGenerationCore({
   if (!providerResponse.ok) {
     const { statusCode, message, cooldownHint, upstreamBody } = await parseUpstreamError(providerResponse);
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
-    log?.debug?.("IMAGE", `Provider error: ${errMsg}`);
+    reportUpstreamError(log, {
+      tag: "IMAGE",
+      provider,
+      model,
+      statusCode,
+      message: errMsg,
+      upstreamBody,
+    });
     return createErrorResult(statusCode, errMsg, { cooldownHint, upstreamBody });
   }
 

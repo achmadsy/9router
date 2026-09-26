@@ -1,4 +1,4 @@
-import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
+import { createErrorResult, parseUpstreamError, formatProviderError, reportUpstreamError } from "../utils/error.js";
 import { HTTP_STATUS, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { getExecutor } from "../executors/index.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
@@ -112,7 +112,14 @@ export async function handleEmbeddingsCore({
   if (!providerResponse.ok) {
     const { statusCode, message, cooldownHint, upstreamBody } = await parseUpstreamError(providerResponse);
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
-    log?.debug?.("EMBEDDINGS", `Provider error: ${errMsg}`);
+    reportUpstreamError(log, {
+      tag: "EMBEDDINGS",
+      provider,
+      model,
+      statusCode,
+      message: errMsg,
+      upstreamBody,
+    });
     return createErrorResult(statusCode, errMsg, { cooldownHint, upstreamBody });
   }
 

@@ -1,4 +1,4 @@
-import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
+import { createErrorResult, parseUpstreamError, formatProviderError, reportUpstreamError } from "../utils/error.js";
 import { HTTP_STATUS, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { PROVIDER_MEDIA } from "../providers/index.js";
 import { generateSessionId } from "../executors/opencode-zen.js";
@@ -64,10 +64,17 @@ export async function handleSystemoneCore({
   }
 
   if (!providerResponse.ok) {
-    const { statusCode, message } = await parseUpstreamError(providerResponse);
+    const { statusCode, message, upstreamBody } = await parseUpstreamError(providerResponse);
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
-    log?.debug?.("SYSTEMONE", `Provider error: ${errMsg}`);
-    return createErrorResult(statusCode, errMsg);
+    reportUpstreamError(log, {
+      tag: "SYSTEMONE",
+      provider,
+      model,
+      statusCode,
+      message: errMsg,
+      upstreamBody,
+    });
+    return createErrorResult(statusCode, errMsg, { upstreamBody });
   }
 
   let responseBody;

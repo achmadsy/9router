@@ -54,6 +54,17 @@ export async function writeStreamError(writer, statusCode, message) {
 // Raw upstream bodies are diagnostics only — keep them short for Sentry/logs.
 const UPSTREAM_BODY_MAX = 600;
 
+export function formatUpstreamBody(body) {
+  return body ? String(body).slice(0, UPSTREAM_BODY_MAX) : null;
+}
+
+export function reportUpstreamError(log, { tag = "UPSTREAM", provider, model, statusCode, message, upstreamBody }) {
+  const body = formatUpstreamBody(upstreamBody);
+  const details = body ? `\n    Upstream: ${body.replace(/\s+/g, " ").trim()}` : "";
+  const text = `ERROR ${statusCode} · ${provider}/${model}\n    ${message}${details}`;
+  log?.error?.(tag, text, body ? { upstreamBody: body } : undefined);
+}
+
 /**
  * Parse upstream provider error response
  * @param {Response} response - Fetch response from provider
