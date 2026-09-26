@@ -523,11 +523,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       const urlStr = providerUrl ? `\n    URL: ${providerUrl}` : "";
       // Raw upstream body: inline on the console/message for readability, and
       // as structured extra so it lands under Sentry "Additional Data" too.
+      // Key is always present — null when the upstream sent no body.
       log.errorLine(
         reqTag, "✗",
         `ERROR ${statusCode} · ${provider}/${model} · ${Date.now() - requestStartTime}ms${urlStr}\n    ${errMsg}` +
           (upstreamBody ? `\n    Upstream: ${upstreamBody.replace(/\s+/g, " ").trim()}` : ""),
-        upstreamBody ? { upstreamBody } : null
+        { upstreamBody: upstreamBody ?? null }
       );
     }
     reqLogger.logError(new Error(message), finalBody || translatedBody);

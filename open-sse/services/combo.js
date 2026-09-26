@@ -3,7 +3,7 @@
  */
 
 import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
-import { unavailableResponse } from "../utils/error.js";
+import { unavailableResponse, formatUpstreamBody } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 import { stripRecognizedContextSuffix } from "./model.js";
@@ -326,6 +326,14 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
         // Ignore JSON parse errors
       }
 
+      // Raw upstream body for diagnostics — null when the upstream sent no body.
+      let upstreamBody = null;
+      try {
+        upstreamBody = formatUpstreamBody(await result.clone().text());
+      } catch {
+        // Body unreadable; stays null
+      }
+
       // Track earliest retryAfter across all combo models
       if (retryAfter && (!earliestRetryAfter || new Date(retryAfter) < new Date(earliestRetryAfter))) {
         earliestRetryAfter = retryAfter;
@@ -340,7 +348,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText);
 
       if (!shouldFallback) {
-        log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
+        log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status, upstreamBody });
         return result;
       }
 
@@ -356,7 +364,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       // Fallback to next model
       lastError = errorText || String(result.status);
       if (!lastStatus) lastStatus = result.status;
-      log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
+      log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status, upstreamBody });
     } catch (error) {
       // Catch unexpected exceptions to ensure fallback continues
       lastError = error.message || String(error);
@@ -595,7 +603,12 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
     if (!res) { log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`); continue; }
     if (res.__timeout) { log.warn("FUSION", `Panel ${model} timed out`); continue; }
     if (res.__error) { log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
-    if (!res.ok) { log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
+    if (!res.ok) {
+      let upstreamBody = null;
+      try { upstreamBody = formatUpstreamBody(await res.clone().text()); } catch { /* body unreadable */ }
+      log.warn("FUSION", `Panel ${model} failed`, { status: res.status, upstreamBody });
+      continue;
+    }
     try {
       const json = await res.clone().json();
       const text = extractPanelText(json);

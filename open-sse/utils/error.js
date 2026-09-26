@@ -62,7 +62,10 @@ export function reportUpstreamError(log, { tag = "UPSTREAM", provider, model, st
   const body = formatUpstreamBody(upstreamBody);
   const details = body ? `\n    Upstream: ${body.replace(/\s+/g, " ").trim()}` : "";
   const text = `ERROR ${statusCode} · ${provider}/${model}\n    ${message}${details}`;
-  log?.error?.(tag, text, body ? { upstreamBody: body } : undefined);
+  // Always attach the key — null means the upstream sent no body. Absence of
+  // the field is indistinguishable from "reporter never tried", which reads as
+  // doubt when multiple events for one failure are inspected one by one.
+  log?.error?.(tag, text, { upstreamBody: body });
 }
 
 /**
