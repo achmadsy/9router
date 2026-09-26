@@ -28,12 +28,13 @@ export function buildErrorBody(statusCode, message) {
  * @param {string} message - Error message
  * @returns {Response} HTTP Response object
  */
-export function errorResponse(statusCode, message) {
+export function errorResponse(statusCode, message, extraHeaders = null) {
   return new Response(JSON.stringify(buildErrorBody(statusCode, message)), {
     status: statusCode,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
+      "Access-Control-Allow-Origin": "*",
+      ...extraHeaders
     }
   });
 }
@@ -117,21 +118,24 @@ export async function parseUpstreamError(response, executor = null) {
  * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null }}
  */
 export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOpts) {
-  // New signature: createErrorResult(status, message, { resetsAtMs, cooldownHint, upstreamBody })
+  // New signature: createErrorResult(status, message, { resetsAtMs, cooldownHint, upstreamBody, extraHeaders })
   // Legacy signature: createErrorResult(status, message, resetsAtMs) — kept working.
   let resetsAtMs;
   let cooldownHint = null;
   let upstreamBody = null;
+  let extraHeaders = null;
   if (resetsAtMsOrOpts !== null && typeof resetsAtMsOrOpts === "object") {
     resetsAtMs = resetsAtMsOrOpts.resetsAtMs;
     cooldownHint = resetsAtMsOrOpts.cooldownHint ?? null;
     upstreamBody = resetsAtMsOrOpts.upstreamBody ?? null;
+    extraHeaders = resetsAtMsOrOpts.extraHeaders ?? null;
   } else {
     resetsAtMs = resetsAtMsOrOpts;
     if (maybeOpts && typeof maybeOpts === "object") {
       cooldownHint = maybeOpts.cooldownHint ?? null;
       if (maybeOpts.resetsAtMs !== undefined) resetsAtMs = maybeOpts.resetsAtMs;
       if (maybeOpts.upstreamBody !== undefined) upstreamBody = maybeOpts.upstreamBody;
+      extraHeaders = maybeOpts.extraHeaders ?? null;
     }
   }
   return {
@@ -141,7 +145,7 @@ export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOp
     resetsAtMs,
     cooldownHint,
     upstreamBody,
-    response: errorResponse(statusCode, message)
+    response: errorResponse(statusCode, message, extraHeaders),
   };
 }
 
@@ -153,7 +157,7 @@ export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOp
  * @param {string} retryAfterHuman - Human-readable retry info e.g. "reset after 30s"
  * @returns {Response}
  */
-export function unavailableResponse(statusCode, message, retryAfter, retryAfterHuman) {
+export function unavailableResponse(statusCode, message, retryAfter, retryAfterHuman, extraHeaders = null) {
   const retryAfterSec = Math.max(Math.ceil((new Date(retryAfter).getTime() - Date.now()) / 1000), 1);
   const msg = `${message} (${retryAfterHuman})`;
   return new Response(
@@ -161,8 +165,10 @@ export function unavailableResponse(statusCode, message, retryAfter, retryAfterH
     {
       status: statusCode,
       headers: {
+        ...extraHeaders,
         "Content-Type": "application/json",
-        "Retry-After": String(retryAfterSec)
+        // Intentionally mis-cased to prevent duplicate headers
+        "retry-after": String(retryAfterSec)
       }
     }
   );

@@ -6,6 +6,8 @@ import path from "path";
 import os from "os";
 import { parseTOML, stringifyTOML } from "confbox";
 
+export const dynamic = "force-dynamic";
+
 const execAsync = promisify(exec);
 
 const getCodexDir = () => path.join(os.homedir(), ".codex");

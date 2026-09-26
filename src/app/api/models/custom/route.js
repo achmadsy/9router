@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCustomModels, addCustomModel, deleteCustomModel } from "@/models";
-import { CAPACITY_META } from "@/shared/constants/models";
+import { CAPACITY_META, isSttTransport } from "@/shared/constants/models";
 import { refreshCustomModelFormats } from "open-sse/providers/customModelFormats.js";
 import { refreshModelCapabilityOverrides, sanitizeModelTokenCaps } from "open-sse/providers/modelCapabilityOverrides.js";
 
@@ -17,6 +17,16 @@ export function sanitizeCaps(caps) {
   return Object.keys(clean).length ? clean : null;
 }
 
+// Accepted STT transport markers live in the shared whitelist
+// (src/shared/constants/models STT_TRANSPORT_META) — the dashboard transport
+// select and this validator must agree on one set, so neither owns a copy.
+// Unknown or mistyped values are silently dropped, the same policy
+// sanitizeCaps applies to capability keys.
+function sanitizeTransport(transport, type) {
+  if (type !== "stt" || !isSttTransport(transport)) return null;
+  return transport.trim();
+}
+
 // GET /api/models/custom - List all custom models
 export async function GET() {
   try {
@@ -31,7 +41,7 @@ export async function GET() {
 // POST /api/models/custom - Add custom model
 export async function POST(request) {
   try {
-    const { providerAlias, id, type, name, caps, targetFormat } = await request.json();
+    const { providerAlias, id, type, name, caps, targetFormat, transport } = await request.json();
     if (!providerAlias || !id) {
       return NextResponse.json({ error: "providerAlias and id required" }, { status: 400 });
     }
@@ -40,10 +50,12 @@ export async function POST(request) {
     const VALID_TARGET_FORMATS = new Set(["claude", "openai", "openai-responses"]);
     const cleanTargetFormat = VALID_TARGET_FORMATS.has(targetFormat) ? targetFormat : null;
     const cleanCaps = sanitizeCaps(caps);
+    const cleanTransport = sanitizeTransport(transport, type || "llm");
     const added = await addCustomModel({
       providerAlias, id, type: type || "llm", name,
       ...(cleanCaps ? { caps: cleanCaps } : {}),
       ...(targetFormat !== undefined ? { targetFormat: cleanTargetFormat } : {}),
+      ...(cleanTransport ? { transport: cleanTransport } : {}),
     });
     // Per-model targetFormat overrides are read synchronously per request —
     // re-pull the cache so the new/updated row applies without a restart.
