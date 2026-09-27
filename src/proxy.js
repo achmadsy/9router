@@ -1,3 +1,4 @@
+import { NextResponse } from "next/server";
 import { proxy as dashboardProxy, isAuthenticated } from "./dashboardGuard";
 import {
   sessionFromRequest,
@@ -19,9 +20,12 @@ import {
 const VALID_ACTION_ID_RE = /^[0-9a-f]{40,64}$/i;
 let lastBadActionLog = 0;
 
-function stripBogusNextAction(request) {
+// Returns cleaned headers when the request carries a malformed Next-Action ID
+// (meant to be short-circuited via NextResponse.next({ request: { headers } })),
+// or null when the request is clean / the ID is plausibly valid.
+function bogusNextActionHeaders(request) {
   const actionId = request.headers.get("next-action");
-  if (!actionId || VALID_ACTION_ID_RE.test(actionId)) return request;
+  if (!actionId || VALID_ACTION_ID_RE.test(actionId)) return null;
   const now = Date.now();
   if (now - lastBadActionLog > 60000) {
     lastBadActionLog = now;
@@ -29,16 +33,14 @@ function stripBogusNextAction(request) {
   }
   const headers = new Headers(request.headers);
   headers.delete("next-action");
-  return new Request(request.url, {
-    method: request.method,
-    headers,
-    body: request.body,
-    duplex: "half",
-  });
+  return headers;
 }
 
 export default async function proxy(request) {
-  request = stripBogusNextAction(request);
+  const cleanedActionHeaders = bogusNextActionHeaders(request);
+  if (cleanedActionHeaders) {
+    return NextResponse.next({ request: { headers: cleanedActionHeaders } });
+  }
   // Xiaomi account session-login proxy (src/lib/mimoLoginSession.js).
   // Session state (region + accumulated cookie jar) travels in the httpOnly
   // 9r_mimo_login cookie — route handlers and this proxy run in separate
