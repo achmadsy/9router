@@ -108,14 +108,21 @@ describe("dashboard guard public LLM API access", () => {
     const response = await proxy(request("/v1beta/models", { host: "router.example.com" }));
 
     expect(response.status).toBe(401);
-    expect(response.body.error).toBe("API key required for remote API access");
+    expect(response.body.error).toBe("API key required for model listing");
   });
 
   it("rejects remote rewritten beta public LLM API without API key", async () => {
     const response = await proxy(request("/api/v1beta/models", { host: "router.example.com" }));
 
     expect(response.status).toBe(401);
-    expect(response.body.error).toBe("API key required for remote API access");
+    expect(response.body.error).toBe("API key required for model listing");
+  });
+
+  it("rejects keyless model listing even from loopback", async () => {
+    const response = await proxy(localRequest("/v1/models", { host: "localhost:20128" }));
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("API key required for model listing");
   });
 
   it("rejects remote codex rewrite without API key", async () => {

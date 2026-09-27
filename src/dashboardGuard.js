@@ -224,6 +224,15 @@ export async function proxy(request) {
   }
 
   if (isPublicLlmApi(pathname)) {
+    // Model listing is recon-free info: never serve it without credentials,
+    // not even to local/keyless requests — the capability map is exactly what
+    // a prober wants before picking targets. CLI token / dashboard JWT still pass.
+    if (pathname === "/v1/models" || pathname === "/api/v1/models" ||
+        pathname === "/v1beta/models" || pathname === "/api/v1beta/models") {
+      if (await hasValidApiKey(request) || await hasValidCliToken(request) || await hasValidToken(request))
+        return NextResponse.next();
+      return NextResponse.json({ error: "API key required for model listing" }, { status: 401 });
+    }
     if (await canAccessPublicLlmApi(request)) return NextResponse.next();
     return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
   }
