@@ -10,7 +10,35 @@ import {
   originOf,
 } from "./lib/mimoLoginSession";
 
+// The dashboard registers NO server actions, so any `Next-Action` header is
+// bogus — but a malformed one (e.g. "x", seen from scanners/misbehaving
+// clients) makes Next throw E1442 "Server Reference ID did not match" during
+// page render before auth even runs. Strip IDs that cannot possibly be valid
+// (real action IDs are 40-64 hex chars) so the request renders normally.
+// Valid-format IDs pass through: Next's own lookup then answers 404 quietly.
+const VALID_ACTION_ID_RE = /^[0-9a-f]{40,64}$/i;
+let lastBadActionLog = 0;
+
+function stripBogusNextAction(request) {
+  const actionId = request.headers.get("next-action");
+  if (!actionId || VALID_ACTION_ID_RE.test(actionId)) return request;
+  const now = Date.now();
+  if (now - lastBadActionLog > 60000) {
+    lastBadActionLog = now;
+    console.log(`${new Date().toISOString().slice(11, 23)} [proxy] stripped bogus Next-Action header (len ${actionId.length}) on ${request.nextUrl.pathname}`);
+  }
+  const headers = new Headers(request.headers);
+  headers.delete("next-action");
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: request.body,
+    duplex: "half",
+  });
+}
+
 export default async function proxy(request) {
+  request = stripBogusNextAction(request);
   // Xiaomi account session-login proxy (src/lib/mimoLoginSession.js).
   // Session state (region + accumulated cookie jar) travels in the httpOnly
   // 9r_mimo_login cookie — route handlers and this proxy run in separate
