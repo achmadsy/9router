@@ -128,7 +128,7 @@ http.createServer = (...args) => {
     inferenceAccessLog.purgeExpiredSafely();
     const cleanup = setInterval(() => inferenceAccessLog.purgeExpiredSafely(), 24 * 60 * 60 * 1000);
     cleanup.unref?.();
-    server.once("close", () => clearInterval(cleanup));
+    server.once("close", () => { clearInterval(cleanup); inferenceAccessLog.flushPending(); });
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.

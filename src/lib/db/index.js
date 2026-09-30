@@ -1,6 +1,7 @@
 // Public API barrel — all DB functions
 import { getAdapter } from "./driver.js";
 import { stringifyJson, parseJson } from "./helpers/jsonCol.js";
+import { exportFullDb, importFullDb, FULL_BACKUP_FORMAT } from "./fullBackup.js";
 
 // Settings
 export {
@@ -79,6 +80,11 @@ export {
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();
+  return exportFullDb(db);
+}
+
+export async function exportLegacyDb() {
+  const db = await getAdapter();
   const { exportSettings } = await import("./repos/settingsRepo.js");
 
   const out = {
@@ -115,6 +121,14 @@ export async function importDb(payload) {
     throw new Error("Invalid database payload");
   }
   const db = await getAdapter();
+  if (payload.format !== undefined || payload.tables !== undefined) {
+    if (payload.format !== FULL_BACKUP_FORMAT) throw new Error("Unsupported database backup format");
+    importFullDb(db, payload);
+    return await exportDb();
+  }
+  if (!["settings", "providerConnections", "apiKeys", "combos"].some((key) => Object.hasOwn(payload, key))) {
+    throw new Error("Invalid legacy database payload");
+  }
 
   db.transaction(() => {
     // Wipe all tables (keep _meta)

@@ -93,11 +93,12 @@ async function flushToDatabase() {
     // Drain entire buffer (loop in case more pushed during await)
     while (writeBuffer.length > 0) {
       const items = writeBuffer.splice(0, writeBuffer.length);
-      const db = await getAdapter();
-      const config = await getObservabilityConfig();
+      try {
+        const db = await getAdapter();
+        const config = await getObservabilityConfig();
 
-      db.transaction(() => {
-        for (const item of items) {
+        db.transaction(() => {
+          for (const item of items) {
           if (!item.id) item.id = generateDetailId(item.model);
           if (!item.timestamp) item.timestamp = new Date().toISOString();
           if (item.request?.headers) item.request.headers = sanitizeHeaders(item.request.headers);
@@ -131,11 +132,14 @@ async function flushToDatabase() {
             `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
             [cnt.c - config.maxRecords]
           );
-        }
-      });
+          }
+        });
+      } catch (e) {
+        writeBuffer.unshift(...items);
+        console.error("[requestDetailsRepo] Batch write failed:", e);
+        break;
+      }
     }
-  } catch (e) {
-    console.error("[requestDetailsRepo] Batch write failed:", e);
   } finally {
     isFlushing = false;
   }

@@ -59,13 +59,36 @@ async function trySqlJs() {
 async function initAdapter() {
   ensureDirs();
   // Order per runtime:
-  //   Bun:  bun:sqlite → sql.js
-  //   Node: better-sqlite3 → node:sqlite (≥22.5) → sql.js
+  //   Bun:  bun:sqlite → sql.js (only for new databases)
+  //   Node: better-sqlite3 → node:sqlite (≥22.5) → sql.js (only for new databases)
+  // A damaged existing file must not trigger a fallback that rewrites it.
+  const fs = await import("node:fs");
+  const hasDatabase = fs.existsSync(DATA_FILE);
+  if (hasDatabase) {
+    const header = Buffer.alloc(16);
+    const fd = fs.openSync(DATA_FILE, "r");
+    try { fs.readSync(fd, header, 0, header.length, 0); }
+    finally { fs.closeSync(fd); }
+    if (!header.equals(Buffer.from("SQLite format 3\0"))) {
+      throw new Error(`[DB] Invalid SQLite header: ${DATA_FILE}. Restore a verified backup; original file was not changed.`);
+    }
+  }
   let adapter = await tryBunSqlite();
   if (!adapter) adapter = await tryBetterSqlite();
   if (!adapter) adapter = await tryNodeSqlite();
-  if (!adapter) adapter = await trySqlJs();
-  if (!adapter) throw new Error("[DB] No SQLite driver available (bun/better/node/sql.js all failed)");
+  if (!adapter && !hasDatabase) adapter = await trySqlJs();
+  if (!adapter) throw new Error(hasDatabase
+    ? `[DB] Existing SQLite database could not be opened: ${DATA_FILE}. Restore a verified backup; original file was not changed.`
+    : "[DB] No SQLite driver available (bun/better/node/sql.js all failed)");
+  if (hasDatabase) {
+    try {
+      const check = adapter.get("PRAGMA quick_check");
+      if (Object.values(check || {})[0] !== "ok") throw new Error("SQLite quick_check failed");
+    } catch (error) {
+      // Leave the original file untouched; adapter shutdown may checkpoint WAL.
+      throw new Error(`[DB] Database integrity check failed: ${error.message}. Restore a verified backup; original file was not changed.`);
+    }
+  }
 
   if (!state.logged) {
     console.log(`[DB] Driver: ${adapter.driver} | file: ${DATA_FILE}`);
@@ -79,7 +102,9 @@ async function initAdapter() {
 
 export async function getAdapter() {
   if (state.instance) return state.instance;
-  if (!state.initPromise) state.initPromise = initAdapter().then((a) => { state.instance = a; return a; });
+  if (!state.initPromise) state.initPromise = initAdapter()
+    .then((a) => { state.instance = a; return a; })
+    .catch((error) => { state.initPromise = null; throw error; });
   return state.initPromise;
 }
 

@@ -23,8 +23,14 @@ export async function createSqlJsAdapter(filePath) {
 
   function persist() {
     const data = db.export();
-    fs.writeFileSync(filePath, Buffer.from(data));
-    dirty = false;
+    const tmp = `${filePath}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, Buffer.from(data), { mode: 0o600 });
+      fs.renameSync(tmp, filePath);
+      dirty = false;
+    } finally {
+      try { fs.rmSync(tmp, { force: true }); } catch {}
+    }
   }
 
   function scheduleSave() {
