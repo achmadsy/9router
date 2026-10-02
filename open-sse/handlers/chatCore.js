@@ -62,7 +62,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onEmptyUsage, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomToken, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onEmptyUsage, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomToken, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
   const { provider, model } = modelInfo;
   // Clones (codex-clone-…) keep credentials under the clone id but use the
   // base provider for transport, models, capabilities, and special-cases.
@@ -240,9 +240,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     stripContinuityFields(translatedBody);
   }
 
-  // Dedupe duplicate built-in tools when equivalent MCP tools are present (Claude clients only).
-  if (clientTool === "claude" && Array.isArray(translatedBody.tools)) {
-    const { tools: deduped, stripped } = dedupeTools(translatedBody.tools);
+  // Tool normalization: MCP-equivalent built-in dedup (Claude clients) + same-name
+  // dedup for DeepSeek models (upstream rejects duplicate tool names on all endpoints).
+  if (Array.isArray(translatedBody.tools)) {
+    const { tools: deduped, stripped } = dedupeTools(translatedBody.tools, { clientTool, model });
     if (stripped.length > 0) {
       translatedBody.tools = deduped;
       log?.debug?.("TOOLDEDUP", `stripped ${stripped.length}: ${stripped.slice(0, 3).join(", ")}${stripped.length > 3 ? "..." : ""}`);
@@ -419,6 +420,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       signal: streamController.signal,
       log,
       proxyOptions,
+      providerOverrides,
     });
     providerResponse = result.response;
     providerUrl = result.url;
@@ -487,6 +489,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             signal: streamController.signal,
             log,
             proxyOptions,
+            providerOverrides,
           });
           if (retryResult.response.ok) {
             providerResponse = retryResult.response;

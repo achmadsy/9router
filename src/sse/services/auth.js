@@ -36,6 +36,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     ? excludeConnectionIds
     : (excludeConnectionIds ? new Set([excludeConnectionIds]) : new Set());
   const preferredConnectionId = options?.preferredConnectionId || null;
+  const requestedModel = options?.requestedModel || model;
   // Acquire mutex to prevent race conditions
   const currentMutex = selectionMutex;
   let resolveMutex;
@@ -148,6 +149,8 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
+      const enabled = c.providerSpecificData?.enabledModels;
+      if (providerId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
       // Antigravity: skip if live quota exhausted for this model
       if (isAntigravity && model && antigravityQuotaCache) {
         const quota = antigravityQuotaCache.get(c.id)?.[model];
@@ -373,9 +376,18 @@ export async function markAccountUnavailable(connectionIdOrOpts, status, errorTe
     newBackoffLevel = 0;
     source = "provider-reset";
   } else if (!shouldFallback) {
-    // Legacy path unchanged
-    ({ shouldFallback, cooldownMs, newBackoffLevel } = checkFallbackError(status, errorText, backoffLevel));
-    source = "legacy-backoff";
+    if (resetsAtMs && resetsAtMs > Date.now()) {
+      shouldFallback = true;
+      // Antigravity quota API provides exact per-model resetAt. Do not truncate it.
+      cooldownMs = resolveProviderId(provider) === "antigravity"
+        ? resetsAtMs - Date.now()
+        : Math.min(resetsAtMs - Date.now(), MAX_RATE_LIMIT_COOLDOWN_MS);
+      newBackoffLevel = 0;
+      source = "upstream-reset";
+    } else {
+      ({ shouldFallback, cooldownMs, newBackoffLevel } = checkFallbackError(status, errorText, backoffLevel, resolveProviderId(provider)));
+      source = "legacy-backoff";
+    }
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 

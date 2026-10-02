@@ -241,16 +241,57 @@ async function fetchStartPlanUsage(jwt, proxyOptions, force = false) {
 }
 
 /**
- * GLM Coding Plan usage (international + China regions)
+ * Parse the GLM quota API response — shared by pasted API keys and
+ * OAuth-minted coding-plan keys (both hit the same monitor endpoint).
  * Supports both TOKENS_LIMIT and CREDIT_LIMIT and dynamic intervals (e.g. session 5h, weekly 7d).
  * When the connection has a ZCode JWT, also (or only) returns Start Plan balance
  * from the native ZCode billing endpoint — 1:1 with the desktop GUI.
  */
+export function parseGlmQuotaResponse(json) {
+  const data = json?.data && typeof json.data === "object" ? json.data : {};
+  const limits = Array.isArray(data.limits) ? data.limits : [];
+  const quotas = {};
+
+  for (const limit of limits) {
+    // 1. Accept both TOKENS_LIMIT and CREDIT_LIMIT from GLM API
+    if (!limit || (limit.type !== "TOKENS_LIMIT" && limit.type !== "CREDIT_LIMIT")) continue;
+    const usedPercent = Number(limit.percentage) || 0;
+    const resetMs = Number(limit.nextResetTime) || 0;
+    const remaining = Math.max(0, 100 - usedPercent);
+
+    // 2. Map key dynamically based on type and period (unit) to avoid overwriting
+    let key = "session";
+    if (limit.unit === 3) {
+      key = `Session (${limit.number}h)`;
+    } else if (limit.unit === 6) {
+      key = "Weekly (7d)";
+    } else if (limit.type === "TOKENS_LIMIT") {
+      key = "Tokens";
+    } else {
+      key = `Limit (${limit.number})`;
+    }
+
+    quotas[key] = {
+      used: usedPercent,
+      total: 100,
+      remaining,
+      remainingPercentage: remaining,
+      resetAt: resetMs > 0 ? new Date(resetMs).toISOString() : null,
+      unlimited: false,
+    };
+  }
+
+  const levelRaw = typeof data.level === "string" ? data.level : "";
+  const plan = levelRaw
+    ? levelRaw.charAt(0).toUpperCase() + levelRaw.slice(1).toLowerCase()
+    : "Unknown";
+
+  return { plan, quotas };
+}
+
 export async function getGlmUsage(apiKey, provider, proxyOptions = null, providerSpecificData = null, { force = false } = {}) {
   const jwt = getStartPlanJwt(providerSpecificData);
   const startPlan = jwt ? await fetchStartPlanUsage(jwt, proxyOptions, force) : null;
-
-  // Start Plan-only connection: no Coding Plan API key path.
   if (!apiKey) {
     if (startPlan?.quotas) return startPlan;
     if (startPlan?.message) return startPlan;
@@ -283,50 +324,13 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null, provide
     }
 
     const json = await response.json();
-    const data = json?.data && typeof json.data === "object" ? json.data : {};
-    const limits = Array.isArray(data.limits) ? data.limits : [];
+    const parsed = parseGlmQuotaResponse(json);
     const quotas = startPlan?.quotas
-      ? { ...startPlan.quotas }
-      : {};
-
-    for (const limit of limits) {
-      // 1. Accept both TOKENS_LIMIT and CREDIT_LIMIT from GLM API
-      if (!limit || (limit.type !== "TOKENS_LIMIT" && limit.type !== "CREDIT_LIMIT")) continue;
-      const usedPercent = Number(limit.percentage) || 0;
-      const resetMs = Number(limit.nextResetTime) || 0;
-      const remaining = Math.max(0, 100 - usedPercent);
-
-      // 2. Map key dynamically based on type and period (unit) to avoid overwriting
-      let key = "session";
-      if (limit.unit === 3) {
-        key = `Session (${limit.number}h)`;
-      } else if (limit.unit === 6) {
-        key = "Weekly (7d)";
-      } else if (limit.type === "TOKENS_LIMIT") {
-        key = "Tokens";
-      } else {
-        key = `Limit (${limit.number})`;
-      }
-
-      quotas[key] = {
-        used: usedPercent,
-        total: 100,
-        remaining,
-        remainingPercentage: remaining,
-        resetAt: resetMs > 0 ? new Date(resetMs).toISOString() : null,
-        unlimited: false,
-      };
-    }
-
-    const levelRaw = typeof data.level === "string" ? data.level : "";
-    const plan =
-      startPlan?.plan ||
-      (levelRaw
-        ? levelRaw.charAt(0).toUpperCase() + levelRaw.slice(1).toLowerCase()
-        : "Unknown");
+      ? { ...startPlan.quotas, ...parsed.quotas }
+      : parsed.quotas;
 
     // Prefer Start Plan label when both sources present.
-    const planLabel = startPlan?.plan ? START_PLAN_LEVEL : plan;
+    const planLabel = startPlan?.plan ? START_PLAN_LEVEL : parsed.plan;
 
     if (Object.keys(quotas).length === 0) {
       return { message: startPlan?.message || "GLM quota unavailable." };

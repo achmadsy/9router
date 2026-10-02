@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -143,9 +144,10 @@ export async function POST(request) {
     }
 
     existing.providers["9router"] = {
+      ...existingProvider,
       baseUrl: normalizedBaseUrl,
-      apiKey: apiKey || "sk_9router",
-      api: "openai-completions",
+      apiKey: apiKey || existingProvider.apiKey || await resolveCliApiKey(null),
+      api: existingProvider.api || "openai-completions",
       models: modelList,
     };
 
