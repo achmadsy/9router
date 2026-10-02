@@ -137,6 +137,13 @@ async function flushToDatabase() {
       } catch (e) {
         writeBuffer.unshift(...items);
         console.error("[requestDetailsRepo] Batch write failed:", e);
+        if (!flushTimer) {
+          flushTimer = setTimeout(() => {
+            flushTimer = null;
+            flushToDatabase().catch((error) => console.error("[requestDetailsRepo] retry failed:", error));
+          }, DEFAULT_FLUSH_INTERVAL_MS);
+          flushTimer.unref?.();
+        }
         break;
       }
     }

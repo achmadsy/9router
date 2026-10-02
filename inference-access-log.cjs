@@ -5,14 +5,17 @@ const path = require("node:path");
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const HMAC_CONTEXT = "9router-api-key:v1:";
-const MAX_PENDING = 1000;
+const MAX_PENDING = 10000;
 const FLUSH_BATCH = 100;
+const MAX_BATCHES_PER_FLUSH = 5;
 const FLUSH_INTERVAL_MS = 250;
 let connection;
 let lastCleanup = 0;
 let pending = [];
 let flushTimer = null;
+let flushSoon = null;
 let flushing = false;
+let retryAt = 0;
 let lastWriteError = 0;
 
 function isInferencePath(pathname) {
@@ -55,7 +58,7 @@ function getConnection() {
       db = new DatabaseSync(file);
     }
   }
-  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA busy_timeout = 100");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("CREATE TABLE IF NOT EXISTS inferenceAccess (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, clientIp TEXT, method TEXT NOT NULL, endpoint TEXT NOT NULL, status INTEGER NOT NULL, apiKeyId TEXT)");
@@ -87,19 +90,31 @@ function resolveKeyId(db, headers, requestUrl) {
 }
 
 function purgeExpiredSafely() {
-  try { flushPending(); purgeExpired(); }
+  try { flushPending({ drain: true }); purgeExpired(); }
   catch (error) { console.error("[inference-access] Cleanup failed:", error?.message || error); }
 }
 
-function flushPending() {
+function scheduleFlush(delay = FLUSH_INTERVAL_MS) {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => { flushTimer = null; flushPending(); }, delay);
+  flushTimer.unref?.();
+}
+
+function flushPending({ drain = false } = {}) {
   if (flushing || pending.length === 0) return;
+  if (!drain && Date.now() < retryAt) {
+    scheduleFlush(retryAt - Date.now());
+    return;
+  }
   flushing = true;
+  let failed = false;
   try {
     const db = getConnection();
     const now = Date.now();
     if (now - lastCleanup >= CLEANUP_INTERVAL_MS) purgeExpired(db, now);
     const stmt = db.prepare("INSERT INTO inferenceAccess(timestamp, clientIp, method, endpoint, status, apiKeyId) VALUES(?, ?, ?, ?, ?, ?)");
-    while (pending.length) {
+    let batches = 0;
+    while (pending.length && (drain || batches < MAX_BATCHES_PER_FLUSH)) {
       const batch = pending.slice(0, FLUSH_BATCH);
       db.exec("SAVEPOINT inference_access_flush");
       try {
@@ -107,18 +122,23 @@ function flushPending() {
           resolveKeyId(db, item.headers, item.url));
         db.exec("RELEASE inference_access_flush");
         pending.splice(0, batch.length);
+        batches++;
       } catch (error) {
         try { db.exec("ROLLBACK TO inference_access_flush"); db.exec("RELEASE inference_access_flush"); } catch {}
         throw error;
       }
     }
+    retryAt = 0;
   } catch (error) {
+    failed = true;
+    retryAt = Date.now() + FLUSH_INTERVAL_MS;
     if (Date.now() - lastWriteError > 30000) {
       console.error("[inference-access] Batch write failed:", error?.message || error);
       lastWriteError = Date.now();
     }
   } finally {
     flushing = false;
+    if (pending.length) scheduleFlush(failed ? Math.max(0, retryAt - Date.now()) : 0);
   }
 }
 
@@ -127,29 +147,26 @@ function recordRequest({ ip, method, url, status, headers = {}, timestamp = new 
     const pathname = new URL(url, "http://localhost").pathname;
     if (!isInferencePath(pathname)) return;
     if (pending.length >= MAX_PENDING) {
-      flushPending();
-      if (pending.length >= MAX_PENDING) {
-        if (Date.now() - lastWriteError > 30000) {
-          console.error("[inference-access] Queue full; dropping access records");
-          lastWriteError = Date.now();
-        }
-        return;
+      if (Date.now() - lastWriteError > 30000) {
+        console.error("[inference-access] Queue full; dropping access records");
+        lastWriteError = Date.now();
       }
+      return;
     }
     pending.push({ timestamp, ip: normalizeIp(ip), method: method || "GET", pathname,
       status: status || 0, headers, url });
-    if (pending.length >= FLUSH_BATCH) flushPending();
-    if (pending.length && !flushTimer) {
-      flushTimer = setTimeout(() => { flushTimer = null; flushPending(); }, FLUSH_INTERVAL_MS);
-      flushTimer.unref?.();
+    if (pending.length >= FLUSH_BATCH && !flushSoon && Date.now() >= retryAt) {
+      flushSoon = setImmediate(() => { flushSoon = null; flushPending(); });
+      flushSoon.unref?.();
     }
+    if (pending.length) scheduleFlush();
   } catch (error) {
     console.error("[inference-access] Could not record request:", error?.message || error);
   }
 }
 
 function queryAccess({ apiKeyId = "", ip = "", startDate = "", endDate = "", status = null, page = 1, pageSize = 20 } = {}) {
-  flushPending();
+  flushPending({ drain: true });
   const db = getConnection();
   const now = Date.now();
   if (now - lastCleanup >= CLEANUP_INTERVAL_MS) purgeExpired(db, now);
@@ -169,5 +186,7 @@ function queryAccess({ apiKeyId = "", ip = "", startDate = "", endDate = "", sta
     .all(...params);
   return { rows, ips, pagination: { page, pageSize, totalItems, totalPages: Math.ceil(totalItems / pageSize) } };
 }
+
+process.once("exit", flushPending);
 
 module.exports = { isInferencePath, normalizeIp, recordRequest, queryAccess, purgeExpired, purgeExpiredSafely, flushPending };
