@@ -18,6 +18,10 @@ const BLOCKED_HEADERS = new Set([
   "connection",
   "transfer-encoding",
   "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "x-goog-api-key",
+  "api-key",
   "cookie",
 ]);
 

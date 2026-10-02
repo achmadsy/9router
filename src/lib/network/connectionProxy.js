@@ -111,11 +111,8 @@ export async function resolveConnectionProxyConfig(
   options = {}
 ) {
   const excludeRelay = options.excludeRelay === true;
+  const proxyPoolIdRaw = normalizeString(providerSpecificData?.proxyPoolId);
   try {
-    const proxyPoolIdRaw = normalizeString(
-      providerSpecificData?.proxyPoolId
-    );
-
     // "__none__" means explicitly disabled
     const proxyPoolId =
       proxyPoolIdRaw === "__none__" ? "" : proxyPoolIdRaw;
@@ -237,14 +234,16 @@ export async function resolveConnectionProxyConfig(
     return {
       source: "error",
 
-      proxyPoolId: null,
+      proxyPoolId: proxyPoolIdRaw === "__none__" ? null : proxyPoolIdRaw || null,
       proxyPool: null,
 
       connectionProxyEnabled: false,
       connectionProxyUrl: "",
       connectionNoProxy: "",
 
-      strictProxy: false,
+      // The lookup failed, so the pool's strict flag is unknown. Never downgrade
+      // an explicitly selected pool to a direct connection on this error path.
+      strictProxy: !!proxyPoolIdRaw && proxyPoolIdRaw !== "__none__",
     };
   }
 }

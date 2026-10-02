@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
+import { parseRegionFromStateCookie } from "./mimoRegions.js";
 
 /**
  * Xiaomi MiMo account-session helpers (used for weekly quota).
@@ -110,6 +111,16 @@ export async function readDesktopPassToken() {
     const jar = await readDesktopAccountCookies();
     if (!jar?.passToken) return null;
     return { passToken: jar.passToken, userId: jar.userId || null, cUserId: jar.cUserId || null };
+  } catch {
+    return null;
+  }
+}
+
+/** Account-service region selected in MiMo Desktop's persisted state cookie. */
+export async function readDesktopAccountRegion() {
+  try {
+    const jar = await readDesktopAccountCookies();
+    return parseRegionFromStateCookie(jar?.state);
   } catch {
     return null;
   }

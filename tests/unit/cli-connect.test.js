@@ -8,7 +8,7 @@ import path from "node:path";
 const require = createRequire(import.meta.url);
 const connect = require("../../cli/src/cli/commands/connect.js");
 const tools = require("../../cli/src/cli/commands/connectTools.js");
-const { parseArgs, normalizeServerUrl, extractAuthCookie, maskKey } = connect.__test__;
+const { parseArgs, normalizeServerUrl, extractAuthCookie, maskKey, getOrCreateApiKey } = connect.__test__;
 const { stripTrailingCommas } = tools.__test__;
 
 const CTX = {
@@ -120,6 +120,16 @@ describe("connect tool writers", () => {
     expect(after).not.toMatch(/9router|model_providers|\[agents\]/);
   });
 
+  it("codex preserves user subagent settings through connect and reset", async () => {
+    const f = path.join(home, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, '[agents.subagent]\nmodel = "own-model"\n');
+    await tool("codex").apply(CTX);
+    expect(fs.readFileSync(f, "utf8")).toContain('[agents.subagent]');
+    await tool("codex").reset();
+    expect(fs.readFileSync(f, "utf8")).toContain('model = "own-model"');
+  });
+
   it("droid keeps user models and puts 9router first", async () => {
     const f = path.join(home, ".factory", "settings.json");
     fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -128,6 +138,28 @@ describe("connect tool writers", () => {
     expect(readJson(f).customModels.map((m) => m.id)).toEqual(["custom:9Router-0", "mine"]);
     await tool("droid").reset();
     expect(readJson(f).customModels.map((m) => m.id)).toEqual(["mine"]);
+  });
+
+  it("cline reset restores existing OpenAI provider and key", async () => {
+    const stateFile = path.join(home, ".cline", "data", "globalState.json");
+    const secretsFile = path.join(home, ".cline", "data", "secrets.json");
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({ actModeApiProvider: "openai", planModeApiProvider: "openai", openAiBaseUrl: "https://original.example", openAiModelId: "original-model" }));
+    fs.writeFileSync(secretsFile, JSON.stringify({ openAiApiKey: "sk-original" }));
+
+    await tool("cline").apply(CTX);
+    await tool("cline").reset();
+
+    expect(readJson(stateFile)).toMatchObject({ actModeApiProvider: "openai", planModeApiProvider: "openai", openAiBaseUrl: "https://original.example", openAiModelId: "original-model" });
+    expect(readJson(secretsFile).openAiApiKey).toBe("sk-original");
+  });
+
+  it("cline reset leaves unrelated settings untouched without a connect backup", async () => {
+    const stateFile = path.join(home, ".cline", "data", "globalState.json");
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({ actModeApiProvider: "openai", openAiBaseUrl: "https://own.example" }));
+    expect(await tool("cline").reset()).toEqual([]);
+    expect(readJson(stateFile).openAiBaseUrl).toBe("https://own.example");
   });
 
   it("cline uses base URL without /v1 and reset reports both files", async () => {
@@ -154,6 +186,24 @@ describe("connect run()", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     await expect(connect.run(["http://gw.test", "--tools", "bogus", "--password", "x"])).rejects.toThrow(/Unknown tool/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("recovers a matching API key through the authenticated secret endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [{ id: "key-id", name: "machine", isActive: true }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ secret: "sk-recovered" }), { status: 200 }));
+    const result = await getOrCreateApiKey("https://gw.test", "auth_token=test", "machine");
+    expect(result).toEqual({ key: "sk-recovered", created: false });
+    expect(fetchSpy.mock.calls[1][0]).toBe("https://gw.test/api/keys/key-id/secret");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops before config writes when an existing key cannot be recovered", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [{ id: "legacy", name: "machine", isActive: true }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "unrecoverable" }), { status: 404 }));
+    await expect(getOrCreateApiKey("https://gw.test", "auth_token=test", "machine")).rejects.toThrow(/not recoverable/);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it("reset keeps going when one tool fails and returns 1", async () => {

@@ -40,6 +40,17 @@ describe("strict pool keeps strictProxy when the pool is unusable (#4333)", () =
     expect(cfg.strictProxy).toBe(true);
   });
 
+  it("fails closed when the selected pool lookup throws", async () => {
+    getProxyPoolById.mockRejectedValueOnce(new Error("database unavailable"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const cfg = await resolveConnectionProxyConfig({ proxyPoolId: "p1" });
+      expect(cfg).toMatchObject({ proxyPoolId: "p1", strictProxy: true, connectionProxyEnabled: false });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("still reports strictProxy:false for a non-strict pool", async () => {
     getProxyPoolById.mockResolvedValue({
       id: "p3", isActive: false, proxyUrl: "http://127.0.0.1:7890", strictProxy: false,
@@ -58,6 +69,12 @@ describe("strictProxy refuses a direct connection (#4333)", () => {
   it("throws when a pool is assigned but no proxy url resolved", async () => {
     await expect(
       proxyAwareFetch("https://api.example.com/v1/chat", {}, { proxyPoolId: "p1", strictProxy: true }),
+    ).rejects.toThrow(/strictProxy/);
+  });
+
+  it("rejects missing proxy before DNS bypass for a provider host", async () => {
+    await expect(
+      proxyAwareFetch("https://q.us-east-1.amazonaws.com/generateAssistantResponse", {}, { proxyPoolId: "p1", strictProxy: true }),
     ).rejects.toThrow(/strictProxy/);
   });
 

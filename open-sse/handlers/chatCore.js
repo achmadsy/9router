@@ -371,6 +371,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   });
 
   const proxyOptions = {
+    proxyPoolId: credentials?.providerSpecificData?.connectionProxyPoolId || null,
     connectionProxyEnabled: credentials?.providerSpecificData?.connectionProxyEnabled === true,
     connectionProxyUrl: credentials?.providerSpecificData?.connectionProxyUrl || "",
     connectionNoProxy: credentials?.providerSpecificData?.connectionNoProxy || "",

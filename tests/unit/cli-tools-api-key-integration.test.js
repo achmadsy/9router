@@ -33,6 +33,17 @@ describe("CLI API key fallback", () => {
     expect(mocks.getRecoverableApiKeySecret.mock.calls.map(([id]) => id)).toEqual(["legacy", "current"]);
   });
 
+  it("skips restricted keys during implicit selection", async () => {
+    mocks.getApiKeys.mockResolvedValue([
+      { id: "restricted", isActive: true, accessMode: "restricted" },
+      { id: "unrestricted", isActive: true, accessMode: "all" },
+    ]);
+    mocks.getRecoverableApiKeySecret.mockResolvedValue("sk-unrestricted");
+
+    expect(await resolveCliApiKey("")).toBe("sk-unrestricted");
+    expect(mocks.getRecoverableApiKeySecret).toHaveBeenCalledExactlyOnceWith("unrestricted");
+  });
+
   it("returns empty when no active key is recoverable", async () => {
     mocks.getApiKeys.mockResolvedValue([{ id: "legacy", isActive: true }]);
     expect(await resolveCliApiKey("sk_9router")).toBe("");

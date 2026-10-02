@@ -332,7 +332,7 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null, provide
     // Prefer Start Plan label when both sources present.
     const planLabel = startPlan?.plan ? START_PLAN_LEVEL : parsed.plan;
 
-    if (Object.keys(quotas).length === 0) {
+    if (Object.keys(quotas).length === 0 && (!planLabel || planLabel === "Unknown")) {
       return { message: startPlan?.message || "GLM quota unavailable." };
     }
 
@@ -341,4 +341,8 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null, provide
     if (startPlan?.quotas) return startPlan;
     return { message: `GLM error: ${error.message}` };
   }
+}
+
+export function _clearStartPlanCacheForTests() {
+  startPlanCache.clear();
 }

@@ -16,7 +16,7 @@ vi.mock("../../src/lib/zcode/headers.js", () => ({
 
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import { getUsageForProvider } from "../../open-sse/services/usage.js";
-import { getGlmUsage } from "../../open-sse/services/usage/glm.js";
+import { getGlmUsage, _clearStartPlanCacheForTests } from "../../open-sse/services/usage/glm.js";
 import {
   USAGE_SUPPORTED_PROVIDERS,
   USAGE_APIKEY_PROVIDERS,
@@ -243,6 +243,7 @@ describe("getGlmUsage and getUsageForProvider(glm)", () => {
 describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _clearStartPlanCacheForTests();
   });
 
   it("JWT-only connection returns Start Plan buckets without Coding Plan fetch", async () => {

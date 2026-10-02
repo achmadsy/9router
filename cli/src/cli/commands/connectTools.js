@@ -113,7 +113,6 @@ const codex = {
       http_headers: { Authorization: `Bearer ${apiKey}` },
     };
     cfg.agents = cfg.agents || {};
-    delete cfg.agents.subagent;
     cfg.agents.default_subagent_model = model;
     writeFile(file, stringifyTOML(cfg));
     return [file];
@@ -125,7 +124,7 @@ const codex = {
     try { cfg = parseTOML(fs.readFileSync(file, "utf8")) || {}; } catch (err) { if (err.code === "ENOENT") return []; throw err; }
     if (cfg.model_provider === "9router") { delete cfg.model; delete cfg.model_provider; }
     if (cfg.model_providers) delete cfg.model_providers["9router"];
-    if (cfg.agents) { delete cfg.agents.default_subagent_model; delete cfg.agents.subagent; }
+    if (cfg.agents) delete cfg.agents.default_subagent_model;
     for (const k of ["model_providers", "agents"]) {
       if (cfg[k] && Object.keys(cfg[k]).length === 0) delete cfg[k];
     }
@@ -288,6 +287,7 @@ const cline = {
     state.actModeApiProvider = "openai";
     state.planModeApiProvider = "openai";
     state.openAiBaseUrl = baseUrl; // Cline expects base WITHOUT /v1
+    state._9routerConnectBaseUrl = baseUrl;
     state.openAiModelId = model;
     state.planModeOpenAiModelId = model;
     writeJson(clineState(), state);
@@ -299,20 +299,25 @@ const cline = {
   async reset() {
     const state = readJson(clineState());
     if (!state) return [];
-    if (state.actModeApiProvider === "openai") {
-      delete state.openAiBaseUrl;
-      delete state.openAiModelId;
-      delete state.planModeOpenAiModelId;
-      state.actModeApiProvider = "cline";
-      state.planModeApiProvider = "cline";
+    const originalState = readJson(`${clineState()}.bak-9router`);
+    if (!state._9routerConnectBaseUrl || state.openAiBaseUrl !== state._9routerConnectBaseUrl) return [];
+    const stateKeys = ["actModeApiProvider", "planModeApiProvider", "openAiBaseUrl", "openAiModelId", "planModeOpenAiModelId"];
+    delete state._9routerConnectBaseUrl;
+    for (const key of stateKeys) {
+      if (Object.hasOwn(originalState || {}, key)) state[key] = originalState[key];
+      else delete state[key];
     }
     rewriteFile(clineState(), JSON.stringify(state, null, 2));
     const touched = [clineState()];
     const secrets = readJson(clineSecrets());
     if (secrets) {
-      delete secrets.openAiApiKey;
-      rewriteFile(clineSecrets(), JSON.stringify(secrets, null, 2));
-      touched.push(clineSecrets());
+      const originalSecrets = readJson(`${clineSecrets()}.bak-9router`);
+      if (originalSecrets || !originalState) {
+        if (Object.hasOwn(originalSecrets || {}, "openAiApiKey")) secrets.openAiApiKey = originalSecrets.openAiApiKey;
+        else delete secrets.openAiApiKey;
+        rewriteFile(clineSecrets(), JSON.stringify(secrets, null, 2));
+        touched.push(clineSecrets());
+      }
     }
     return touched;
   },

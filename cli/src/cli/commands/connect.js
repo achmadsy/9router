@@ -132,7 +132,13 @@ async function getOrCreateApiKey(server, cookie, keyName) {
   if (list.status !== 200) throw new Error(`Failed to list API keys (${list.status}): ${list.data?.error || ""}`);
   const keys = (list.data?.keys || []).filter((k) => k.isActive !== false);
   const existing = keys.find((k) => k.name === keyName);
-  if (existing) return { key: existing.key, created: false };
+  if (existing) {
+    const recovered = await request(`${server}/api/keys/${encodeURIComponent(existing.id)}/secret`, { cookie });
+    if (recovered.status === 200 && recovered.data?.secret) {
+      return { key: recovered.data.secret, created: false };
+    }
+    throw new Error(`API key "${keyName}" is not recoverable; reroll it in the dashboard or pass --api-key`);
+  }
 
   const created = await request(`${server}/api/keys`, { method: "POST", cookie, body: { name: keyName } });
   if (created.status !== 201 || !created.data?.key) {
@@ -266,4 +272,4 @@ async function runConnect(argv) {
   return failed ? 1 : 0;
 }
 
-module.exports = { run, __test__: { parseArgs, normalizeServerUrl, extractAuthCookie, maskKey, Cancelled } };
+module.exports = { run, __test__: { parseArgs, normalizeServerUrl, extractAuthCookie, maskKey, getOrCreateApiKey, Cancelled } };

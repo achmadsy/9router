@@ -256,12 +256,12 @@ async function fetchWithTlsFallback(url, options, proxyUrl) {
     const dispatcher = proxyUrl ? await getDispatcher(proxyUrl) : undefined;
     return await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
   } catch (err) {
-    const isStrictSsl = process.env.STRICT_SSL === "true" || process.env.STRICT_SSL === "1";
-    if (!isStrictSsl && isTlsCertError(err)) {
+    const allowInsecureTls = process.env.STRICT_SSL === "false" || process.env.STRICT_SSL === "0";
+    if (allowInsecureTls && isTlsCertError(err)) {
       if (options.body && typeof options.body.getReader === "function" && options.body.locked) {
         throw err;
       }
-      // ponytail: in-memory insecure agent fallback for self-signed MITM corporate/antivirus certs
+      // Explicit opt-in only: a retry with certificate verification disabled can expose credentials.
       console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}), retrying with insecure TLS: ${url}`);
       const insecureDispatcher = await getDispatcher(proxyUrl, true);
       return await originalFetch(url, { ...options, dispatcher: insecureDispatcher });
@@ -351,6 +351,17 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   const envProxyUrl = connectionProxyUrl ? null : normalizeProxyUrl(getEnvProxyUrl(targetUrl));
   const proxyUrl = connectionProxyUrl || envProxyUrl;
 
+  // Strict mode must fail before the MITM DNS bypass can open a direct socket.
+  // Some callers set strictProxy only to prevent fallback after a proxy attempt;
+  // no configured proxy means their ordinary direct request remains allowed.
+  const proxyIntended = proxyOptions?.proxyPoolId
+    || proxyOptions?.enabled === true
+    || proxyOptions?.connectionProxyEnabled === true
+    || !!normalizeString(proxyOptions?.url ?? proxyOptions?.connectionProxyUrl);
+  if (proxyOptions?.strictProxy === true && proxyIntended && !proxyUrl && !vercelRelayUrl) {
+    throw new Error("[ProxyFetch] Proxy required but none resolved (strictProxy=true)");
+  }
+
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof
   if (shouldBypassMitmDns(targetUrl)) {
     if (proxyUrl) {
@@ -385,24 +396,6 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       console.warn(`[ProxyFetch] Proxy failed, falling back to direct: ${proxyError.message}`);
       return fetchWithTlsFallback(url, options, null);
     }
-  }
-
-  // Strict mode means "never leave over the direct IP". Reaching here with a
-  // proxy configured but unresolved is exactly that case — an inactive or
-  // empty pool, or every proxy removed — so refuse instead of silently
-  // exposing the real address (#4333). The catch blocks above only cover a
-  // proxy that was actually tried.
-  //
-  // Gate on a proxy being *intended*: callers like the Qoder executor set
-  // strictProxy to mean "do not replay this request directly if the proxy
-  // fails" (a replayed COSY signature returns 403), not "a proxy is required".
-  // With nothing configured they must keep working.
-  const proxyIntended = proxyOptions?.proxyPoolId
-    || proxyOptions?.enabled === true
-    || proxyOptions?.connectionProxyEnabled === true
-    || !!normalizeString(proxyOptions?.url ?? proxyOptions?.connectionProxyUrl);
-  if (proxyOptions?.strictProxy === true && proxyIntended) {
-    throw new Error("[ProxyFetch] Proxy required but none resolved (strictProxy=true)");
   }
 
   // got-scraping disabled — use native fetch directly
