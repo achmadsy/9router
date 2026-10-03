@@ -9,10 +9,15 @@ import {
 import { isProviderCloneId } from "open-sse/providers/clones.js";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
-import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
+import { normalizeProviderId, normalizeProviderSpecificData, sanitizeConnectionForResponse } from "@/lib/providerNormalization";
 import { isRelayPoolType, supportsNormalProxyOnly } from "@/lib/network/connectionProxy";
 
 export const dynamic = "force-dynamic";
+
+const PROVIDERS_RESPONSE_HEADERS = {
+  "Cache-Control": "private, no-cache, no-transform",
+};
+
 
 function normalizeProxyConfig(body = {}) {
   const enabled = body?.connectionProxyEnabled === true;
@@ -75,17 +80,17 @@ export async function GET() {
       const name = isCompatible
         ? (c.name || nodeNameMap[c.provider] || c.providerSpecificData?.nodeName || c.provider)
         : c.name;
-      return {
+      return sanitizeConnectionForResponse({
         ...c,
         name,
-        apiKey: undefined,
-        accessToken: undefined,
-        refreshToken: undefined,
-        idToken: undefined,
-      };
+      });
     });
 
-    return NextResponse.json({ connections: safeConnections });
+    return NextResponse.json(
+      { connections: safeConnections },
+      { headers: PROVIDERS_RESPONSE_HEADERS }
+    );
+
   } catch (error) {
     console.log("Error fetching providers:", error);
     return NextResponse.json({ error: "Failed to fetch providers" }, { status: 500 });
@@ -218,10 +223,10 @@ export async function POST(request) {
     });
 
     // Hide sensitive fields
-    const result = { ...newConnection };
-    delete result.apiKey;
+    const result = sanitizeConnectionForResponse(newConnection);
 
     return NextResponse.json({ connection: result }, { status: 201 });
+
   } catch (error) {
     if (error?.code === "PROVIDER_NAME_CONFLICT") {
       return NextResponse.json(

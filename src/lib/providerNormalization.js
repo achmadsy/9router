@@ -43,3 +43,48 @@ export function normalizeProviderSpecificData(provider, body = {}, providerSpeci
 
   return Object.keys(next).length > 0 ? next : null;
 }
+
+const SENSITIVE_SPECIFIC_KEYS = new Set([
+  "clientSecret",
+  "client_secret",
+  "idToken",
+  "id_token",
+  "zaiAccessToken",
+  "zcodeJwtToken",
+  "sessionToken",
+  "session_token",
+  "cookie",
+  "cookies",
+  "authorization",
+  "secret",
+]);
+
+/**
+ * Strips sensitive top-level authentication secrets and nested
+ * credentials in `providerSpecificData` for public/dashboard responses.
+ *
+ * @param {object} connection
+ * @returns {object}
+ */
+export function sanitizeConnectionForResponse(connection) {
+  if (!connection || typeof connection !== "object") return connection;
+
+  const result = { ...connection };
+  delete result.apiKey;
+  delete result.accessToken;
+  delete result.refreshToken;
+  delete result.idToken;
+
+  if (result.providerSpecificData && typeof result.providerSpecificData === "object") {
+    const sanitizedSpecific = { ...result.providerSpecificData };
+    for (const key of Object.keys(sanitizedSpecific)) {
+      if (SENSITIVE_SPECIFIC_KEYS.has(key) || /(secret|token|password)$/i.test(key)) {
+        delete sanitizedSpecific[key];
+      }
+    }
+    result.providerSpecificData = sanitizedSpecific;
+  }
+
+  return result;
+}
+

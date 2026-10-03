@@ -6,6 +6,8 @@ import {
   deleteProviderConnection,
 } from "@/models";
 import { isRelayPoolType, supportsNormalProxyOnly } from "@/lib/network/connectionProxy";
+import { sanitizeConnectionForResponse } from "@/lib/providerNormalization";
+
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -79,13 +81,10 @@ export async function GET(request, { params }) {
     }
 
     // Hide sensitive fields
-    const result = { ...connection };
-    delete result.apiKey;
-    delete result.accessToken;
-    delete result.refreshToken;
-    delete result.idToken;
+    const result = sanitizeConnectionForResponse(connection);
 
     return NextResponse.json({ connection: result });
+
   } catch (error) {
     console.log("Error fetching connection:", error);
     return NextResponse.json({ error: "Failed to fetch connection" }, { status: 500 });
@@ -167,13 +166,10 @@ export async function PUT(request, { params }) {
     const updated = await updateProviderConnection(id, updateData);
 
     // Hide sensitive fields
-    const result = { ...updated };
-    delete result.apiKey;
-    delete result.accessToken;
-    delete result.refreshToken;
-    delete result.idToken;
+    const result = sanitizeConnectionForResponse(updated);
 
     return NextResponse.json({ connection: result });
+
   } catch (error) {
     console.log("Error updating connection:", error);
     return NextResponse.json({ error: "Failed to update connection" }, { status: 500 });
