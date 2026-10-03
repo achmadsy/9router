@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button, Input } from "@/shared/components";
 
 /**
  * Cursor Auth Modal
  * Auto-detect and import token from Cursor IDE's local SQLite database
  */
-export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
+export default function CursorAuthModal({ isOpen, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [accessToken, setAccessToken] = useState("");
   const [machineId, setMachineId] = useState("");
   const [error, setError] = useState(null);
@@ -17,14 +19,14 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
   const [autoDetected, setAutoDetected] = useState(false);
   const [windowsManual, setWindowsManual] = useState(false);
 
-  const runAutoDetect = async () => {
+  const runAutoDetect = useCallback(async () => {
     setAutoDetecting(true);
     setError(null);
     setAutoDetected(false);
     setWindowsManual(false);
 
     try {
-      const res = await fetch("/api/oauth/cursor/auto-import");
+      const res = await fetch(withAs("/api/oauth/cursor/auto-import"));
       const data = await res.json();
 
       if (data.found) {
@@ -41,13 +43,13 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
     } finally {
       setAutoDetecting(false);
     }
-  };
+  }, [withAs]);
 
   // Auto-detect tokens when modal opens
   useEffect(() => {
     if (!isOpen) return;
     runAutoDetect();
-  }, [isOpen]);
+  }, [isOpen, runAutoDetect]);
 
   const handleImportToken = async () => {
     if (!accessToken.trim()) {
@@ -64,7 +66,7 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/oauth/cursor/import", {
+      const res = await fetch(withAs("/api/oauth/cursor/import"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -206,6 +208,7 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
 }
 
 CursorAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   onSuccess: PropTypes.func,
   onClose: PropTypes.func.isRequired,

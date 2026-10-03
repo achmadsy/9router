@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZaiAuthFlow } from "@/lib/zcode/auth";
 import { getZaiSession, deleteZaiSession } from "@/lib/zcode/sessions";
-import { createProviderConnection } from "@/models";
+import { saveOAuthConnection, sessionDestination, readAsParam } from "@/lib/oauth/utils/savedProvider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +25,8 @@ export async function POST(request) {
         { status: 404 }
       );
     }
+
+    const targetProviderId = sessionDestination(session, readAsParam(request, body), "glm");
 
     // Rebuild flow handle from session (CLI poll needs Bearer pollToken only).
     const flow = new ZaiAuthFlow(undefined, session.pollToken);
@@ -72,13 +74,13 @@ export async function POST(request) {
 
     await deleteZaiSession(flowId);
 
-    const connection = await createProviderConnection({
+    const connection = await saveOAuthConnection({
+      ...tokenData,
       provider: "glm",
       authType: "oauth",
-      ...tokenData,
       testStatus: "active",
       isActive: true,
-    });
+    }, targetProviderId);
 
     return NextResponse.json({
       status: "ready",
@@ -93,7 +95,7 @@ export async function POST(request) {
     console.error("[Z.AI OAuth] poll error:", error);
     return NextResponse.json(
       { error: error.message || "Internal error" },
-      { status: 500 }
+      { status: error.status === 400 ? 400 : 500 }
     );
   }
 }

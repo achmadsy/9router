@@ -3,6 +3,7 @@
 import { useState } from "react";
 import PropTypes from "prop-types";
 import { Button, Modal } from "@/shared/components";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { translate } from "@/i18n/runtime";
 
 const PLACEHOLDER = `[
@@ -23,7 +24,8 @@ function normalizeToArray(parsed) {
   return null;
 }
 
-export default function BulkImportCodexModal({ isOpen, onClose, onSuccess }) {
+export default function BulkImportCodexModal({ isOpen, onClose, onSuccess, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [jsonText, setJsonText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState("");
@@ -60,7 +62,7 @@ export default function BulkImportCodexModal({ isOpen, onClose, onSuccess }) {
 
     setSubmitting(true);
     try {
-      const res = await fetch("/api/oauth/codex/bulk-import", {
+      const res = await fetch(withAs("/api/oauth/codex/bulk-import"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accounts }),
@@ -144,6 +146,7 @@ export default function BulkImportCodexModal({ isOpen, onClose, onSuccess }) {
 }
 
 BulkImportCodexModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   onClose: PropTypes.func.isRequired,
   onSuccess: PropTypes.func,

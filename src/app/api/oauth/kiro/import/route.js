@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { KiroService } from "@/lib/oauth/services/kiro";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 /**
  * POST /api/oauth/kiro/import
@@ -10,7 +11,9 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { refreshToken, clientId, clientSecret, region, authMethod, profileArn } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "kiro");
+    const { refreshToken, clientId, clientSecret, region, authMethod, profileArn } = body;
 
     if (!refreshToken || typeof refreshToken !== "string") {
       return NextResponse.json(
@@ -35,7 +38,7 @@ export async function POST(request) {
     const providerLabel = isIdc ? "Enterprise" : "Imported";
     const resolvedProfileArn = profileArn || tokenData.profileArn || null;
 
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "kiro",
       authType: "oauth",
       accessToken: tokenData.accessToken,
@@ -49,7 +52,7 @@ export async function POST(request) {
         ...(isIdc ? { clientId, clientSecret, region: region || "us-east-1" } : {}),
       },
       testStatus: "active",
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -61,6 +64,6 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Kiro import token error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button } from "@/shared/components";
 import { translate } from "@/i18n/runtime";
 
@@ -25,7 +26,8 @@ const CLUSTERS = [
   { id: "in", flag: "🇮🇳", name: "India", host: "mimo-server-in" },
 ];
 
-export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
+export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [phase, setPhase] = useState("detecting"); // detecting | found | not-found | importing
   const [detectResult, setDetectResult] = useState(null);
   const [existingConnection, setExistingConnection] = useState(null);
@@ -63,7 +65,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
 
     const runDetect = async () => {
       try {
-        const res = await fetch("/api/oauth/xiaomi-mimo/auto-import", {
+        const res = await fetch(withAs("/api/oauth/xiaomi-mimo/auto-import"), {
           signal: AbortSignal.timeout(5000),
         });
         const data = await res.json();
@@ -78,7 +80,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
             .then((provData) => {
               const foundConn = (provData.connections || []).find(
                 (c) =>
-                  c.provider === "xiaomi-mimo" &&
+                  c.provider === (targetProviderId || "xiaomi-mimo") &&
                   data.uid &&
                   (c.email === `${data.uid}@xiaomi` ||
                     c.providerSpecificData?.uid === data.uid ||
@@ -96,7 +98,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
     };
 
     runDetect();
-  }, [isOpen]);
+  }, [isOpen, targetProviderId, withAs]);
 
   // Import the auto-detected local desktop credentials
   const handleImportLocal = async () => {
@@ -105,7 +107,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/oauth/xiaomi-mimo/api-key", {
+      const res = await fetch(withAs("/api/oauth/xiaomi-mimo/api-key"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -135,7 +137,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
     setShowClusterModal(false);
     setSessRegion(region);
     try {
-      const res = await fetch("/api/oauth/xiaomi-mimo/login/start", {
+      const res = await fetch(withAs("/api/oauth/xiaomi-mimo/login/start"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ region }),
@@ -153,7 +155,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
           return;
         }
         try {
-          const sres = await fetch(`/api/oauth/xiaomi-mimo/login/status?state=${data.state}`);
+          const sres = await fetch(withAs(`/api/oauth/xiaomi-mimo/login/status?state=${data.state}`));
           const sd = await sres.json();
           if (sd.status === "pending") return;
           stopSessionPoll();
@@ -161,7 +163,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
             setSessError(sd.error || "Login session expired — please retry.");
             return;
           }
-          const save = await fetch("/api/oauth/xiaomi-mimo/api-key", {
+          const save = await fetch(withAs("/api/oauth/xiaomi-mimo/api-key"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -394,6 +396,7 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
 }
 
 XiaomiMimoAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   onSuccess: PropTypes.func,
   onClose: PropTypes.func.isRequired,

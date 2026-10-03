@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveSavedProviderId, readAsParam } from "@/lib/oauth/utils/savedProvider";
 import { request as httpRequest } from "node:http";
 import { beginSession, encodeSessionCookie, rewriteMimoBases, absorbSetCookies as absorbResponseCookies, originOf, loginUpstreamFetch, SESSION_COOKIE } from "@/lib/mimoLoginSession";
 
@@ -78,7 +79,9 @@ export async function POST(request) {
       if (r === "cn" || r === "sgp" || r === "ams" || r === "ru" || r === "in") region = r;
     } catch { /* empty body — default cn */ }
 
+    const saved = await resolveSavedProviderId(readAsParam(request), "xiaomi-mimo");
     const sess = beginSession(region);
+    sess.targetProviderId = saved.provider;
 
     // Egress — non-CN clusters may need an overseas exit for the login page's
     // geo-decided features (e.g. Google sign-in); CN is always direct.

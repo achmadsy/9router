@@ -2,13 +2,15 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button } from "@/shared/components";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 150;
 const SESSION_NOT_FOUND_RETRIES = 5;
 
-export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose }) {
+export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [step, setStep] = useState("idle");
   const [flowId, setFlowId] = useState(null);
   const [authorizeUrl, setAuthorizeUrl] = useState(null);
@@ -64,7 +66,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
 
         let nextDelayMs = initialDelayMs;
         try {
-          const res = await fetch("/api/oauth/zai/poll", {
+          const res = await fetch(withAs("/api/oauth/zai/poll"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ flowId: id }),
@@ -125,7 +127,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
 
       pollTimerRef.current = setTimeout(runPoll, 0);
     },
-    [handleClose, onSuccess, stopPolling]
+    [handleClose, onSuccess, stopPolling, withAs]
   );
 
   const startOAuth = useCallback(async () => {
@@ -137,7 +139,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     setStep("init");
 
     try {
-      const res = await fetch("/api/oauth/zai/init", {
+      const res = await fetch(withAs("/api/oauth/zai/init"), {
         method: "POST",
         signal: abortController.signal,
       });
@@ -159,7 +161,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
       setError(err.message);
       setStep("error");
     }
-  }, [startPoll]);
+  }, [startPoll, withAs]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -253,6 +255,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
 }
 
 ZaiOAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   providerInfo: PropTypes.object,
   onSuccess: PropTypes.func,

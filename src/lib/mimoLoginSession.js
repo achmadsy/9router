@@ -111,7 +111,7 @@ function b64urlDecode(s) {
 
 export function encodeSessionCookie(sess) {
   const entries = [...sess.jar.values()].map((c) => [c.name, c.value, c.domain, c.path]);
-  const base = { s: sess.state, r: sess.region, t: sess.createdAt, p: sess.proxyUrl || "" };
+  const base = { s: sess.state, r: sess.region, t: sess.createdAt, p: sess.proxyUrl || "", ...(sess.targetProviderId ? { a: sess.targetProviderId } : {}) };
   let payload = JSON.stringify({ ...base, j: entries });
   if (payload.length > COOKIE_JSON_BUDGET) {
     // Cookie budget: drop everything but identity/session essentials.
@@ -144,6 +144,7 @@ export function decodeSessionCookie(value) {
   }
   return {
     state: payload.s,
+    ...(typeof payload.a === "string" ? { targetProviderId: payload.a } : {}),
     region: payload.r in MIMO_BASES ? payload.r : DEFAULT_REGION,
     proxyUrl: typeof payload.p === "string" && payload.p ? payload.p : null,
     jar,

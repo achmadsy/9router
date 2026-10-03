@@ -2,13 +2,15 @@
 
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button, Input } from "@/shared/components";
 
 /**
  * Kiro Auth Method Selection Modal
  * Auto-detects token from AWS SSO cache or allows manual import
  */
-export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
+export default function KiroAuthModal({ isOpen, onMethodSelect, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [selectedMethod, setSelectedMethod] = useState(null);
   const [idcStartUrl, setIdcStartUrl] = useState("");
   const [idcRegion, setIdcRegion] = useState("us-east-1");
@@ -33,7 +35,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
       setIdcCredentials(null);
 
       try {
-        const res = await fetch("/api/oauth/kiro/auto-import");
+        const res = await fetch(withAs("/api/oauth/kiro/auto-import"));
         const data = await res.json();
 
         if (data.found) {
@@ -60,7 +62,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
     };
 
     autoDetect();
-  }, [selectedMethod, isOpen]);
+  }, [selectedMethod, isOpen, withAs]);
 
   const handleMethodSelect = (method) => {
     setSelectedMethod(method);
@@ -82,7 +84,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/oauth/kiro/import", {
+      const res = await fetch(withAs("/api/oauth/kiro/import"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -116,7 +118,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/oauth/kiro/import-cli-proxy", {
+      const res = await fetch(withAs("/api/oauth/kiro/import-cli-proxy"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ json: cliProxyJson.trim() }),
@@ -154,7 +156,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/oauth/kiro/api-key", {
+      const res = await fetch(withAs("/api/oauth/kiro/api-key"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -589,6 +591,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
 }
 
 KiroAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   onMethodSelect: PropTypes.func.isRequired,
   onClose: PropTypes.func.isRequired,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 /**
  * POST /api/oauth/xiaomi-mimo/api-key
@@ -10,7 +11,9 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { apiKey, uid, baseUrl, mimoPassToken, mimoUserId, mimoCUserId, region } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "xiaomi-mimo");
+    const { apiKey, uid, baseUrl, mimoPassToken, mimoUserId, mimoCUserId, region } = body;
 
     const key = typeof apiKey === "string" ? apiKey.trim() : "";
     const sessionOnly = !key && !!mimoPassToken;
@@ -63,7 +66,7 @@ export async function POST(request) {
     const { getProviderConnections, updateProviderConnection } = await import("@/models");
     const normRegion = (typeof region === "string" && region) || undefined;
     const existing = (await getProviderConnections()).find(
-      (c) => c.provider === "xiaomi-mimo" && (
+      (c) => c.provider === saved.provider && (
         (uid && c.email === `${uid}@xiaomi`) ||
         (key && c.accessToken === key) ||
         (sessionOnly && mimoUserId &&
@@ -76,6 +79,7 @@ export async function POST(request) {
         accessToken: key || existing.accessToken,
         providerSpecificData: {
           ...existing.providerSpecificData,
+          ...saved.providerSpecificData,
           uid: uid || existing.providerSpecificData?.uid || null,
           baseUrl: key ? effectiveBaseUrl : (existing.providerSpecificData?.baseUrl || effectiveBaseUrl),
           region: normRegion || existing.providerSpecificData?.region || "cn",
@@ -102,7 +106,7 @@ export async function POST(request) {
       });
     }
 
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "xiaomi-mimo",
       // "oauth" is the official authType for imported credential connections
       // ([action]/route.js) — the list card and filters key off it; never
@@ -127,7 +131,7 @@ export async function POST(request) {
         mimoCUserId: mimoCUserId || null,
       },
       testStatus: validated ? "active" : (sessionOnly ? "active" : "untested"),
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -143,8 +147,8 @@ export async function POST(request) {
   } catch (error) {
     console.log("Xiaomi MiMo API key import error:", error);
     return NextResponse.json(
-      { error: "API key import failed" },
-      { status: 500 },
+      { error: error.status === 400 ? error.message : "API key import failed" },
+      { status: error.status === 400 ? 400 : 500 },
     );
   }
 }

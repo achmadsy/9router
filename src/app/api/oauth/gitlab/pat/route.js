@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 const GITLAB_DEFAULT_BASE = "https://gitlab.com";
 
@@ -17,6 +18,7 @@ export async function POST(request) {
     }
 
     const { token, baseUrl } = body;
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "gitlab");
     if (!token?.trim()) {
       return NextResponse.json({ error: "Personal Access Token is required" }, { status: 400 });
     }
@@ -36,7 +38,7 @@ export async function POST(request) {
     const user = await userRes.json();
     const email = user.email || user.public_email || "";
 
-    await createProviderConnection({
+    await createProviderConnection(applySavedProvider({
       provider: "gitlab",
       authType: "oauth",
       accessToken: token.trim(),
@@ -52,11 +54,11 @@ export async function POST(request) {
         baseUrl: base,
         authKind: "personal_access_token",
       },
-    });
+    }, saved));
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("GitLab PAT auth error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }

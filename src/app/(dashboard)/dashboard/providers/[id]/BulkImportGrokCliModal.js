@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { Modal, Button } from "@/shared/components";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { translate } from "@/i18n/runtime";
 
 const PLACEHOLDER = `[
@@ -52,7 +53,8 @@ function parseAccountsInput(rawText) {
   throw new Error("Input must be a JSON object or array of objects");
 }
 
-export default function BulkImportGrokCliModal({ isOpen, onClose, onSuccess }) {
+export default function BulkImportGrokCliModal({ isOpen, onClose, onSuccess, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [jsonText, setJsonText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState("");
@@ -152,7 +154,7 @@ export default function BulkImportGrokCliModal({ isOpen, onClose, onSuccess }) {
 
     setSubmitting(true);
     try {
-      const res = await fetch("/api/oauth/grok-cli/bulk-import", {
+      const res = await fetch(withAs("/api/oauth/grok-cli/bulk-import"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accounts }),

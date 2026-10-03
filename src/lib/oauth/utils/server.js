@@ -139,11 +139,12 @@ const pendingExchanges = new Map();
  * Register a pending exchange session for server-side mode.
  * Modal client calls this before opening popup.
  */
-export function registerCodexSession({ state, codeVerifier, redirectUri }) {
-  if (!state || !codeVerifier || !redirectUri) return false;
+export function registerCodexSession({ state, codeVerifier, redirectUri, targetProviderId = "codex" }) {
+  if (!state || !codeVerifier || !redirectUri || pendingExchanges.has(state)) return false;
   pendingExchanges.set(state, {
     codeVerifier,
     redirectUri,
+    targetProviderId,
     status: "pending",
     createdAt: Date.now(),
   });
@@ -162,6 +163,11 @@ export function getCodexSessionStatus(state) {
  */
 export function clearCodexSession(state) {
   pendingExchanges.delete(state);
+}
+
+async function saveProxyConnection(data, session, url) {
+  const { saveOAuthConnection, sessionDestination } = await import("./savedProvider.js");
+  return saveOAuthConnection(data, sessionDestination(session, url.searchParams.get("as"), data.provider));
 }
 
 function escapeHtml(str) {
@@ -222,7 +228,13 @@ export function startCodexProxy(appPort) {
 
           // Lazy import to avoid circular deps
           const { exchangeTokens } = await import("../providers.js");
+          const { resolveSavedProviderId } = await import("./savedProvider.js");
           const { createProviderConnection } = await import("@/models");
+          const callbackTarget = url.searchParams.get("as");
+          if (callbackTarget !== null && callbackTarget !== session.targetProviderId) {
+            throw new Error("OAuth destination does not match the login session");
+          }
+          const saved = await resolveSavedProviderId(session.targetProviderId, "codex");
 
           const tokenData = await exchangeTokens(
             "codex",
@@ -231,10 +243,15 @@ export function startCodexProxy(appPort) {
             session.codeVerifier,
             state
           );
+          // Recheck after token exchange in case the duplicate was removed meanwhile.
+          const destination = await resolveSavedProviderId(saved.provider, "codex");
           const connection = await createProviderConnection({
-            provider: "codex",
-            authType: "oauth",
             ...tokenData,
+            provider: destination.provider,
+            authType: "oauth",
+            ...(destination.providerSpecificData ? {
+              providerSpecificData: { ...tokenData.providerSpecificData, ...destination.providerSpecificData },
+            } : {}),
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
@@ -307,11 +324,12 @@ const XAI_PROXY_TIMEOUT_MS = 300000; // 5 minutes
 const XAI_PROXY_PORT = 56121;
 const xaiPendingExchanges = new Map();
 
-export function registerXaiSession({ state, codeVerifier, redirectUri }) {
-  if (!state || !codeVerifier || !redirectUri) return false;
+export function registerXaiSession({ state, codeVerifier, redirectUri, targetProviderId = "xai" }) {
+  if (!state || !codeVerifier || !redirectUri || xaiPendingExchanges.has(state)) return false;
   xaiPendingExchanges.set(state, {
     codeVerifier,
     redirectUri,
+    targetProviderId,
     status: "pending",
     createdAt: Date.now(),
   });
@@ -364,8 +382,6 @@ export function startXaiProxy(appPort) {
           if (!code) throw new Error("No authorization code received");
 
           const { exchangeTokens } = await import("../providers.js");
-          const { createProviderConnection } = await import("@/models");
-
           const tokenData = await exchangeTokens(
             "xai",
             code,
@@ -373,15 +389,15 @@ export function startXaiProxy(appPort) {
             session.codeVerifier,
             state
           );
-          const connection = await createProviderConnection({
+          const connection = await saveProxyConnection({
+            ...tokenData,
             provider: "xai",
             authType: "oauth",
-            ...tokenData,
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
             testStatus: "active",
-          });
+          }, session, url);
 
           session.status = "done";
           session.connectionId = connection.id;
@@ -444,9 +460,9 @@ let traeProxyTimeout = null;
 let traeProxyPort = null;
 let traeSession = null;
 
-export function registerTraeSession({ state }) {
-  if (!state) return false;
-  traeSession = { state, status: "pending", createdAt: Date.now() };
+export function registerTraeSession({ state, targetProviderId = "trae" }) {
+  if (!state || (traeSession?.state === state && traeSession.targetProviderId !== targetProviderId)) return false;
+  traeSession = { state, targetProviderId, status: "pending", createdAt: Date.now() };
   return true;
 }
 export function getTraeSessionStatus(state) {
@@ -497,17 +513,16 @@ export function startTraeProxy() {
       const rawCallback = `${url.pathname}?${url.searchParams.toString()}`;
       try {
         const { exchangeTokens } = await import("../providers.js");
-        const { createProviderConnection } = await import("@/models");
         const tokenData = await exchangeTokens("trae", rawCallback);
-        const connection = await createProviderConnection({
+        const connection = await saveProxyConnection({
+          ...tokenData,
           provider: "trae",
           authType: "oauth",
-          ...tokenData,
           expiresAt: tokenData.expiresIn
             ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
             : null,
           testStatus: "active",
-        });
+        }, session, url);
         session.status = "done";
         session.connectionId = connection.id;
         session.email = connection.email;
@@ -548,9 +563,9 @@ let windsurfProxyTimeout = null;
 let windsurfProxyPort = null;
 let windsurfSession = null;
 
-export function registerWindsurfSession({ state }) {
-  if (!state) return false;
-  windsurfSession = { state, status: "pending", createdAt: Date.now() };
+export function registerWindsurfSession({ state, targetProviderId = "windsurf" }) {
+  if (!state || (windsurfSession?.state === state && windsurfSession.targetProviderId !== targetProviderId)) return false;
+  windsurfSession = { state, targetProviderId, status: "pending", createdAt: Date.now() };
   return true;
 }
 export function getWindsurfSessionStatus(state) {
@@ -599,14 +614,13 @@ export function startWindsurfProxy() {
       const rawCallback = `${url.pathname}?${url.searchParams.toString()}`;
       try {
         const { exchangeTokens } = await import("../providers.js");
-        const { createProviderConnection } = await import("@/models");
         const tokenData = await exchangeTokens("windsurf", rawCallback, null, null, session.state);
-        const connection = await createProviderConnection({
+        const connection = await saveProxyConnection({
+          ...tokenData,
           provider: "windsurf",
           authType: "api_key",
-          ...tokenData,
           testStatus: "active",
-        });
+        }, session, url);
         session.status = "done";
         session.connectionId = connection.id;
         session.email = connection.email;
@@ -648,12 +662,13 @@ let zedProxyTimeout = null;
 let zedProxyPort = null;
 let zedSession = null;
 
-export function registerZedSession({ state, codeVerifier, systemId }) {
-  if (!state || !codeVerifier) return false;
+export function registerZedSession({ state, codeVerifier, systemId, targetProviderId = "zed" }) {
+  if (!state || !codeVerifier || (zedSession?.state === state && zedSession.targetProviderId !== targetProviderId)) return false;
   zedSession = {
     state,
     codeVerifier,
     systemId: systemId || null,
+    targetProviderId,
     status: "pending",
     createdAt: Date.now(),
   };
@@ -723,7 +738,6 @@ export function startZedProxy(preferredPort = 0) {
       const rawCallback = url.search ? `${url.pathname}?${url.searchParams.toString()}` : url.pathname;
       try {
         const { exchangeTokens } = await import("../providers.js");
-        const { createProviderConnection } = await import("@/models");
         const tokenData = await exchangeTokens(
           "zed",
           rawCallback,
@@ -732,12 +746,12 @@ export function startZedProxy(preferredPort = 0) {
           session.state,
           session.systemId ? { systemId: session.systemId } : undefined,
         );
-        const connection = await createProviderConnection({
+        const connection = await saveProxyConnection({
+          ...tokenData,
           provider: "zed",
           authType: "oauth",
-          ...tokenData,
           testStatus: "active",
-        });
+        }, session, url);
         session.status = "done";
         session.connectionId = connection.id;
         session.email = connection.email;
@@ -800,21 +814,22 @@ let xiaomiMimoProxyTimeout = null;
 
 const xiaomiMimoSessions = new Map();
 
-export function registerXiaomiMimoSession({ state, privateKeyDer }) {
-  if (!state || !privateKeyDer) return false;
+export function registerXiaomiMimoSession({ state, privateKeyDer, targetProviderId = "xiaomi-mimo" }) {
+  if (!state || !privateKeyDer || xiaomiMimoSessions.has(state)) return false;
   xiaomiMimoSessions.set(state, {
     privateKeyDer,
+    targetProviderId,
     status: "pending",
     createdAt: Date.now(),
   });
   return true;
 }
 
-export function getXiaomiMimoSessionStatus(state) {
+export function getXiaomiMimoSessionStatus(state, includeDestination = false) {
   const s = xiaomiMimoSessions.get(state);
   if (!s) return null;
   // Don't leak the private key to the client
-  return { status: s.status, result: s.result || null, error: s.error || null };
+  return { status: s.status, ...(includeDestination ? { targetProviderId: s.targetProviderId } : {}), result: s.result || null, error: s.error || null };
 }
 
 export function clearXiaomiMimoSession(state) {

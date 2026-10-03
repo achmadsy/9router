@@ -93,6 +93,11 @@ export default function ProviderDetailPage() {
   const [importingClineModels, setImportingClineModels] = useState(false);
   const { copied, copy } = useCopyToClipboard();
 
+  const isCloneNode = providerNode?.type === "provider-clone" || isProviderCloneId(providerId);
+  const cloneBaseId = isCloneNode
+    ? (providerNode?.baseProvider || resolveRuntimeProviderId(providerId))
+    : providerId;
+
   const AG_RISK_STORAGE_KEY = "ag_risk_confirmed";
 
   const openOAuthConnection = () => {
@@ -100,7 +105,7 @@ export default function ProviderDetailPage() {
   };
 
   const triggerOAuthConnection = () => {
-    if (providerId === "antigravity" && typeof window !== "undefined") {
+    if (cloneBaseId === "antigravity" && typeof window !== "undefined") {
       const confirmed = window.localStorage.getItem(AG_RISK_STORAGE_KEY) === "true";
       if (!confirmed) {
         setShowAgRiskModal(true);
@@ -108,7 +113,7 @@ export default function ProviderDetailPage() {
       }
     }
     // Xiaomi Desktop: auto-import local credentials first, OAuth as fallback
-    if (providerId === "xiaomi-mimo") {
+    if (cloneBaseId === "xiaomi-mimo") {
       setShowXiaomiMimoModal(true);
       return;
     }
@@ -144,11 +149,6 @@ export default function ProviderDetailPage() {
     }
     triggerApiKeyConnection();
   };
-
-  const isCloneNode = providerNode?.type === "provider-clone" || isProviderCloneId(providerId);
-  const cloneBaseId = isCloneNode
-    ? (providerNode?.baseProvider || resolveRuntimeProviderId(providerId))
-    : providerId;
 
   const providerInfo = providerNode
     ? (isCloneNode
@@ -1746,12 +1746,12 @@ export default function ProviderDetailPage() {
                         Cookie
                       </Button>
                     )}
-                    {providerId === "codex" && (
+                    {cloneBaseId === "codex" && (
                       <Button size="sm" icon="playlist_add" variant="secondary" onClick={() => setShowBulkImportCodex(true)}>
                         {translate("Bulk Add")}
                       </Button>
                     )}
-                    {providerId === "grok-cli" && (
+                    {cloneBaseId === "grok-cli" && (
                       <Button size="sm" icon="playlist_add" variant="secondary" onClick={() => setShowBulkImportGrokCli(true)}>
                         {translate("Bulk Add")}
                       </Button>
@@ -1801,7 +1801,7 @@ export default function ProviderDetailPage() {
               {connectionsList}
               {!isCompatible && (
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:flex">
-                  {providerId === "iflow" && (
+                  {cloneBaseId === "iflow" && (
                     <Button
                       size="sm"
                       icon="cookie"
@@ -1813,7 +1813,7 @@ export default function ProviderDetailPage() {
                       Cookie
                     </Button>
                   )}
-                  {providerId === "codex" && (
+                  {cloneBaseId === "codex" && (
                     <Button
                       size="sm"
                       icon="playlist_add"
@@ -1825,7 +1825,7 @@ export default function ProviderDetailPage() {
                       {translate("Bulk Add")}
                     </Button>
                   )}
-                  {providerId === "grok-cli" && (
+                  {cloneBaseId === "grok-cli" && (
                     <Button
                       size="sm"
                       icon="playlist_add"
@@ -1957,36 +1957,41 @@ export default function ProviderDetailPage() {
       {bulkActionModal}
 
       {/* Modals */}
-      {providerId === "kiro" ? (
+      {cloneBaseId === "kiro" ? (
         <KiroOAuthWrapper
           isOpen={showOAuthModal}
+          targetProviderId={isCloneNode ? providerId : undefined}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
         />
-      ) : providerId === "cursor" ? (
+      ) : cloneBaseId === "cursor" ? (
         <CursorAuthModal
           isOpen={showOAuthModal}
+          targetProviderId={isCloneNode ? providerId : undefined}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
         />
-      ) : providerId === "zed" ? (
+      ) : cloneBaseId === "zed" ? (
         <ZedAuthModal
           isOpen={showOAuthModal}
+          targetProviderId={isCloneNode ? providerId : undefined}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
         />
-      ) : providerId === "gitlab" ? (
+      ) : cloneBaseId === "gitlab" ? (
         <GitLabAuthModal
           isOpen={showOAuthModal}
+          targetProviderId={isCloneNode ? providerId : undefined}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
         />
-      ) : providerId === "glm" ? (
+      ) : cloneBaseId === "glm" ? (
         <ZaiOAuthModal
           isOpen={showOAuthModal}
+          targetProviderId={isCloneNode ? providerId : undefined}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
@@ -2005,11 +2010,13 @@ export default function ProviderDetailPage() {
       {/* Xiaomi Desktop: auto-import local credentials modal */}
       <XiaomiMimoAuthModal
         isOpen={showXiaomiMimoModal}
+        targetProviderId={isCloneNode ? providerId : undefined}
         onSuccess={handleOAuthSuccess}
         onClose={() => setShowXiaomiMimoModal(false)}
       />
-      {providerId === "iflow" && (
+      {cloneBaseId === "iflow" && (
         <IFlowCookieModal
+          targetProviderId={isCloneNode ? providerId : undefined}
           isOpen={showIFlowCookieModal}
           onSuccess={handleIFlowCookieSuccess}
           onClose={() => setShowIFlowCookieModal(false)}
@@ -2065,16 +2072,18 @@ export default function ProviderDetailPage() {
         />
       )}
 
-      {providerId === "codex" && (
+      {cloneBaseId === "codex" && (
         <BulkImportCodexModal
+          targetProviderId={isCloneNode ? providerId : undefined}
           isOpen={showBulkImportCodex}
           onClose={() => setShowBulkImportCodex(false)}
           onSuccess={fetchConnections}
         />
       )}
 
-      {providerId === "grok-cli" && (
+      {cloneBaseId === "grok-cli" && (
         <BulkImportGrokCliModal
+          targetProviderId={isCloneNode ? providerId : undefined}
           isOpen={showBulkImportGrokCli}
           onClose={() => setShowBulkImportGrokCli(false)}
           onSuccess={fetchConnections}

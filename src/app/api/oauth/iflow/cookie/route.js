@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 /**
  * iFlow Cookie-Based Authentication
@@ -8,7 +9,9 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { cookie } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "iflow");
+    const { cookie } = body;
 
     if (!cookie || typeof cookie !== "string") {
       return NextResponse.json({ error: "Cookie is required" }, { status: 400 });
@@ -106,7 +109,7 @@ export async function POST(request) {
     const cookieToSave = bxAuth ? `BXAuth=${bxAuth};` : "";
 
     // Save to database
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "iflow",
       authType: "cookie",
       name: refreshedKey.name || keyData.name,
@@ -118,7 +121,7 @@ export async function POST(request) {
       },
       testStatus: "active",
       isActive: true,
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -132,6 +135,6 @@ export async function POST(request) {
     });
   } catch (error) {
     console.error("iFlow cookie auth error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }

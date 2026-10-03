@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
@@ -9,7 +10,8 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
  * Kiro Social OAuth Modal (Google/GitHub)
  * Handles manual callback URL flow for social login
  */
-export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onClose }) {
+export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [step, setStep] = useState("loading"); // loading | input | success | error
   const [authUrl, setAuthUrl] = useState("");
   const [authData, setAuthData] = useState(null);
@@ -32,7 +34,7 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         setError(null);
         setStep("loading");
 
-        const res = await fetch(`/api/oauth/kiro/social-authorize?provider=${provider}`);
+        const res = await fetch(withAs(`/api/oauth/kiro/social-authorize?provider=${provider}`));
         const data = await res.json();
 
         if (!res.ok) {
@@ -55,7 +57,7 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
     };
 
     initAuth();
-  }, [isOpen, provider]);
+  }, [isOpen, provider, withAs]);
 
   const handleManualSubmit = async () => {
     try {
@@ -83,7 +85,7 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
       }
 
       // Exchange code for tokens
-      const res = await fetch("/api/oauth/kiro/social-exchange", {
+      const res = await fetch(withAs("/api/oauth/kiro/social-exchange"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -207,6 +209,7 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
 }
 
 KiroSocialOAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   provider: PropTypes.oneOf(["google", "github"]).isRequired,
   onSuccess: PropTypes.func,

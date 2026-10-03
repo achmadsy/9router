@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 import {
   fetchZedAuthenticatedUser,
   resolveZedOrganizationId,
@@ -15,6 +16,7 @@ import {
 export async function POST(request) {
   try {
     const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "zed");
     const accessToken = typeof body?.accessToken === "string" ? body.accessToken.trim() : "";
     const userId = body?.userId != null ? String(body.userId).trim() : "";
     const systemId =
@@ -47,7 +49,7 @@ export async function POST(request) {
     const displayName =
       userInfo?.name || userInfo?.display_name || userInfo?.username || `Zed ${userId}`;
 
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "zed",
       authType: "oauth",
       accessToken,
@@ -62,7 +64,7 @@ export async function POST(request) {
         organizationId: organizationId || "",
       },
       testStatus: "active",
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -75,6 +77,6 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Zed import token error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }

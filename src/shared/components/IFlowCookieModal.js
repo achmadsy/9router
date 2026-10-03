@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button, Input } from "@/shared/components";
 
 /**
  * iFlow Cookie Authentication Modal
  * User pastes browser cookie to get fresh API key
  */
-export default function IFlowCookieModal({ isOpen, onSuccess, onClose }) {
+export default function IFlowCookieModal({ isOpen, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [cookie, setCookie] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -24,7 +26,7 @@ export default function IFlowCookieModal({ isOpen, onSuccess, onClose }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/oauth/iflow/cookie", {
+      const res = await fetch(withAs("/api/oauth/iflow/cookie"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cookie: cookie.trim() }),
@@ -126,6 +128,7 @@ export default function IFlowCookieModal({ isOpen, onSuccess, onClose }) {
 }
 
 IFlowCookieModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   onSuccess: PropTypes.func,
   onClose: PropTypes.func,

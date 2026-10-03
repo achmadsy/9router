@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { KiroService } from "@/lib/oauth/services/kiro";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 /**
  * POST /api/oauth/kiro/social-exchange
@@ -9,7 +10,9 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { code, codeVerifier, provider } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "kiro");
+    const { code, codeVerifier, provider } = body;
 
     if (!code || !codeVerifier) {
       return NextResponse.json(
@@ -37,7 +40,7 @@ export async function POST(request) {
     const email = kiroService.extractEmailFromJWT(tokenData.accessToken);
 
     // Save to database
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "kiro",
       authType: "oauth",
       accessToken: tokenData.accessToken,
@@ -50,7 +53,7 @@ export async function POST(request) {
         provider: provider.charAt(0).toUpperCase() + provider.slice(1),
       },
       testStatus: "active",
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -62,6 +65,6 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Kiro social exchange error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }

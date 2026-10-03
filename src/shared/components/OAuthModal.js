@@ -234,7 +234,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     // 2. Build the authorize URL with redirect_uri = proxy callback URL.
     const authorizeUrl = new URL(`/api/oauth/${providerId}/authorize`, window.location.origin);
     authorizeUrl.searchParams.set("redirect_uri", startData.callbackUrl);
-    const authRes = await fetch(authorizeUrl);
+    const authRes = await fetch(withAs(authorizeUrl.toString()));
     const authData = await authRes.json();
     if (!authRes.ok) {
       stopOwnedProxy();
@@ -316,7 +316,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           }
           deviceCodeUrl.searchParams.set("auth_method", "idc");
         }
-        const res = await fetch(deviceCodeUrl.toString());
+        const res = await fetch(withAs(deviceCodeUrl.toString()));
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
 
@@ -387,7 +387,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       if (oauthMeta) {
         Object.entries(oauthMeta).forEach(([k, v]) => { if (v) authorizeUrl.searchParams.set(k, v); });
       }
-      const res = await fetch(authorizeUrl.toString());
+      const res = await fetch(withAs(authorizeUrl.toString()));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
@@ -401,7 +401,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           proxyUrl.searchParams.set("state", data.state);
           proxyUrl.searchParams.set("code_verifier", data.codeVerifier);
           proxyUrl.searchParams.set("redirect_uri", redirectUri);
-          const proxyRes = await fetch(proxyUrl.toString());
+          const proxyRes = await fetch(withAs(proxyUrl.toString()));
           const proxyData = await proxyRes.json();
           codexProxyActive = proxyData.success;
           codexServerSide = !!proxyData.serverSide;
@@ -420,7 +420,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           proxyUrl.searchParams.set("state", data.state);
           proxyUrl.searchParams.set("code_verifier", data.codeVerifier);
           proxyUrl.searchParams.set("redirect_uri", redirectUri);
-          const proxyRes = await fetch(proxyUrl.toString());
+          const proxyRes = await fetch(withAs(proxyUrl.toString()));
           const proxyData = await proxyRes.json();
           xaiProxyActive = proxyData.success;
           xaiServerSide = !!proxyData.serverSide;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 import { extractCodexAccountInfo } from "@/lib/oauth/providers";
 
 /**
@@ -11,7 +12,9 @@ import { extractCodexAccountInfo } from "@/lib/oauth/providers";
  */
 export async function POST(request) {
   try {
-    const { accessToken, name } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "codex");
+    const { accessToken, name } = body;
 
     if (!accessToken || typeof accessToken !== "string") {
       return NextResponse.json(
@@ -68,7 +71,7 @@ export async function POST(request) {
     const connectionName = name || email || "ChatGPT Access Token";
 
     // Save to database as access_token authType (no refresh token)
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "codex",
       authType: "access_token",
       accessToken: token,
@@ -76,7 +79,7 @@ export async function POST(request) {
       email: email,
       providerSpecificData,
       testStatus: "active",
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -91,6 +94,6 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Codex access token import error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }

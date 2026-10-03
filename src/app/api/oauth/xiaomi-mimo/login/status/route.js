@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readAsParam, sessionDestination } from "@/lib/oauth/utils/savedProvider";
 import { sessionFromRequest, readSessionIdentity, attachSessionCookie } from "@/lib/mimoLoginSession";
 
 /**
@@ -14,6 +15,12 @@ export async function GET(request) {
   const sess = sessionFromRequest(request);
   if (!sess || (state && sess.state !== state)) {
     return NextResponse.json({ status: "expired" }, { status: 404 });
+  }
+
+  try {
+    sessionDestination(sess, readAsParam(request), "xiaomi-mimo");
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
   if (sess.status !== "done") {

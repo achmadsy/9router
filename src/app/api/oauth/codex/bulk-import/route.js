@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 import { extractCodexAccountInfo } from "@/lib/oauth/providers";
 
 /**
@@ -44,6 +45,13 @@ export async function POST(request) {
       { error: "No accounts provided" },
       { status: 400 }
     );
+  }
+
+  let saved;
+  try {
+    saved = await resolveSavedProviderId(readAsParam(request, body), "codex");
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 
   const results = [];
@@ -103,11 +111,11 @@ export async function POST(request) {
       if (item.isActive === undefined) item.isActive = true;
       if (!item.lastRefreshAt) item.lastRefreshAt = new Date().toISOString();
 
-      const created = await createProviderConnection({
+      const created = await createProviderConnection(applySavedProvider({
         provider: "codex",
         authType: "oauth",
         ...item,
-      });
+      }, saved));
 
       results.push({ index: i, ok: true, id: created.id });
       success++;

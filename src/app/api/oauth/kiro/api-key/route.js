@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { KiroService } from "@/lib/oauth/services/kiro";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 /**
  * POST /api/oauth/kiro/api-key
@@ -10,7 +11,9 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { apiKey, region } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "kiro");
+    const { apiKey, region } = body;
 
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       return NextResponse.json(
@@ -32,7 +35,7 @@ export async function POST(request) {
 
     // API keys never expire on a fixed schedule; persist a long horizon so the
     // proactive refresh path (which requires a refreshToken anyway) is skipped.
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "kiro",
       authType: "api_key",
       accessToken: credential.accessToken,
@@ -46,7 +49,7 @@ export async function POST(request) {
         provider: "API Key",
       },
       testStatus: "active",
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -60,8 +63,8 @@ export async function POST(request) {
     console.log("Kiro API key import error:", error);
     // Do not reflect upstream response body to the client (SSRF hardening)
     return NextResponse.json(
-      { error: "API key validation failed" },
-      { status: 500 }
+      { error: error.status === 400 ? error.message : "API key validation failed" },
+      { status: error.status === 400 ? 400 : 500 }
     );
   }
 }

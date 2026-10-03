@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { CursorService } from "@/lib/oauth/services/cursor";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 
 /**
  * POST /api/oauth/cursor/import
@@ -12,7 +13,9 @@ import { createProviderConnection } from "@/models";
  */
 export async function POST(request) {
   try {
-    const { accessToken, machineId } = await request.json();
+    const body = await request.json();
+    const saved = await resolveSavedProviderId(readAsParam(request, body), "cursor");
+    const { accessToken, machineId } = body;
 
     if (!accessToken || typeof accessToken !== "string") {
       return NextResponse.json(
@@ -40,7 +43,7 @@ export async function POST(request) {
     const userInfo = cursorService.extractUserInfo(tokenData.accessToken);
 
     // Save to database
-    const connection = await createProviderConnection({
+    const connection = await createProviderConnection(applySavedProvider({
       provider: "cursor",
       authType: "oauth",
       accessToken: tokenData.accessToken,
@@ -54,7 +57,7 @@ export async function POST(request) {
         userId: userInfo?.userId,
       },
       testStatus: "active",
-    });
+    }, saved));
 
     return NextResponse.json({
       success: true,
@@ -66,7 +69,7 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Cursor import token error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }
 

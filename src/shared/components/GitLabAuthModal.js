@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button, Input, OAuthModal } from "@/shared/components";
 
 const GITLAB_COM = "https://gitlab.com";
@@ -18,7 +19,8 @@ function getRedirectUri() {
  * - OAuth (PKCE): requires OAuth App Client ID (and optional Client Secret)
  * - PAT: requires Personal Access Token
  */
-export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClose }) {
+export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [mode, setMode] = useState(null); // null | "oauth" | "pat"
   const [baseUrl, setBaseUrl] = useState(GITLAB_COM);
   const [clientId, setClientId] = useState("");
@@ -64,7 +66,7 @@ export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClo
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/oauth/gitlab/pat", {
+      const res = await fetch(withAs("/api/oauth/gitlab/pat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: pat.trim(), baseUrl: baseUrl.trim() || GITLAB_COM }),
@@ -88,6 +90,7 @@ export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClo
       <OAuthModal
         isOpen
         provider="gitlab"
+        targetProviderId={targetProviderId}
         providerInfo={providerInfo}
         oauthMeta={oauthMeta}
         onSuccess={() => { onSuccess?.(); handleClose(); }}
@@ -187,6 +190,7 @@ export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClo
 }
 
 GitLabAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   providerInfo: PropTypes.shape({ name: PropTypes.string }),
   onSuccess: PropTypes.func,

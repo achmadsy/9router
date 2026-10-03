@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
+import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
@@ -11,7 +12,8 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
  * 2. Browser OAuth (local proxy) with waiting spinner
  * 3. Manual paste of the callback URL
  */
-export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose }) {
+export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose, targetProviderId }) {
+  const withAs = useOAuthDestination(targetProviderId);
   const [phase, setPhase] = useState("booting"); // booting | ide-found | browser | importing | success | error
   const [ideSession, setIdeSession] = useState(null);
   const [authData, setAuthData] = useState(null);
@@ -53,7 +55,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     setError(null);
     setPhase("importing");
     try {
-      const res = await fetch("/api/oauth/zed/import", {
+      const res = await fetch(withAs("/api/oauth/zed/import"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -72,7 +74,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     } finally {
       setBusy(false);
     }
-  }, [finishSuccess, stopOwnedProxy]);
+  }, [finishSuccess, stopOwnedProxy, withAs]);
 
   const startBrowserFlow = useCallback(async () => {
     setError(null);
@@ -82,7 +84,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     pollAbortRef.current = false;
 
     try {
-      const startRes = await fetch("/api/oauth/zed/start-proxy");
+      const startRes = await fetch(withAs("/api/oauth/zed/start-proxy"));
       const startData = await startRes.json();
       if (!startRes.ok || !startData.success || !startData.callbackUrl) {
         throw new Error(startData.reason || startData.error || "Failed to start Zed callback server");
@@ -96,7 +98,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
 
       const authorizeUrl = new URL("/api/oauth/zed/authorize", window.location.origin);
       authorizeUrl.searchParams.set("redirect_uri", startData.callbackUrl);
-      const authRes = await fetch(authorizeUrl);
+      const authRes = await fetch(withAs(authorizeUrl.toString()));
       const nextAuth = await authRes.json();
       if (!authRes.ok) {
         stopOwnedProxy();
@@ -110,7 +112,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
       const regBody = { state: nextAuth.state };
       if (nextAuth.codeVerifier) regBody.codeVerifier = nextAuth.codeVerifier;
       if (nextAuth.systemId) regBody.systemId = nextAuth.systemId;
-      const regRes = await fetch("/api/oauth/zed/register-session", {
+      const regRes = await fetch(withAs("/api/oauth/zed/register-session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(regBody),
@@ -135,7 +137,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
       setError(err.message);
       setPhase((prev) => (prev === "ide-found" ? prev : "browser"));
     }
-  }, [stopOwnedProxy]);
+  }, [stopOwnedProxy, withAs]);
 
   // Open: detect IDE session (auto-import if found), always start browser flow as fallback.
   useEffect(() => {
@@ -158,7 +160,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
       const browserPromise = startBrowserFlow();
 
       try {
-        const res = await fetch("/api/oauth/zed/auto-import", {
+        const res = await fetch(withAs("/api/oauth/zed/auto-import"), {
           signal: AbortSignal.timeout(12000),
         });
         const data = await res.json();
@@ -187,7 +189,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     return () => {
       cancelled = true;
     };
-  }, [isOpen, startBrowserFlow, importIdeSession]);
+  }, [isOpen, startBrowserFlow, importIdeSession, withAs]);
 
   // Cleanup on close
   useEffect(() => {
@@ -219,7 +221,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
       attempts += 1;
       try {
         const res = await fetch(
-          `/api/oauth/zed/poll-status?state=${encodeURIComponent(authData.state)}`,
+          withAs(`/api/oauth/zed/poll-status?state=${encodeURIComponent(authData.state)}`),
         );
         const data = await res.json();
         if (cancelled || pollAbortRef.current) return;
@@ -250,7 +252,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     return () => {
       cancelled = true;
     };
-  }, [authData, phase, finishSuccess, stopOwnedProxy]);
+  }, [authData, phase, finishSuccess, stopOwnedProxy, withAs]);
 
   const handleManualCallback = async () => {
     const input = callbackUrl.trim();
@@ -258,7 +260,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/oauth/zed/exchange", {
+      const res = await fetch(withAs("/api/oauth/zed/exchange"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -408,6 +410,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
 }
 
 ZedAuthModal.propTypes = {
+  targetProviderId: PropTypes.string,
   isOpen: PropTypes.bool.isRequired,
   providerInfo: PropTypes.object,
   onSuccess: PropTypes.func,

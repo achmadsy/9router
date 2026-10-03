@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, applySavedProvider } from "@/lib/oauth/utils/savedProvider";
 import { decodeXaiIdTokenEmail, extractEmailFromAccessToken } from "@/lib/oauth/providerHelpers";
 
 /**
@@ -47,6 +48,13 @@ export async function POST(request) {
     );
   }
 
+  let saved;
+  try {
+    saved = await resolveSavedProviderId(readAsParam(request, body), "grok-cli");
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
+  }
+
   const results = [];
   let success = 0;
   let failed = 0;
@@ -87,7 +95,7 @@ export async function POST(request) {
         ...(raw.providerSpecificData || {}),
       };
 
-      const created = await createProviderConnection({
+      const created = await createProviderConnection(applySavedProvider({
         provider: "grok-cli",
         authType: "oauth",
         accessToken,
@@ -97,7 +105,7 @@ export async function POST(request) {
         displayName: raw.displayName || raw.name || undefined,
         providerSpecificData: psd,
         testStatus: "active",
-      });
+      }, saved));
 
       success++;
       results.push({ index: i, ok: true, id: created.id, email: created.email });

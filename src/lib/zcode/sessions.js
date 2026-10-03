@@ -39,6 +39,7 @@ export async function createZaiSession({
   pollToken,
   provider = "zai",
   expiresAtMs,
+  targetProviderId = "glm",
 }) {
   const now = Date.now();
   pruneMemory(now);
@@ -48,6 +49,7 @@ export async function createZaiSession({
     flowId,
     pollToken,
     provider,
+    targetProviderId,
     expiresAt: expiresAtMs || now + TTL_MS,
   };
 

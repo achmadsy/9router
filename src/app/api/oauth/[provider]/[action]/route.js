@@ -7,38 +7,8 @@ import {
   requestDeviceCode,
   pollForToken
 } from "@/lib/oauth/providers";
-import { createProviderConnection, getProviderNodeById } from "@/models";
-import { isProviderCloneId } from "open-sse/providers/clones.js";
-
-// When OAuth completes for a provider clone (`?as=<cloneId>`), persist the new
-// connection under the clone id so its credential pool stays isolated.
-async function resolveSavedProviderId(asParam, baseProvider) {
-  try {
-    const as = typeof asParam === "string" ? asParam : null;
-    if (as && isProviderCloneId(as)) {
-      const node = await getProviderNodeById(as);
-      if (node?.type === "provider-clone") {
-        return {
-          provider: as,
-          providerSpecificData: {
-            baseProvider: node.baseProvider || baseProvider,
-            prefix: node.prefix,
-            nodeName: node.name,
-          },
-        };
-      }
-    }
-  } catch { /* fall through to base provider */ }
-  return { provider: baseProvider, providerSpecificData: null };
-}
-
-function readAsParam(request, body) {
-  try {
-    const fromUrl = new URL(request.url).searchParams.get("as");
-    if (fromUrl) return fromUrl;
-  } catch {}
-  return body?.as || null;
-}
+import { createProviderConnection } from "@/models";
+import { resolveSavedProviderId, readAsParam, sessionDestination } from "@/lib/oauth/utils/savedProvider";
 import { readDesktopPassToken, readDesktopAccountRegion } from "open-sse/shared/mimoAccount.js";
 import { resolveMimoAccount } from "open-sse/shared/mimoRegions.js";
 import {
@@ -91,7 +61,7 @@ async function completeXaiManualCode(code, state, asParam = null) {
       session.codeVerifier,
       state
     );
-    const saved = await resolveSavedProviderId(asParam, "xai");
+    const saved = await resolveSavedProviderId(sessionDestination(session, asParam, "xai"), "xai");
     const connection = await createProviderConnection({
       provider: saved.provider,
       authType: "oauth",
@@ -100,7 +70,7 @@ async function completeXaiManualCode(code, state, asParam = null) {
         ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
         : null,
       testStatus: "active",
-      ...(saved.providerSpecificData ? { providerSpecificData: saved.providerSpecificData } : {}),
+      ...(saved.providerSpecificData ? { providerSpecificData: { ...tokenData.providerSpecificData, ...saved.providerSpecificData } } : {}),
     });
     clearXaiSession(state);
     stopXaiProxy();
@@ -129,6 +99,10 @@ export async function GET(request, { params }) {
     const { provider, action } = await params;
     const { searchParams } = new URL(request.url);
 
+    if (["authorize", "device-code", "start-proxy"].includes(action)) {
+      await resolveSavedProviderId(readAsParam(request), provider);
+    }
+
     if (action === "authorize") {
       // Xiaomi Desktop: custom ECDH flow — generate keypair, start proxy, return authorize URL
       if (provider === "xiaomi-mimo") {
@@ -143,7 +117,8 @@ export async function GET(request, { params }) {
         }
 
         // Register the session with the private key for decryption
-        registerXiaomiMimoSession({ state, privateKeyDer });
+        const saved = await resolveSavedProviderId(readAsParam(request), provider);
+        registerXiaomiMimoSession({ state, privateKeyDer, targetProviderId: saved.provider });
 
         const redirectUri = proxyResult.callbackUrl;
         const authorizeUrl = buildAuthorizeUrl(publicKey, redirectUri, getKeyName());
@@ -158,7 +133,7 @@ export async function GET(request, { params }) {
 
       const redirectUri = searchParams.get("redirect_uri") || "http://localhost:8080/callback";
       // Collect provider-specific meta params (e.g. gitlab passes baseUrl, clientId, clientSecret)
-      const reservedParams = new Set(["redirect_uri"]);
+      const reservedParams = new Set(["redirect_uri", "as"]);
       const meta = {};
       searchParams.forEach((value, key) => { if (!reservedParams.has(key)) meta[key] = value; });
       // Zed: derive native_app_port from the local callback URL so the RSA keypair
@@ -201,14 +176,15 @@ export async function GET(request, { params }) {
       const state = searchParams.get("state");
       const codeVerifier = searchParams.get("code_verifier");
       const redirectUri = searchParams.get("redirect_uri");
+      const saved = await resolveSavedProviderId(readAsParam(request), provider);
       const result = provider === "xai"
         ? await startXaiProxy(Number(appPort))
         : await startCodexProxy(Number(appPort));
       let serverSide = false;
       if (result.success && state && codeVerifier && redirectUri) {
         serverSide = provider === "xai"
-          ? registerXaiSession({ state, codeVerifier, redirectUri })
-          : registerCodexSession({ state, codeVerifier, redirectUri });
+          ? registerXaiSession({ state, codeVerifier, redirectUri, targetProviderId: saved.provider })
+          : registerCodexSession({ state, codeVerifier, redirectUri, targetProviderId: saved.provider });
       }
       return NextResponse.json({ ...result, serverSide });
     }
@@ -228,7 +204,13 @@ export async function GET(request, { params }) {
       else return NextResponse.json({ error: "Poll only supported for codex/xai/trae/windsurf/zed/xiaomi-mimo" }, { status: 400 });
       if (!session) return NextResponse.json({ status: "unknown" });
       if (session.status === "done" || session.status === "error") {
-        const payload = { ...session };
+        const payload = {
+          status: session.status,
+          ...(session.connectionId ? { connectionId: session.connectionId } : {}),
+          ...(session.email ? { email: session.email } : {}),
+          ...(session.error ? { error: session.error } : {}),
+          ...(provider === "xiaomi-mimo" && session.result ? { result: session.result } : {}),
+        };
         if (provider === "xiaomi-mimo") {
           // Unlike the others this does not auto-exchange server-side, so a
           // finished session must survive until the client POSTs /exchange —
@@ -322,7 +304,7 @@ export async function GET(request, { params }) {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {
     console.log("OAuth GET error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }
 
@@ -337,7 +319,18 @@ export async function POST(request, { params }) {
     } catch {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
     }
-    const asParam = readAsParam(request, body);
+    let asParam = readAsParam(request, body);
+    if (action === "exchange" && body?.state) {
+      const sessionReaders = {
+        codex: getCodexSessionStatus, xai: getXaiSessionStatus,
+        trae: getTraeSessionStatus, windsurf: getWindsurfSessionStatus, zed: getZedSessionStatus,
+      };
+      const session = sessionReaders[provider]?.(body.state);
+      if (session) asParam = sessionDestination(session, asParam, provider);
+    }
+    if (["exchange", "poll", "manual-code"].includes(action)) {
+      await resolveSavedProviderId(asParam, provider);
+    }
 
     if (action === "register-session") {
       // Register proxy session out of URL query (state) + body (codeVerifier).
@@ -345,10 +338,11 @@ export async function POST(request, { params }) {
       const searchParams = new URL(request.url).searchParams;
       const state = searchParams.get("state") || body?.state;
       if (!state) return NextResponse.json({ error: "Missing state" }, { status: 400 });
+      const saved = await resolveSavedProviderId(asParam, provider);
       let ok = false;
-      if (provider === "trae") ok = registerTraeSession({ state });
-      else if (provider === "windsurf") ok = registerWindsurfSession({ state });
-      else if (provider === "zed") ok = registerZedSession({ state, codeVerifier: body?.codeVerifier, systemId: body?.systemId });
+      if (provider === "trae") ok = registerTraeSession({ state, targetProviderId: saved.provider });
+      else if (provider === "windsurf") ok = registerWindsurfSession({ state, targetProviderId: saved.provider });
+      else if (provider === "zed") ok = registerZedSession({ state, codeVerifier: body?.codeVerifier, systemId: body?.systemId, targetProviderId: saved.provider });
       else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed" }, { status: 400 });
       return NextResponse.json({ success: ok });
     }
@@ -362,7 +356,7 @@ export async function POST(request, { params }) {
         if (!state) {
           return NextResponse.json({ error: "Missing state" }, { status: 400 });
         }
-        const session = getXiaomiMimoSessionStatus(state);
+        const session = getXiaomiMimoSessionStatus(state, true);
         if (!session || session.status !== "done" || !session.result) {
           return NextResponse.json(
             { error: session?.error || "OAuth session not completed. Please restart the login flow." },
@@ -387,7 +381,7 @@ export async function POST(request, { params }) {
         }
 
         try {
-          const saved = await resolveSavedProviderId(asParam, "xiaomi-mimo");
+          const saved = await resolveSavedProviderId(sessionDestination(session, asParam, "xiaomi-mimo"), "xiaomi-mimo");
           const connection = await createProviderConnection({
             provider: saved.provider,
             authType: "oauth",
@@ -422,7 +416,7 @@ export async function POST(request, { params }) {
         } catch (err) {
           clearXiaomiMimoSession(state);
           stopXiaomiMimoProxy();
-          return NextResponse.json({ error: err.message }, { status: 500 });
+          return NextResponse.json({ error: err.message }, { status: err.status === 400 ? 400 : 500 });
         }
       }
 
@@ -444,7 +438,7 @@ export async function POST(request, { params }) {
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
               : null,
             testStatus: "active",
-            ...(saved.providerSpecificData ? { providerSpecificData: saved.providerSpecificData } : {}),
+            ...(saved.providerSpecificData ? { providerSpecificData: { ...tokenData.providerSpecificData, ...saved.providerSpecificData } } : {}),
           });
           return NextResponse.json({
             success: true,
@@ -456,7 +450,7 @@ export async function POST(request, { params }) {
             }
           });
         } catch (err) {
-          return NextResponse.json({ error: err.message }, { status: 500 });
+          return NextResponse.json({ error: err.message }, { status: err.status === 400 ? 400 : 500 });
         }
       }
 
@@ -520,16 +514,20 @@ export async function POST(request, { params }) {
       // Exchange code for tokens (meta carries provider-specific params, e.g. gitlab clientId/baseUrl).
       // systemId (Zed) is merged into meta so the login attempt's own id is
       // used instead of a freshly prepared one. Ignored by other providers.
+      const saved = await resolveSavedProviderId(asParam, provider);
       const tokenData = await exchangeTokens(provider, code, redirectUri, codeVerifier, state, {
         ...(meta || {}),
         ...(systemId ? { systemId } : {}),
       });
 
-      // Save to database
+      // Save to the selected credential pool without losing provider token metadata.
       const connection = await createProviderConnection({
-        provider,
-        authType: "oauth",
         ...tokenData,
+        provider: saved.provider,
+        authType: "oauth",
+        ...(saved.providerSpecificData ? {
+          providerSpecificData: { ...tokenData.providerSpecificData, ...saved.providerSpecificData },
+        } : {}),
         expiresAt: tokenData.expiresIn 
           ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString() 
           : null,
@@ -592,11 +590,11 @@ export async function POST(request, { params }) {
             ? new Date(Date.now() + result.tokens.expiresIn * 1000).toISOString() 
             : null,
           testStatus: "active",
-          ...(saved.providerSpecificData ? { providerSpecificData: saved.providerSpecificData } : {}),
+          ...(saved.providerSpecificData ? { providerSpecificData: { ...result.tokens.providerSpecificData, ...saved.providerSpecificData } } : {}),
         });
 
-        return NextResponse.json({ 
-          success: true, 
+        return NextResponse.json({
+          success: true,
           connection: {
             id: connection.id,
             provider: connection.provider,
@@ -629,6 +627,6 @@ export async function POST(request, { params }) {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {
     console.log("OAuth POST error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: error.status === 400 ? 400 : 500 });
   }
 }
