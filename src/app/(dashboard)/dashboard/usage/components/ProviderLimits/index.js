@@ -128,7 +128,7 @@ function providerLabel(providerId) {
   return AI_PROVIDERS[providerId]?.name || providerId;
 }
 
-// Quota cards show the source provider's icon and a readable duplicate name
+// Quota cards show the source provider's icon and the duplicate's own name
 // (node name like "codex-2"); the raw clone id is never user-facing.
 function quotaConnectionLabel(conn) {
   const runtimeProvider = resolveRuntimeProviderId(conn.provider);
