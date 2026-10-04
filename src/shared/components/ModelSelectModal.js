@@ -8,6 +8,8 @@ import CapacityBadges from "./CapacityBadges";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, getProviderAlias } from "@/shared/constants/providers";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
+import { getModelPickerProvider } from "@/shared/utils/providerModelIdentity";
 
 // Provider order: OAuth first, then Free Tier, then API Key (matches dashboard/providers)
 const PROVIDER_ORDER = [
@@ -88,7 +90,7 @@ export default function ModelSelectModal({
   const filteredActiveProviders = useMemo(() => {
     if (!kindFilter) return activeProviders;
     return activeProviders.filter((p) => {
-      const info = AI_PROVIDERS[p.provider];
+      const info = AI_PROVIDERS[resolveRuntimeProviderId(p.provider)];
       const kinds = info?.serviceKinds || ["llm"];
       return kinds.includes(kindFilter);
     });
@@ -185,8 +187,6 @@ export default function ModelSelectModal({
     if (isOpen) fetchDisabledModels();
   }, [isOpen]);
 
-  const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS }), []);
-
   // Group models by provider with priority order
   const groupedModels = useMemo(() => {
     const groups = {};
@@ -230,8 +230,9 @@ export default function ModelSelectModal({
     });
 
     sortedProviderIds.forEach((providerId) => {
-      const alias = getProviderAlias(providerId);
-      const providerInfo = allProviders[providerId] || { name: providerId, color: "#666" };
+      const connection = activeProviders.find((p) => p.provider === providerId);
+      const node = providerNodes.find((n) => n.id === providerId);
+      const { alias, storageAlias, providerInfo } = getModelPickerProvider(providerId, connection, node);
       const isCustomProvider = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
 
       // For provider-as-model kinds (webSearch/webFetch): emit a single entry where value === providerId
@@ -247,14 +248,13 @@ export default function ModelSelectModal({
 
       if (providerInfo.passthroughModels) {
         const aliasModels = Object.entries(modelAliases)
-          .filter(([, fullModel]) => fullModel.startsWith(`${alias}/`))
-          .map(([aliasName, fullModel]) => ({
-            id: fullModel.replace(`${alias}/`, ""),
-            name: aliasName,
-            value: fullModel,
-          }));
+          .filter(([, fullModel]) => fullModel.startsWith(`${storageAlias}/`) || fullModel.startsWith(`${alias}/`))
+          .map(([aliasName, fullModel]) => {
+            const id = fullModel.slice(fullModel.indexOf("/") + 1);
+            return { id, name: aliasName, value: `${alias}/${id}` };
+          });
         const customRegisteredModels = customModels
-          .filter((m) => m.providerAlias === alias)
+          .filter((m) => m.providerAlias === storageAlias || m.providerAlias === alias)
           .map((m) => ({
             id: m.id,
             name: m.name || m.id,
@@ -362,20 +362,20 @@ export default function ModelSelectModal({
         // Otherwise only show aliases where aliasName === modelId ("Add Model" button pattern)
         const hasHardcoded = hardcodedModels.length > 0;
         const customAliasModels = Object.entries(modelAliases)
-          .filter(([aliasName, fullModel]) =>
-            fullModel.startsWith(`${alias}/`) &&
-            (hasHardcoded ? aliasName === fullModel.replace(`${alias}/`, "") : true) &&
-            !hardcodedIds.has(fullModel.replace(`${alias}/`, ""))
-          )
+          .filter(([aliasName, fullModel]) => {
+            if (!fullModel.startsWith(`${storageAlias}/`) && !fullModel.startsWith(`${alias}/`)) return false;
+            const modelId = fullModel.slice(fullModel.indexOf("/") + 1);
+            return (!hasHardcoded || aliasName === modelId) && !hardcodedIds.has(modelId);
+          })
           .map(([aliasName, fullModel]) => {
-            const modelId = fullModel.replace(`${alias}/`, "");
-            return { id: modelId, name: aliasName, value: fullModel, isCustom: true };
+            const modelId = fullModel.slice(fullModel.indexOf("/") + 1);
+            return { id: modelId, name: aliasName, value: `${alias}/${modelId}`, isCustom: true };
           });
 
         // Custom models registered via /api/models/custom (provider "Add Model" button)
         const customAliasIds = new Set(customAliasModels.map((m) => m.id));
         const customRegisteredModels = customModels
-          .filter((m) => m.providerAlias === alias && !hardcodedIds.has(m.id) && !customAliasIds.has(m.id))
+          .filter((m) => (m.providerAlias === storageAlias || m.providerAlias === alias) && !hardcodedIds.has(m.id) && !customAliasIds.has(m.id))
           .map((m) => ({ id: m.id, name: m.name || m.id, value: `${alias}/${m.id}`, isCustom: true }));
 
         const merged = [
@@ -424,7 +424,7 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, cursorModels, clineModels, clinepassModels]);
+  }, [filteredActiveProviders, modelAliases, providerNodes, customModels, disabledModels, kindFilter, activeProviders, cursorModels, clineModels, clinepassModels, zedModels]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {
@@ -565,7 +565,7 @@ export default function ModelSelectModal({
             {/* Provider header */}
             <div className="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5">
               <ProviderIcon
-                src={`/providers/${providerId}.png`}
+                src={`/providers/${resolveRuntimeProviderId(providerId)}.png`}
                 alt={group.name}
                 size={14}
                 fallbackText={(group.name || providerId).slice(0, 2).toUpperCase()}
