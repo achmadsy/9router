@@ -6,8 +6,9 @@ import {
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
-import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
+import { getProviderConnections, getCombos, getCustomModels, getModelAliases, getProviderNodes } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { resolveRuntimeProviderId, isProviderCloneId } from "open-sse/providers/clones.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels, routableQoderModels } from "open-sse/services/qoderModels.js";
@@ -365,6 +366,17 @@ export async function buildModelsList(kindFilter, options = {}) {
     }
   }
 
+  // Duplicates publish models under their own node prefix (e.g. cx-dup/) so
+  // clients can target the clone's isolated credential pool; the model catalog
+  // itself still comes from the runtime (base) provider.
+  const clonePrefixById = new Map();
+  try {
+    const cloneNodes = await getProviderNodes({ type: "provider-clone" });
+    for (const node of cloneNodes) {
+      if (node?.id && node.prefix) clonePrefixById.set(node.id, node.prefix);
+    }
+  } catch { /* fail-open: clones fall back to provider-id prefix */ }
+
   const models = [];
   const combosByName = new Map(
     combos.filter((c) => typeof c?.name === "string").map((c) => [c.name, c]),
@@ -434,9 +446,10 @@ export async function buildModelsList(kindFilter, options = {}) {
     for (const [providerId, conn] of activeConnectionByProvider.entries()) {
       if (!providerMatchesKinds(providerId, kindFilter)) continue;
 
-      const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+      const staticAlias = PROVIDER_ID_TO_ALIAS[resolveRuntimeProviderId(providerId)] || providerId;
       const outputAlias = (
-        conn?.providerSpecificData?.prefix
+        clonePrefixById.get(providerId)
+        || conn?.providerSpecificData?.prefix
         || getProviderAlias(providerId)
         || staticAlias
       ).trim();

@@ -4,6 +4,7 @@ import { parseWaitHeaderCooldown } from "../utils/retryAfter.js";
 import { transcribeGeminiLive } from "./geminiLiveStt.js";
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 
 // Build auth headers from sttConfig + token
 function buildAuthHeaders(cfg, token) {
@@ -172,7 +173,7 @@ function jsonResponse(obj) {
 // Dispatch reads the marker — never a hardcoded model id — so new realtime
 // providers extend sttCore through data, not code.
 function resolveModelTransport(provider, model) {
-  const key = PROVIDER_ID_TO_ALIAS[provider] || provider;
+  const key = PROVIDER_ID_TO_ALIAS[resolveRuntimeProviderId(provider)] || provider;
   const models = PROVIDER_MODELS[key] || PROVIDER_MODELS[provider];
   if (!Array.isArray(models)) return null;
   const entry = models.find((m) => m && m.id === model && (m.kind || "llm") === "stt");

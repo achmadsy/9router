@@ -6,6 +6,7 @@ import { modelQuotaFamily, modelStrip, modelTargetFormat, modelSupportedFormats,
 import { CODEX_REVIEW_SUFFIX, isMuseSparkModel, opencodeFamilyFormats } from "../providers/models/helpers.js";
 import { FORMATS } from "../translator/formats.js";
 import { stripRecognizedContextSuffix } from "../services/model.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 import { getCustomModelTargetFormat } from "../providers/customModelFormats.js";
 export { PROVIDER_MODELS };
 
@@ -134,7 +135,9 @@ export const PROVIDER_ID_TO_ALIAS = Object.fromEntries(
 );
 
 export function getModelsByProviderId(providerId) {
-  const alias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+  // Duplicates inherit the base provider's model catalog (runtime identity).
+  const runtimeId = resolveRuntimeProviderId(providerId);
+  const alias = PROVIDER_ID_TO_ALIAS[runtimeId] || runtimeId;
   return PROVIDER_MODELS[alias] || [];
 }
 

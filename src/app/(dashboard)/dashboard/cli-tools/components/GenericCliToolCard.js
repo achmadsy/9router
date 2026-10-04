@@ -202,7 +202,11 @@ export default function GenericCliToolCard({
   const handleAddAllActiveModels = () => {
     const allModels = [];
     activeProviders.forEach((conn) => {
-      const alias = PROVIDER_ID_TO_ALIAS[conn.provider] || conn.provider;
+      // Duplicates route through their own node prefix so model picks hit the
+      // clone's isolated credential pool, not the base provider's accounts.
+      const alias = conn.providerSpecificData?.prefix
+        || PROVIDER_ID_TO_ALIAS[conn.provider]
+        || conn.provider;
       const providerModels = getModelsByProviderId(conn.provider);
       providerModels.forEach((m) => {
         const val = `${alias}/${m.id}`;
