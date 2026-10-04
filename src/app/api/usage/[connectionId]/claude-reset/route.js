@@ -5,6 +5,7 @@ import { getProviderConnectionById } from "@/lib/localDb";
 import { consumeClaudeResetGrant } from "open-sse/services/usage.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "../route.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 // Spend one free Claude "limit reset" grant (irreversible)
 export async function POST(request, { params }) {
@@ -14,7 +15,7 @@ export async function POST(request, { params }) {
 
     let connection = await getProviderConnectionById(connectionId);
     if (!connection) return Response.json({ error: "Connection not found" }, { status: 404 });
-    if (connection.provider !== "claude" || connection.authType !== "oauth") {
+    if (resolveRuntimeProviderId(connection.provider) !== "claude" || connection.authType !== "oauth") {
       return Response.json({ error: "Limit reset is only available for Claude OAuth connections." }, { status: 400 });
     }
 

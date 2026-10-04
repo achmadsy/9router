@@ -1,5 +1,6 @@
 import { API_KEY_ACCESS_MODE, API_KEY_TARGET_TYPE } from "./constants.js";
 import { buildTargetIdSet } from "./policy.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 /**
  * Project which providers/models a restricted API key can reach, for the
@@ -105,11 +106,12 @@ export function connectionInScope(scope, connection) {
   if (!scope) return true;
   if (!connection) return false;
   if (scope.isEmpty) return false;
-  if (scope.providers.has(connection.provider)) return true;
+  const runtimeProvider = resolveRuntimeProviderId(connection.provider);
+  if (scope.providers.has(connection.provider) || scope.providers.has(runtimeProvider)) return true;
   // A provider is reachable if any of its exposed models is in modelIds.
-  const prefix = `${connection.provider}/`;
+  const prefixes = [`${connection.provider}/`, `${runtimeProvider}/`];
   for (const mid of scope.modelIds) {
-    if (mid.startsWith(prefix) || mid === connection.provider) return true;
+    if (prefixes.some((prefix) => mid.startsWith(prefix)) || mid === connection.provider || mid === runtimeProvider) return true;
   }
   return false;
 }

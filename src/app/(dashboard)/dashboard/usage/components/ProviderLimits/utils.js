@@ -1,4 +1,5 @@
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 export const QUOTA_CACHE_KEY = "quotaCacheData";
@@ -54,7 +55,7 @@ export function sortVisibleConnections(
   providerFilter,
   quotaSortMode,
 ) {
-  if (providerFilter === "codex" && quotaSortMode !== "default") {
+  if (resolveRuntimeProviderId(providerFilter) === "codex" && quotaSortMode !== "default") {
     return [...connections].sort((a, b) => {
       const remainingA = getConnectionQuotaRemaining(a, quotaData);
       const remainingB = getConnectionQuotaRemaining(b, quotaData);
@@ -356,10 +357,11 @@ export function getHiddenQuotaRows(provider, quotas = [], quotaVisibility = {}) 
 export function parseQuotaData(provider, data) {
   if (!data || typeof data !== "object") return [];
 
+  const runtimeProvider = resolveRuntimeProviderId(provider);
   const normalizedQuotas = [];
 
   try {
-    switch (provider.toLowerCase()) {
+    switch (runtimeProvider.toLowerCase()) {
       case "github":
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([name, quota]) => {
@@ -684,7 +686,7 @@ export function parseQuotaData(provider, data) {
     return [];
   }
 
-  if (provider?.toLowerCase() === "claude") {
+  if (runtimeProvider?.toLowerCase() === "claude") {
     const CLAUDE_QUOTA_ORDER = {
       "session (5h)": 0,
       "weekly (7d)": 1,
@@ -697,7 +699,7 @@ export function parseQuotaData(provider, data) {
   }
 
   // Sort quotas according to PROVIDER_MODELS order
-  const modelOrder = getModelsByProviderId(provider);
+  const modelOrder = getModelsByProviderId(runtimeProvider);
   if (modelOrder.length > 0) {
     const orderMap = new Map(modelOrder.map((m, i) => [m.id, i]));
     

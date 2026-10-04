@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getProviderConnections, getApiKeyById } from "@/lib/localDb";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
-import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { isUsageApiKeyProvider, isUsageSupportedProvider, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import { resolveQuotaScope, connectionInScope } from "@/lib/apiKeys/quotaScope.js";
 
 const SAFE_FIELDS = [
@@ -45,8 +46,8 @@ function sanitize(c) {
 }
 
 function isUsageEligible(connection) {
-  return USAGE_SUPPORTED_PROVIDERS.includes(connection.provider) && (
-    connection.authType === "oauth" || USAGE_APIKEY_PROVIDERS.includes(connection.provider)
+  return isUsageSupportedProvider(connection.provider) && (
+    connection.authType === "oauth" || isUsageApiKeyProvider(connection.provider)
   );
 }
 
@@ -60,8 +61,8 @@ function sortConnections(connections, sort) {
 
   if (sort === "provider") {
     return list.sort((a, b) => {
-      const orderA = USAGE_SUPPORTED_PROVIDERS.indexOf(a.provider);
-      const orderB = USAGE_SUPPORTED_PROVIDERS.indexOf(b.provider);
+      const orderA = USAGE_SUPPORTED_PROVIDERS.indexOf(resolveRuntimeProviderId(a.provider));
+      const orderB = USAGE_SUPPORTED_PROVIDERS.indexOf(resolveRuntimeProviderId(b.provider));
       if (orderA !== orderB) return orderA - orderB;
       return a.provider.localeCompare(b.provider);
     });

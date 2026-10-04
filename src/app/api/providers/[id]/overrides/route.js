@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { resolveProviderAlias } from "open-sse/services/model.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 export const dynamic = "force-dynamic";
 
@@ -75,12 +76,13 @@ export async function GET(request, { params }) {
     const { id } = await params;
     // URL may use an alias (gcli, cc…) — key everything by canonical registry id
     const canonical = resolveProviderAlias(id);
+    const runtimeProvider = resolveRuntimeProviderId(canonical);
     const override = (await readOverrides())[canonical] || {};
-    // Built-in headers come straight from the registry transport — single source of
-    // truth, so the UI pre-fills exactly what this provider sends upstream.
+    // Built-in headers come straight from the base registry transport while
+    // clone-specific overrides remain stored under the exact clone id.
     return NextResponse.json({
       headers: override.headers || {},
-      builtinHeaders: PROVIDERS[canonical]?.headers || {},
+      builtinHeaders: PROVIDERS[runtimeProvider]?.headers || {},
     });
   } catch (error) {
     console.log("Error getting provider overrides:", error);

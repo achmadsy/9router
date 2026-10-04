@@ -5,6 +5,7 @@ import { getProviderConnectionById } from "@/lib/localDb";
 import { consumeCodexRateLimitResetCredit, getCodexRateLimitResetCredits } from "open-sse/services/usage.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "../route.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 const AUTH_EXPIRED_PATTERNS = ["expired", "authentication", "unauthorized", "401", "re-authorize"];
 
@@ -53,7 +54,7 @@ async function getCodexConnection(connectionId) {
     return { response: Response.json({ error: "Connection not found" }, { status: 404 }) };
   }
 
-  if (connection.provider !== "codex") {
+  if (resolveRuntimeProviderId(connection.provider) !== "codex") {
     return { response: Response.json({ error: "Codex reset credits are only available for Codex connections." }, { status: 400 }) };
   }
 

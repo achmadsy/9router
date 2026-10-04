@@ -3,6 +3,7 @@ import { resolveConnectionProxyConfig, pickProxyPoolId, supportsNormalProxyOnly 
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
 import {
   resolveSelfAwareDecision, getSelfAwarePolicyMs, upsertSelfAwareCooldown,
@@ -45,8 +46,9 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
   try {
     await currentMutex;
 
-    // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
+    // Resolve alias to the exact credential pool, then derive runtime behavior separately.
     const providerId = resolveProviderId(provider);
+    const runtimeProviderId = resolveRuntimeProviderId(providerId);
 
     // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
     if (FREE_PROVIDERS[providerId]?.noAuth) {
@@ -69,7 +71,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
 
       // Self-Aware OpenCode: exclude proxy identities with active cooldowns
       let blockedMap = new Map();
-      if (providerId === "opencode") {
+      if (runtimeProviderId === "opencode") {
         const candidates = poolIds.length > 0 ? poolIds : (pickedId ? [pickedId] : ["direct"]);
         try {
           blockedMap = await getActiveProxyCooldownMap("opencode", model || "", candidates);
@@ -107,7 +109,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       }
 
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
-      const proxyScopeId = providerId === "opencode"
+      const proxyScopeId = runtimeProviderId === "opencode"
         ? (resolvedProxy.proxyPoolId || pickedId || "direct")
         : undefined;
       return {
@@ -142,7 +144,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     }
 
     // Antigravity quota cache is lazy: only populated after that account returns 409/429.
-    const isAntigravity = providerId === "antigravity";
+    const isAntigravity = runtimeProviderId === "antigravity";
     const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
@@ -150,7 +152,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
       const enabled = c.providerSpecificData?.enabledModels;
-      if (providerId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
+      if (runtimeProviderId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
       // Antigravity: skip if live quota exhausted for this model
       if (isAntigravity && model && antigravityQuotaCache) {
         const quota = antigravityQuotaCache.get(c.id)?.[model];
@@ -259,7 +261,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     }
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {}, {
-      excludeRelay: supportsNormalProxyOnly(providerId),
+      excludeRelay: supportsNormalProxyOnly(runtimeProviderId),
     });
 
     return {

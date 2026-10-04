@@ -179,7 +179,7 @@ export default function ProviderDetailPage() {
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[cloneBaseId] || authModes.includes("apikey") || isCloneNode;
   const isFreeNoAuth = !!FREE_PROVIDERS[cloneBaseId]?.noAuth;
   const staticModels = getModelsByProviderId(isCloneNode ? cloneBaseId : providerId);
-  const models = (cloneBaseId === "cursor" || providerId === "zed") && liveModels.length > 0
+  const models = (cloneBaseId === "cursor" || cloneBaseId === "zed") && liveModels.length > 0
     ? liveModels
     : staticModels;
   const providerAlias = isCloneNode
@@ -187,24 +187,24 @@ export default function ProviderDetailPage() {
     : getProviderAlias(providerId);
   // GLM captcha needs normal HTTP/SOCKS only — hide Vercel/CF/Deno relays
   const selectableProxyPools =
-    providerId === "glm"
+    cloneBaseId === "glm"
       ? proxyPools.filter((p) => !RELAY_POOL_TYPES_CLIENT.has(String(p.type || "").toLowerCase()))
       : proxyPools;
 
-  const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
-  const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
+  const isOpenAICompatible = isOpenAICompatibleProvider(cloneBaseId);
+  const isAnthropicCompatible = isAnthropicCompatibleProvider(cloneBaseId);
   const isCompatible = isOpenAICompatible || isAnthropicCompatible;
   const hasDualAuthModes = !isCompatible && isOAuth && supportsApiKeyAuth;
   const oauthConnectionLabel =
-    providerId === "xai" ? "Grok Build OAuth"
-    : providerId === "grok-cli" ? "Grok CLI Device Login"
-    : providerId === "kimi" ? "Kimi Coding OAuth"
-    : providerId === "glm" ? "Z.AI OAuth"
+    cloneBaseId === "xai" ? "Grok Build OAuth"
+    : cloneBaseId === "grok-cli" ? "Grok CLI Device Login"
+    : cloneBaseId === "kimi" ? "Kimi Coding OAuth"
+    : cloneBaseId === "glm" ? "Z.AI OAuth"
     : "OAuth";
   const apiKeyConnectionLabel =
-    providerId === "xai" ? "xAI API Key"
-    : providerId === "kimi" ? "Kimi API Key"
-    : (providerId === "qoder" || providerId === "qoder-cn") ? "PAT"
+    cloneBaseId === "xai" ? "xAI API Key"
+    : cloneBaseId === "kimi" ? "Kimi API Key"
+    : (cloneBaseId === "qoder" || cloneBaseId === "qoder-cn") ? "PAT"
     : "API Key";
   // Resolve suffix "(level)" for a model when a thinking level is picked and the model supports it.
   const resolveThinkingSuffix = (modelId) => {
@@ -327,12 +327,12 @@ export default function ProviderDetailPage() {
 
   // Fetch free models from Kilo API for kilocode provider
   useEffect(() => {
-    if (providerId !== "kilocode") return;
+    if (cloneBaseId !== "kilocode") return;
     fetch("/api/providers/kilo/free-models")
       .then((res) => res.json())
       .then((data) => { if (data.models?.length) setKiloFreeModels(data.models); })
       .catch(() => {});
-  }, [providerId]);
+  }, [cloneBaseId]);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -362,7 +362,7 @@ export default function ProviderDetailPage() {
       // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
-      const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
+      const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[cloneBaseId];
       const apCfg = autoPingSettingsKey ? settingsData[autoPingSettingsKey] || {} : {};
       setAutoPing({ enabled: apCfg.enabled === true, connections: apCfg.connections || {} });
       if (nodesRes.ok) {
@@ -388,6 +388,7 @@ export default function ProviderDetailPage() {
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId, isCompatible]);
 
   const handleUpdateNode = async (formData) => {
@@ -509,7 +510,7 @@ export default function ProviderDetailPage() {
   // the provider id or connection list changes — no polling, no loop.
   // Cursor path is statement-identical to before; zed adds error surfacing.
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
+    const isLiveCatalog = cloneBaseId === "cursor" || cloneBaseId === "zed";
     if (!isLiveCatalog) {
       setLiveModels([]);
       return;
@@ -518,42 +519,42 @@ export default function ProviderDetailPage() {
     const connection = connections.find((item) => item.isActive !== false);
     if (!connection?.id) {
       setLiveModels([]);
-      if (providerId === "zed") setLiveModelsError(null);
+      if (cloneBaseId === "zed") setLiveModelsError(null);
       return;
     }
 
     let cancelled = false;
-    if (providerId === "zed") setLiveModelsError(null);
+    if (cloneBaseId === "zed") setLiveModelsError(null);
     fetch(`/api/providers/${connection.id}/models`, { cache: "no-store" })
       .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
       .then(({ ok, data }) => {
         if (cancelled) return;
         if (ok && Array.isArray(data?.models) && data.models.length > 0) {
           setLiveModels(data.models);
-          if (providerId === "zed" && data?.warning) setLiveModelsError(data.warning);
+          if (cloneBaseId === "zed" && data?.warning) setLiveModelsError(data.warning);
           return;
         }
-        if (providerId === "zed") {
+        if (cloneBaseId === "zed") {
           setLiveModels([]);
           setLiveModelsError(data?.warning || data?.error || "Zed returned no live models.");
         }
       })
       .catch(() => {
-        if (!cancelled && providerId === "zed") {
+        if (!cancelled && cloneBaseId === "zed") {
           setLiveModels([]);
           setLiveModelsError("Failed to reach the Zed model catalog.");
         }
       });
 
     return () => { cancelled = true; };
-  }, [providerId, connections]);
+  }, [cloneBaseId, connections]);
 
   // Fetch suggested models from provider's public API (if configured)
   useEffect(() => {
-    const fetcher = (OAUTH_PROVIDERS[providerId] || APIKEY_PROVIDERS[providerId] || FREE_PROVIDERS[providerId] || FREE_TIER_PROVIDERS[providerId])?.modelsFetcher;
+    const fetcher = (OAUTH_PROVIDERS[cloneBaseId] || APIKEY_PROVIDERS[cloneBaseId] || FREE_PROVIDERS[cloneBaseId] || FREE_TIER_PROVIDERS[cloneBaseId])?.modelsFetcher;
     if (!fetcher) return;
     fetchSuggestedModels(fetcher).then(setSuggestedModels);
-  }, [providerId]);
+  }, [cloneBaseId]);
 
   const handleSetAlias = async (modelId, alias, providerAliasOverride = providerAlias) => {
     const fullModel = `${providerAliasOverride}/${modelId}`;
@@ -1098,10 +1099,10 @@ export default function ProviderDetailPage() {
                 onMoveUp={() => handleSwapPriority(index, index - 1)}
                 onMoveDown={() => handleSwapPriority(index, index + 1)}
                 onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
-                autoPing={AUTO_PING_SETTINGS_KEYS[providerId] && conn.authType === "oauth" ? {
+                autoPing={AUTO_PING_SETTINGS_KEYS[cloneBaseId] && conn.authType === "oauth" ? {
                   on: autoPing.connections[conn.id] === true,
                   onToggle: (on) => handleAutoPingConnection(conn.id, on),
-                  provider: providerId,
+                  provider: cloneBaseId,
                 } : null}
                 onUpdateProxy={async (proxyPoolId) => {
                   try {
@@ -1335,7 +1336,7 @@ export default function ProviderDetailPage() {
         </button>
 
         {/* Import Qoder models button — only show for qoder/qoder-cn provider */}
-        {(providerId === "qoder" || providerId === "qoder-cn") && connections.some((conn) => conn.isActive !== false) && (
+        {(cloneBaseId === "qoder" || cloneBaseId === "qoder-cn") && connections.some((conn) => conn.isActive !== false) && (
           <button
             onClick={handleImportQoderModels}
             disabled={importingQoderModels}
@@ -1349,7 +1350,7 @@ export default function ProviderDetailPage() {
         )}
 
         {/* Import Cline /models catalog button — only show for cline and clinepass providers */}
-        {(providerId === "cline" || providerId === "clinepass") && connections.some((conn) => conn.isActive !== false) && (
+        {(cloneBaseId === "cline" || cloneBaseId === "clinepass") && connections.some((conn) => conn.isActive !== false) && (
           <button
             onClick={handleImportClineModels}
             disabled={importingClineModels}
@@ -1741,7 +1742,7 @@ export default function ProviderDetailPage() {
                   </>
                 ) : (
                   <>
-                    {!isCompatible && providerId === "iflow" && (
+                    {!isCompatible && cloneBaseId === "iflow" && (
                       <Button size="sm" icon="cookie" variant="secondary" onClick={() => setShowIFlowCookieModal(true)}>
                         Cookie
                       </Button>
@@ -1761,7 +1762,7 @@ export default function ProviderDetailPage() {
                       icon="add"
                       onClick={triggerAddConnection}
                     >
-                      {isCompatible ? "Add API Key" : (providerId === "iflow" ? "OAuth" : "Add Connection")}
+                      {isCompatible ? "Add API Key" : (cloneBaseId === "iflow" ? "OAuth" : "Add Connection")}
                     </Button>
                   </>
                 )}
@@ -1948,7 +1949,7 @@ export default function ProviderDetailPage() {
             })()}
           </div>
         )}
-        {providerId === "zed" && !!liveModelsError && (
+        {cloneBaseId === "zed" && !!liveModelsError && (
           <p className="text-xs text-red-500 mb-3 break-words">{liveModelsError}</p>
         )}
         {renderModelsSection()}

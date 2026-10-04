@@ -1,5 +1,6 @@
 // Provider definitions
 import REGISTRY from "open-sse/providers/registry/index.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import { RISK_NOTICE } from "@/shared/constants/providersDisplay.js";
 
 const MEDIA_ENTRY_KEYS = [
@@ -164,3 +165,11 @@ export const USAGE_SUPPORTED_PROVIDERS = REGISTRY
 export const USAGE_APIKEY_PROVIDERS = REGISTRY
   .filter(r => r.features?.usageApikey)
   .map(r => r.id);
+
+export function isUsageSupportedProvider(providerId) {
+  return USAGE_SUPPORTED_PROVIDERS.includes(resolveRuntimeProviderId(providerId));
+}
+
+export function isUsageApiKeyProvider(providerId) {
+  return USAGE_APIKEY_PROVIDERS.includes(resolveRuntimeProviderId(providerId));
+}

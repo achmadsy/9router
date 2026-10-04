@@ -4,6 +4,7 @@ import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/provide
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind } from "@/app/api/models/test/ping";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 /**
  * POST /api/providers/[id]/test-models
@@ -19,8 +20,9 @@ export async function POST(request, { params }) {
     }
 
     const providerId = connection.provider;
-    const isCompatible = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
-    const alias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+    const runtimeProvider = resolveRuntimeProviderId(providerId);
+    const isCompatible = isOpenAICompatibleProvider(runtimeProvider) || isAnthropicCompatibleProvider(runtimeProvider);
+    const alias = PROVIDER_ID_TO_ALIAS[runtimeProvider] || runtimeProvider;
 
     let models = getProviderModels(alias);
 

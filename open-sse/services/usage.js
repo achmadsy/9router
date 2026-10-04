@@ -23,6 +23,7 @@ import { getFreebuffUsage } from "./usage/freebuff.js";
 import { resolveQoderCredentials } from "./qoderModels.js";
 import { getGlmUsage } from "./usage/glm.js";
 import { getCommandCodeUsage } from "./usage/commandcode.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 import {
   getIflowUsage,
   getOllamaUsage,
@@ -78,15 +79,16 @@ async function getQoderUsageFor(c) {
 
 export async function getUsageForProvider(connection, proxyOptions = null, options = {}) {
   const { provider, accessToken, apiKey, providerSpecificData, projectId } = connection;
+  const runtimeProvider = resolveRuntimeProviderId(provider);
   const providerDataWithProjectId = {
     ...(providerSpecificData || {}),
     ...(projectId ? { projectId } : {}),
   };
 
-  const handler = USAGE_HANDLERS[provider];
+  const handler = USAGE_HANDLERS[runtimeProvider];
   if (!handler) return { message: `Usage API not implemented for ${provider}` };
   return await handler({
-    provider,
+    provider: runtimeProvider,
     accessToken,
     apiKey,
     providerSpecificData,

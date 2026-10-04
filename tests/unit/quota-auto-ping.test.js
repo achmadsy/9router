@@ -4,6 +4,7 @@ vi.mock("open-sse/index.js", () => ({}), { virtual: true });
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: vi.fn(),
+  getProviderConnectionById: vi.fn(),
   getProviderConnections: vi.fn(),
   updateProviderConnection: vi.fn(),
 }));
@@ -93,6 +94,14 @@ describe("quota auto-ping", () => {
 
     deps = {
       getSettings: vi.fn(),
+      getProviderConnectionById: vi.fn(async (id) => {
+        for (const provider of ["codex", "claude"]) {
+          const conns = await deps.getProviderConnections({ provider });
+          const match = conns?.find((c) => c.id === id);
+          if (match) return match;
+        }
+        return null;
+      }),
       getProviderConnections: vi.fn(),
       updateProviderConnection: vi.fn(),
       resolveConnectionProxyConfig: vi.fn().mockResolvedValue({}),
@@ -115,7 +124,7 @@ describe("quota auto-ping", () => {
 
     await runQuotaAutoPingTick(deps, state);
 
-    expect(deps.getProviderConnections).not.toHaveBeenCalled();
+    expect(deps.getProviderConnectionById).not.toHaveBeenCalled();
     expect(deps.proxyAwareFetch).not.toHaveBeenCalled();
   });
 
@@ -368,5 +377,88 @@ describe("quota auto-ping", () => {
       max_tokens: 1,
       messages: [{ role: "user", content: "hi" }],
     });
+  });
+
+  it("pings an opted-in Codex clone account using Codex executor and clone credentials", async () => {
+    const cloneConnection = {
+      id: "conn-codex-clone-1",
+      provider: "codex-clone-abc",
+      authType: "oauth",
+      accessToken: "clone-token-123",
+      isActive: true,
+      providerSpecificData: { baseProvider: "codex", prefix: "codex-2" },
+    };
+    deps.getSettings.mockResolvedValue({
+      codexAutoPing: { connections: { "conn-codex-clone-1": true } },
+    });
+    deps.getProviderConnectionById.mockImplementation(async (id) =>
+      id === cloneConnection.id ? cloneConnection : null,
+    );
+    state.resetCache["codex:conn-codex-clone-1"] = "2026-01-01T16:59:00.000Z";
+    getCodexUsage.mockResolvedValue({
+      quotas: {
+        session: {
+          resetAt: "2026-01-01T17:00:00.000Z",
+          used: 10,
+          total: 100,
+          remaining: 90,
+        },
+      },
+    });
+
+    await runQuotaAutoPingTick(deps, state);
+
+    expect(deps.getExecutor).toHaveBeenCalledWith("codex");
+    const codexExecutor = deps.getExecutor.mock.results[0].value;
+    expect(codexExecutor.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credentials: expect.objectContaining({
+          accessToken: "clone-token-123",
+          connectionId: "conn-codex-clone-1",
+        }),
+      }),
+    );
+    expect(deps.updateProviderConnection).toHaveBeenCalledWith(
+      "conn-codex-clone-1",
+      expect.objectContaining({
+        lastPingedResetAt: "2026-01-01T17:00:00.000Z",
+      }),
+    );
+  });
+
+  it("does not ping clone account when only base provider account is enabled", async () => {
+    const baseConn = { id: "conn-base-1", provider: "codex", authType: "oauth", accessToken: "base-token", isActive: true };
+    const cloneConn = { id: "conn-clone-1", provider: "codex-clone-abc", authType: "oauth", accessToken: "clone-token", isActive: true };
+    deps.getSettings.mockResolvedValue({
+      codexAutoPing: { connections: { "conn-base-1": true, "conn-clone-1": false } },
+    });
+    deps.getProviderConnectionById.mockImplementation(async (id) => {
+      if (id === "conn-base-1") return baseConn;
+      if (id === "conn-clone-1") return cloneConn;
+      return null;
+    });
+
+    state.resetCache["codex:conn-base-1"] = "2026-01-01T17:00:00.000Z";
+    getCodexUsage.mockResolvedValue({
+      quotas: { session: { resetAt: "2026-01-01T17:00:00.000Z", used: 10, total: 100, remaining: 90 } },
+    });
+
+    await runQuotaAutoPingTick(deps, state);
+
+    expect(deps.getProviderConnectionById).toHaveBeenCalledWith("conn-base-1");
+    expect(deps.getProviderConnectionById).not.toHaveBeenCalledWith("conn-clone-1");
+  });
+
+  it("skips inactive clone account even if enabled in settings", async () => {
+    const cloneConn = { id: "conn-clone-inactive", provider: "codex-clone-abc", authType: "oauth", accessToken: "clone-token", isActive: false };
+    deps.getSettings.mockResolvedValue({
+      codexAutoPing: { connections: { "conn-clone-inactive": true } },
+    });
+    deps.getProviderConnectionById.mockResolvedValue(cloneConn);
+
+    await runQuotaAutoPingTick(deps, state);
+
+    expect(getCodexUsage).not.toHaveBeenCalled();
+    expect(deps.updateProviderConnection).not.toHaveBeenCalled();
   });
 });

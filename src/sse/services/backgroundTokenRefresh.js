@@ -4,6 +4,7 @@
 import * as log from "../utils/logger.js";
 import { getRefreshLeadMs } from "open-sse/services/tokenRefresh.js";
 import { getCredentialExpiryMs } from "open-sse/services/oauthCredentialManager.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 /** Refresh when expiry is within 30 minutes (or the provider on-request lead, whichever larger). */
 export const BACKGROUND_REFRESH_LEAD_MS = 30 * 60 * 1000;
@@ -59,7 +60,7 @@ export function selectConnectionsNeedingRefresh(connections, nowMs = Date.now())
     const expiresAtMs = getCredentialExpiryMs(conn);
     if (expiresAtMs === null) continue;
 
-    const providerLead = getRefreshLeadMs(conn.provider);
+    const providerLead = getRefreshLeadMs(resolveRuntimeProviderId(conn.provider));
     const leadMs = Math.max(
       Number.isFinite(providerLead) ? providerLead : 0,
       BACKGROUND_REFRESH_LEAD_MS
@@ -123,7 +124,7 @@ export async function runBackgroundTokenRefreshTick(deps = {}) {
 
       // Sequential delay between accounts to prevent bursting upstream providers (especially Google Cloud)
       if (i < due.length - 1) {
-        const isSensitive = SENSITIVE_PROVIDERS.has(conn.provider);
+        const isSensitive = SENSITIVE_PROVIDERS.has(resolveRuntimeProviderId(conn.provider));
         const baseDelay = isSensitive ? baseSensitiveDelay : baseNormalDelay;
         const jitter = isSensitive ? Math.floor(Math.random() * 4000) : 200;
         await sleep(baseDelay + jitter);

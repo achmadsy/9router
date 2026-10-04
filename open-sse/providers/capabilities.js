@@ -39,6 +39,7 @@ import { matchPattern } from "./pricing.js";
 import { looksLikeVisionModel } from "./visionPatterns.js";
 import { getModelCapabilityOverride } from "./modelCapabilityOverrides.js";
 import { stripRecognizedContextSuffix } from "../services/model.js";
+import { resolveRuntimeProviderId } from "./clones.js";
 
 /**
  * Safe floor — every resolved result is merged over this so consumers
@@ -626,13 +627,14 @@ function isCommandCodeTextOnly(model) {
 function resolveCapabilitiesForModel(provider, model) {
   if (!model) return { ...DEFAULT_CAPABILITIES };
 
+  const runtimeProvider = resolveRuntimeProviderId(provider);
   // Canonical exact lookup strips vendor prefix: "anthropic/claude-opus-4.7" -> "claude-opus-4.7".
   const baseModel = model.includes("/") ? model.split("/").pop() : model;
   const normalizedModel = stripRecognizedContextSuffix(baseModel);
 
   // CommandCode wire is /alpha/generate for every model. Family patterns
   // (deepseek-v4 → thinkingFormat:deepseek, vision:false) must not win here.
-  if (provider === "commandcode" || provider === "cmc") {
+  if (runtimeProvider === "commandcode" || runtimeProvider === "cmc") {
     const providerCaps = PROVIDER_CAPABILITIES.commandcode;
     if (providerCaps?.[model]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[model] };
     if (providerCaps?.[baseModel]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[baseModel] };
@@ -648,8 +650,8 @@ function resolveCapabilitiesForModel(provider, model) {
   }
 
   // 1. Provider-specific override
-  if (provider) {
-    const providerCaps = PROVIDER_CAPABILITIES[provider];
+  if (runtimeProvider) {
+    const providerCaps = PROVIDER_CAPABILITIES[runtimeProvider];
     if (providerCaps?.[model]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[model] };
     if (providerCaps?.[baseModel]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[baseModel] };
     if (providerCaps?.[normalizedModel]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[normalizedModel] };
@@ -657,19 +659,19 @@ function resolveCapabilitiesForModel(provider, model) {
 
   // 2. Canonical exact, then catalog overlay so provider-scoped models.dev
   //    deltas still apply. Step 1 above still short-circuits.
-  if (MODEL_CAPABILITIES[baseModel]) return refine(MODEL_CAPABILITIES[baseModel], provider, model);
-  if (MODEL_CAPABILITIES[normalizedModel]) return refine(MODEL_CAPABILITIES[normalizedModel], provider, model);
-  if (MODEL_CAPABILITIES[model]) return refine(MODEL_CAPABILITIES[model], provider, model);
+  if (MODEL_CAPABILITIES[baseModel]) return refine(MODEL_CAPABILITIES[baseModel], runtimeProvider, model);
+  if (MODEL_CAPABILITIES[normalizedModel]) return refine(MODEL_CAPABILITIES[normalizedModel], runtimeProvider, model);
+  if (MODEL_CAPABILITIES[model]) return refine(MODEL_CAPABILITIES[model], runtimeProvider, model);
 
   // 3. Pattern match (first match wins), refined by catalog + name heuristic
   for (const { pattern, caps } of PATTERN_CAPABILITIES) {
     if (matchPattern(pattern, baseModel) || matchPattern(pattern, normalizedModel) || matchPattern(pattern, model)) {
-      return refine(caps, provider, normalizedModel);
+      return refine(caps, runtimeProvider, normalizedModel);
     }
   }
 
   // 4. Floor
-  return refine(null, provider, model);
+  return refine(null, runtimeProvider, model);
 }
 
 export function getCapabilitiesForModel(provider, model) {

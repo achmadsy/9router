@@ -20,6 +20,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -226,7 +227,7 @@ function parseProviderErrorMessage(bodyText, fallback) {
 }
 
 async function probeCloudCodeAssistAccess(connection, accessToken, effectiveProxy = null) {
-  const userAgent = connection.provider === "antigravity"
+  const userAgent = resolveRuntimeProviderId(connection.provider) === "antigravity"
     ? "google-api-nodejs-client/9.15.1 vscode-antigravity/1.107.0"
     : "google-api-nodejs-client/9.15.1 gemini-cli/0.34.0";
 
@@ -251,7 +252,7 @@ async function probeCloudCodeAssistAccess(connection, accessToken, effectiveProx
 }
 
 async function refreshOAuthToken(connection) {
-  const provider = connection.provider;
+  const provider = resolveRuntimeProviderId(connection.provider);
   const refreshToken = connection.refreshToken;
   if (!refreshToken) return null;
 
@@ -349,11 +350,12 @@ async function refreshOAuthToken(connection) {
 }
 
 function isTokenExpired(connection) {
-  return shouldRefreshCredentials(connection.provider, connection);
+  return shouldRefreshCredentials(resolveRuntimeProviderId(connection.provider), connection);
 }
 
 async function testOAuthConnection(connection, effectiveProxy = null) {
-  const config = OAUTH_TEST_CONFIG[connection.provider];
+  const runtimeProvider = resolveRuntimeProviderId(connection.provider);
+  const config = OAUTH_TEST_CONFIG[runtimeProvider];
   if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };
 
@@ -384,7 +386,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
     return { valid: true, error: null, refreshed: false, newTokens: null };
   }
 
-  if (connection.provider === "gemini-cli" || connection.provider === "antigravity") {
+  if (runtimeProvider === "gemini-cli" || runtimeProvider === "antigravity") {
     const initial = await probeCloudCodeAssistAccess(connection, accessToken, effectiveProxy);
     if (initial.valid) return { valid: true, error: null, refreshed, newTokens };
 
@@ -401,7 +403,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
     return { valid: false, error: initial.error, refreshed };
   }
 
-  if (connection.provider === "cline") {
+  if (runtimeProvider === "cline") {
     const tryProbe = async (token) => {
       const res = await probeClineAccessToken(token);
       if (res.ok) return { valid: true, error: null, refreshed, newTokens };
@@ -513,7 +515,8 @@ async function fetchWithConnectionProxy(url, options = {}, effectiveProxy = null
 }
 
 async function testApiKeyConnection(connection, effectiveProxy = null) {
-  if (isOpenAICompatibleProvider(connection.provider)) {
+  const runtimeProvider = resolveRuntimeProviderId(connection.provider);
+  if (isOpenAICompatibleProvider(runtimeProvider)) {
     const modelsBase = connection.providerSpecificData?.baseUrl;
     if (!modelsBase) return { valid: false, error: "Missing base URL" };
     try {
@@ -526,7 +529,7 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
     }
   }
 
-  if (isAnthropicCompatibleProvider(connection.provider)) {
+  if (isAnthropicCompatibleProvider(runtimeProvider)) {
     let modelsBase = connection.providerSpecificData?.baseUrl;
     if (!modelsBase) return { valid: false, error: "Missing base URL" };
     try {
@@ -557,7 +560,7 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
   }
 
   try {
-    switch (connection.provider) {
+    switch (runtimeProvider) {
       case "cloudflare-ai": {
         const psd = connection.providerSpecificData || {};
         const accountId = psd.accountId;
@@ -632,7 +635,7 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       case "minimax":
       case "minimax-cn": {
         const endpoints = { minimax: "https://api.minimax.io/anthropic/v1/messages", "minimax-cn": "https://api.minimaxi.com/anthropic/v1/messages" };
-        const res = await fetchWithConnectionProxy(endpoints[connection.provider], {
+        const res = await fetchWithConnectionProxy(endpoints[runtimeProvider], {
           method: "POST",
           headers: { "x-api-key": connection.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
           body: JSON.stringify({ model: "minimax-m2", max_tokens: 1, messages: [{ role: "user", content: "test" }] }),
@@ -653,15 +656,15 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       case "alicode-intl":
       case "alims-intl": {
         // Aliyun Coding Plan uses OpenAI-compatible API; alims-intl uses Model Studio compatible-mode
-        const aliBaseUrl = connection.provider === "alicode-intl"
+        const aliBaseUrl = runtimeProvider === "alicode-intl"
           ? "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions"
-          : connection.provider === "alims-intl"
+          : runtimeProvider === "alims-intl"
           ? "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
           : "https://coding.dashscope.aliyuncs.com/v1/chat/completions";
         const res = await fetchWithConnectionProxy(aliBaseUrl, {
           method: "POST",
           headers: { "Authorization": `Bearer ${connection.apiKey}`, "content-type": "application/json" },
-          body: JSON.stringify({ model: getDefaultModel(connection.provider), max_tokens: 1, messages: [{ role: "user", content: "test" }] }),
+          body: JSON.stringify({ model: getDefaultModel(runtimeProvider), max_tokens: 1, messages: [{ role: "user", content: "test" }] }),
         }, effectiveProxy);
         const valid = res.status !== 401 && res.status !== 403;
         return { valid, error: valid ? null : "Invalid API key" };
@@ -671,7 +674,7 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         const res = await fetchWithConnectionProxy(PROVIDERS[connection.provider]?.baseUrl, {
           method: "POST",
           headers: { "Authorization": `Bearer ${connection.apiKey}`, "content-type": "application/json" },
-          body: JSON.stringify({ model: getDefaultModel(connection.provider), max_tokens: 1, messages: [{ role: "user", content: "test" }] }),
+          body: JSON.stringify({ model: getDefaultModel(runtimeProvider), max_tokens: 1, messages: [{ role: "user", content: "test" }] }),
         }, effectiveProxy);
         const valid = res.status !== 401 && res.status !== 403;
         return { valid, error: valid ? null : "Invalid API key" };
@@ -734,7 +737,7 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       case "agnes":
       case "bai":
       case "muse": {
-        const cfg = PROVIDERS[connection.provider];
+        const cfg = PROVIDERS[runtimeProvider];
         const res = await fetchWithConnectionProxy(cfg.validateUrl, { headers: { Authorization: `Bearer ${connection.apiKey}` } }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
       }
@@ -823,7 +826,7 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       case "xiaomi-mimo":
       case "xiaomi-tokenplan": {
         const baseUrls = { "xiaomi-mimo": "https://api.xiaomimimo.com/v1", "xiaomi-tokenplan": "https://token-plan-sgp.xiaomimimo.com/v1" };
-        const res = await fetchWithConnectionProxy(`${baseUrls[connection.provider]}/models`, {
+        const res = await fetchWithConnectionProxy(`${baseUrls[runtimeProvider]}/models`, {
           headers: { Authorization: `Bearer ${connection.apiKey}` },
         }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };

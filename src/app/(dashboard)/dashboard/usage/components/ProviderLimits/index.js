@@ -41,7 +41,8 @@ import {
 } from "./utils";
 import Card from "@/shared/components/Card";
 import { ConfirmModal, EditConnectionModal } from "@/shared/components";
-import { USAGE_SUPPORTED_PROVIDERS, AI_PROVIDERS } from "@/shared/constants/providers";
+import { isUsageSupportedProvider, AI_PROVIDERS } from "@/shared/constants/providers";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 // Maps the stored providerSpecificData.authMethod to a human label for Kiro.
@@ -402,13 +403,14 @@ export default function ProviderLimits() {
 
   const handleResetCodexLimit = useCallback(
     async (connectionId, provider) => {
-      if ((provider !== "codex" && provider !== "claude") || resettingLimitId) return;
+      const runtimeProvider = resolveRuntimeProviderId(provider);
+      if ((runtimeProvider !== "codex" && runtimeProvider !== "claude") || resettingLimitId) return;
 
       setResettingLimitId(connectionId);
       setErrors((prev) => ({ ...prev, [connectionId]: null }));
 
       try {
-        const response = provider === "claude"
+        const response = runtimeProvider === "claude"
           ? await fetch(`/api/usage/${connectionId}/claude-reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -546,7 +548,7 @@ export default function ProviderLimits() {
           await fetchConnections();
           setShowEditModal(false);
           setSelectedConnection(null);
-          if (USAGE_SUPPORTED_PROVIDERS.includes(provider)) {
+          if (isUsageSupportedProvider(provider)) {
             await fetchQuota(connectionId, provider);
           }
         }
@@ -582,7 +584,7 @@ export default function ProviderLimits() {
     const tick = (tickCountRef.current += 1);
     const claudeEvery = Math.round(CLAUDE_REFRESH_INTERVAL_MS / REFRESH_INTERVAL_MS);
     const shouldFetch = (conn) =>
-      force || conn.provider !== "claude" || tick % claudeEvery === 0;
+      force || resolveRuntimeProviderId(conn.provider) !== "claude" || tick % claudeEvery === 0;
 
     try {
       const visibleConnections = await fetchConnections(page);
@@ -661,12 +663,13 @@ export default function ProviderLimits() {
   }, []);
 
   const toggleAutoPing = useCallback(async (connectionId, provider, on) => {
-    const settingsKey = AUTO_PING_SETTINGS_KEYS[provider];
+    const runtimeProvider = resolveRuntimeProviderId(provider);
+    const settingsKey = AUTO_PING_SETTINGS_KEYS[runtimeProvider];
     if (!settingsKey) return;
 
     const previous = autoPingMaps;
-    const nextProviderMap = { ...(autoPingMaps[provider] || {}), [connectionId]: on };
-    const nextMaps = { ...autoPingMaps, [provider]: nextProviderMap };
+    const nextProviderMap = { ...(autoPingMaps[runtimeProvider] || {}), [connectionId]: on };
+    const nextMaps = { ...autoPingMaps, [runtimeProvider]: nextProviderMap };
     setAutoPingMaps(nextMaps);
     try {
       const r = await fetch("/api/settings", { cache: "no-store" });
@@ -1228,8 +1231,9 @@ export default function ProviderLimits() {
 
           // Use table layout for all providers
           const isInactive = conn.isActive === false;
-          const isCodex = conn.provider === "codex";
-          const claudeReset = conn.provider === "claude" ? quota?.raw?.resetCredits : null;
+          const runtimeProvider = resolveRuntimeProviderId(conn.provider);
+          const isCodex = runtimeProvider === "codex";
+          const claudeReset = runtimeProvider === "claude" ? quota?.raw?.resetCredits : null;
           const resetLabel = isCodex ? "Codex reset credit" : "Claude limit reset";
           const resetCreditCount = getCodexResetCreditCount(quota);
           const isResettingLimit = resettingLimitId === conn.id;
@@ -1272,7 +1276,7 @@ export default function ProviderLimits() {
                           {getConnectionSecondaryLabel(conn)}
                         </p>
                       ) : null}
-                      {conn.provider === "kiro" && (
+                      {runtimeProvider === "kiro" && (
                         <div className="mt-1 flex flex-wrap items-center gap-1">
                           <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold text-brand-600 dark:text-brand-300">
                             {kiroMethodLabel(conn)}
@@ -1361,13 +1365,13 @@ export default function ProviderLimits() {
                         </Tooltip>
                       </>
                     )}
-                    {AUTO_PING_SETTINGS_KEYS[conn.provider] && conn.authType === "oauth" && (
-                      <Tooltip text={AUTO_PING_TOOLTIPS[conn.provider]}>
+                    {AUTO_PING_SETTINGS_KEYS[runtimeProvider] && conn.authType === "oauth" && (
+                      <Tooltip text={AUTO_PING_TOOLTIPS[runtimeProvider]}>
                         <button
                           type="button"
-                          onClick={() => toggleAutoPing(conn.id, conn.provider, !(autoPingMaps[conn.provider]?.[conn.id] === true))}
+                          onClick={() => toggleAutoPing(conn.id, conn.provider, !(autoPingMaps[runtimeProvider]?.[conn.id] === true))}
                           aria-label="Toggle auto-ping"
-                          className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPingMaps[conn.provider]?.[conn.id] === true ? "text-primary" : "text-text-muted"}`}
+                          className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPingMaps[runtimeProvider]?.[conn.id] === true ? "text-primary" : "text-text-muted"}`}
                         >
                           <span className="material-symbols-outlined text-[18px]">bolt</span>
                         </button>
@@ -1464,7 +1468,7 @@ export default function ProviderLimits() {
                     compact
                     sortMode="default"
                     showSortLabel={
-                      conn.provider === "codex" && quotaSortMode !== "default"
+                      runtimeProvider === "codex" && quotaSortMode !== "default"
                     }
                     onHideQuota={(quotaRow) => handleHideQuota(conn.provider, quotaRow)}
                   />
@@ -1635,8 +1639,8 @@ export default function ProviderLimits() {
           await handleResetCodexLimit(connection.id, connection.provider);
           setResetConfirmState(null);
         }}
-        title={resetConfirmState?.connection?.provider === "claude" ? "Reset Claude limits?" : "Reset Codex limit?"}
-        message={resetConfirmState?.connection?.provider === "claude"
+        title={resolveRuntimeProviderId(resetConfirmState?.connection?.provider) === "claude" ? "Reset Claude limits?" : "Reset Codex limit?"}
+        message={resolveRuntimeProviderId(resetConfirmState?.connection?.provider) === "claude"
           ? `Refills your ${formatClaudeResetClears(quotaData[resetConfirmState.connection.id]?.raw?.resetCredits?.clears)} now for ${getConnectionLabel(resetConfirmState.connection) || "this account"} · your weekly reset day stays ${formatCreditDate(quotaData[resetConfirmState.connection.id]?.raw?.resetCredits?.weeklyResetsAt)}. This cannot be undone. Resets left: ${resetConfirmState.resetCreditCount ?? 0}.`
           : `Use 1 Codex reset credit for ${getConnectionLabel(resetConfirmState?.connection || {}) || "this account"}. This cannot be undone. Remaining credits: ${resetConfirmState?.resetCreditCount ?? 0}.`}
         confirmText="Reset limit"

@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Fixes
+- **Provider duplicates**: inherit base provider capabilities across auto-ping, quota retrieval, reset credits, GLM CAPTCHA proxy restrictions, connection validation, and live model tools while preserving duplicate credential and settings isolation.
 - **Providers authentication**: preserve selected duplicate provider across OAuth callbacks, device-code login, manual token exchange, specialized credential imports, and bulk imports; retain provider metadata and reject invalid or cross-provider destinations.
 
 # v0.5.95 (2026-10-01)

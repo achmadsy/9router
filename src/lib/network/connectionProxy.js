@@ -1,5 +1,6 @@
 import { getProxyPoolById } from "@/models";
 import { makeKv } from "@/lib/db/helpers/kvStore.js";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 /** Header-based relays (not real HTTP/SOCKS proxies). CloakBrowser cannot use them. */
 export const RELAY_POOL_TYPES = ["vercel", "cloudflare", "deno"];
@@ -8,7 +9,7 @@ export function isRelayPoolType(type) {
 }
 /** Providers that must only use normal HTTP/SOCKS proxies (captcha/IP-bound). */
 export function supportsNormalProxyOnly(providerId) {
-  return providerId === "glm";
+  return resolveRuntimeProviderId(providerId) === "glm";
 }
 
 // Safely normalize any value into a trimmed string.

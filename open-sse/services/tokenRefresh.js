@@ -1,5 +1,6 @@
 import { PROVIDERS } from "../config/providers.js";
 import { OAUTH_ENDPOINTS, REFRESH_LEAD_MS } from "../config/appConstants.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 import {
   refreshXaiToken,
   refreshAccessToken,
@@ -56,9 +57,10 @@ export function isUnrecoverableRefreshError(result) {
 }
 
 export function getRefreshLeadMs(provider) {
-  if (REFRESH_LEAD_MS[provider]) return REFRESH_LEAD_MS[provider];
+  const runtimeProvider = resolveRuntimeProviderId(provider);
+  if (REFRESH_LEAD_MS[runtimeProvider]) return REFRESH_LEAD_MS[runtimeProvider];
   // Legacy id after kimi-coding → kimi merge
-  if (provider === "kimi-coding" && REFRESH_LEAD_MS.kimi) return REFRESH_LEAD_MS.kimi;
+  if (runtimeProvider === "kimi-coding" && REFRESH_LEAD_MS.kimi) return REFRESH_LEAD_MS.kimi;
   return TOKEN_EXPIRY_BUFFER_MS;
 }
 
@@ -171,10 +173,11 @@ export async function getAccessToken(provider, credentials, log) {
 }
 
 async function _getAccessTokenInternal(provider, credentials, log) {
-  if (provider === "gemini") {
+  const runtimeProvider = resolveRuntimeProviderId(provider);
+  if (runtimeProvider === "gemini") {
     return refreshGoogleToken(credentials.refreshToken, PROVIDERS.gemini.clientId, PROVIDERS.gemini.clientSecret, log);
   }
-  const handler = REFRESH_HANDLERS[provider];
+  const handler = REFRESH_HANDLERS[runtimeProvider];
   if (!handler) {
     log?.warn?.("TOKEN_REFRESH", `Unsupported provider for token refresh: ${provider}`);
     return null;
@@ -184,18 +187,20 @@ async function _getAccessTokenInternal(provider, credentials, log) {
 
 export async function refreshTokenByProvider(provider, credentials, log) {
   if (!credentials.refreshToken) return null;
-  const handler = REFRESH_HANDLERS[provider];
-  return handler ? handler(credentials, log) : refreshAccessToken(provider, credentials.refreshToken, credentials, log);
+  const runtimeProvider = resolveRuntimeProviderId(provider);
+  const handler = REFRESH_HANDLERS[runtimeProvider];
+  return handler ? handler(credentials, log) : refreshAccessToken(runtimeProvider, credentials.refreshToken, credentials, log);
 }
 
 export function formatProviderCredentials(provider, credentials, log) {
-  const config = PROVIDERS[provider];
+  const runtimeProvider = resolveRuntimeProviderId(provider);
+  const config = PROVIDERS[runtimeProvider];
   if (!config) {
     log?.warn?.("TOKEN_REFRESH", `No configuration found for provider: ${provider}`);
     return null;
   }
 
-  switch (provider) {
+  switch (runtimeProvider) {
     case "gemini":
       return {
         apiKey: credentials.apiKey,

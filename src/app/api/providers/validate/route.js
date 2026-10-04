@@ -6,6 +6,7 @@ import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
+import { isProviderCloneId, resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -85,10 +86,20 @@ async function probeMediaProvider(provider, apiKey) {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const provider = normalizeProviderId(body.provider);
+    let provider = normalizeProviderId(body.provider);
     const { apiKey, providerSpecificData } = body;
+    let runtimeProvider = resolveRuntimeProviderId(provider);
 
-    const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
+    if (isProviderCloneId(provider)) {
+      const node = await getProviderNodeById(provider);
+      if (!node || node.type !== "provider-clone" || node.baseProvider !== runtimeProvider) {
+        return NextResponse.json({ error: "Provider clone not found" }, { status: 404 });
+      }
+      runtimeProvider = node.baseProvider;
+    }
+    provider = runtimeProvider;
+
+    const isNoAuth = AI_PROVIDERS[runtimeProvider]?.noAuth === true;
     if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth)) {
       return NextResponse.json({ error: "Provider and API key required" }, { status: 400 });
     }
@@ -98,7 +109,7 @@ export async function POST(request) {
 
     // Validate with each provider
     try {
-      if (isOpenAICompatibleProvider(provider)) {
+      if (isOpenAICompatibleProvider(runtimeProvider)) {
         const node = await getProviderNodeById(provider);
         if (!node) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
@@ -115,7 +126,7 @@ export async function POST(request) {
       }
 
       // Custom Embedding nodes: probe /models (most embedding APIs are OpenAI-compatible)
-      if (isCustomEmbeddingProvider(provider)) {
+      if (isCustomEmbeddingProvider(runtimeProvider)) {
         const node = await getProviderNodeById(provider);
         if (!node) {
           return NextResponse.json({ error: "Custom Embedding node not found" }, { status: 404 });
@@ -145,7 +156,7 @@ export async function POST(request) {
         });
       }
 
-      if (isAnthropicCompatibleProvider(provider)) {
+      if (isAnthropicCompatibleProvider(runtimeProvider)) {
         const node = await getProviderNodeById(provider);
         if (!node) {
           return NextResponse.json({ error: "Anthropic Compatible node not found" }, { status: 404 });
