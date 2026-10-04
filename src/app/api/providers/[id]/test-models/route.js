@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { getProviderConnectionById } from "@/lib/localDb";
+import { getProviderConnectionById, getProviderNodes } from "@/lib/localDb";
 import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind } from "@/app/api/models/test/ping";
-import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
+import { resolveRuntimeProviderId, isProviderCloneId } from "open-sse/providers/clones.js";
 
 /**
  * POST /api/providers/[id]/test-models
@@ -22,9 +22,18 @@ export async function POST(request, { params }) {
     const providerId = connection.provider;
     const runtimeProvider = resolveRuntimeProviderId(providerId);
     const isCompatible = isOpenAICompatibleProvider(runtimeProvider) || isAnthropicCompatibleProvider(runtimeProvider);
-    const alias = PROVIDER_ID_TO_ALIAS[runtimeProvider] || runtimeProvider;
 
-    let models = getProviderModels(alias);
+    // Duplicates own their credential pool: ping via the clone node's prefix so
+    // getModelInfo() routes to the clone's accounts, not the base provider's.
+    // Base providers keep using the registry alias prefix.
+    let pingPrefix = PROVIDER_ID_TO_ALIAS[runtimeProvider] || runtimeProvider;
+    if (isProviderCloneId(providerId)) {
+      const cloneNode = (await getProviderNodes({ type: "provider-clone" })).find((n) => n.id === providerId);
+      if (cloneNode?.prefix) pingPrefix = cloneNode.prefix;
+    }
+    const alias = pingPrefix;
+
+    let models = getProviderModels(PROVIDER_ID_TO_ALIAS[runtimeProvider] || runtimeProvider);
 
     const baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`;
 
