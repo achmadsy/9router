@@ -5,9 +5,10 @@
 // A provider only needs an adapter when its wire format differs from that.
 import openrouter from "./openrouter.js";
 import vertex from "./vertex.js";
+import { resolveRuntimeProviderId } from "../../providers/clones.js";
 
 const ADAPTERS = { openrouter, vertex };
 
 export function getVideoAdapter(provider) {
-  return ADAPTERS[provider] || null;
+  return ADAPTERS[resolveRuntimeProviderId(provider)] || null;
 }

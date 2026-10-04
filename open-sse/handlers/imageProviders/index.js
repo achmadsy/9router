@@ -12,6 +12,7 @@ import blackForestLabs from "./blackForestLabs.js";
 import runwayml from "./runwayml.js";
 import cloudflareAi from "./cloudflareAi.js";
 import antigravity from "./antigravity.js";
+import { resolveRuntimeProviderId } from "../../providers/clones.js";
 
 const ADAPTERS = {
   openai: createOpenAIAdapter("openai"),
@@ -35,9 +36,9 @@ const ADAPTERS = {
 };
 
 export function getImageAdapter(provider) {
-  return ADAPTERS[provider] || null;
+  return ADAPTERS[resolveRuntimeProviderId(provider)] || null;
 }
 
 export function isImageProvider(provider) {
-  return provider in ADAPTERS;
+  return resolveRuntimeProviderId(provider) in ADAPTERS;
 }
