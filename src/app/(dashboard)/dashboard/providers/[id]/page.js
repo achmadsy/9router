@@ -479,7 +479,7 @@ export default function ProviderDetailPage() {
   };
 
   const saveAutoPing = async (next) => {
-    const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
+    const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[cloneBaseId];
     if (!autoPingSettingsKey) return;
 
     setAutoPing(next);

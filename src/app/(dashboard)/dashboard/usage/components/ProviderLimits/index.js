@@ -128,6 +128,17 @@ function providerLabel(providerId) {
   return AI_PROVIDERS[providerId]?.name || providerId;
 }
 
+// Quota cards show the source provider's icon and a readable duplicate name
+// (node name like "codex-2"); the raw clone id is never user-facing.
+function quotaConnectionLabel(conn) {
+  const runtimeProvider = resolveRuntimeProviderId(conn.provider);
+  const baseName = AI_PROVIDERS[runtimeProvider]?.name || runtimeProvider;
+  const cloneSuffix = conn.provider !== runtimeProvider
+    ? (conn.providerSpecificData?.nodeName || `${baseName} duplicate`)
+    : null;
+  return cloneSuffix || baseName;
+}
+
 function formatCreditDate(value) {
   if (!value) return "N/A";
   const date = new Date(value);
@@ -879,7 +890,11 @@ export default function ProviderLimits() {
   };
 
   const selectedProviderLabel =
-    providerFilter === "all" ? "All providers" : (typeof providerLabel === "function" ? providerLabel(providerFilter) : providerFilter);
+    providerFilter === "all"
+      ? "All providers"
+      : providerFilter !== resolveRuntimeProviderId(providerFilter)
+        ? `${providerLabel(resolveRuntimeProviderId(providerFilter))} (duplicate)`
+        : (typeof providerLabel === "function" ? providerLabel(providerFilter) : providerFilter);
   const selectedApiKeyLabel =
     apiKeyFilter === "all"
       ? "All API Keys"
@@ -1066,7 +1081,12 @@ export default function ProviderLimits() {
                   </button>
                   <div className="my-1 h-px bg-black/10 dark:bg-white/10" />
                   <div className="max-h-72 overflow-y-auto pr-1">
-                    {providerOptions.map((provider) => (
+                    {providerOptions.map((provider) => {
+                      const runtime = resolveRuntimeProviderId(provider);
+                      const optionLabel = provider !== runtime
+                        ? `${providerLabel(runtime)} (duplicate)`
+                        : providerLabel(provider);
+                      return (
                       <button
                         key={provider}
                         type="button"
@@ -1080,14 +1100,14 @@ export default function ProviderLimits() {
                         className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${providerFilter === provider ? "bg-primary/10 text-primary" : "text-text-primary hover:bg-black/5 dark:hover:bg-white/10"}`}
                       >
                         <ProviderIcon
-                          src={`/providers/${provider}.png`}
-                          alt={provider}
+                          src={`/providers/${runtime}.png`}
+                          alt={runtime}
                           size={24}
                           className="size-6 rounded-md object-contain"
-                          fallbackText={provider.slice(0, 2).toUpperCase()}
+                          fallbackText={runtime.slice(0, 2).toUpperCase()}
                         />
                         <span className="font-medium">
-                          {providerLabel(provider)}
+                          {optionLabel}
                         </span>
                         {providerFilter === provider && (
                           <span className="material-symbols-outlined ml-auto text-[20px]">
@@ -1095,7 +1115,8 @@ export default function ProviderLimits() {
                           </span>
                         )}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </>
@@ -1253,18 +1274,18 @@ export default function ProviderLimits() {
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-8 h-8 shrink-0 rounded-md flex items-center justify-center overflow-hidden">
                       <ProviderIcon
-                        src={`/providers/${conn.provider}.png`}
-                        alt={conn.provider}
+                        src={`/providers/${runtimeProvider}.png`}
+                        alt={runtimeProvider}
                         size={32}
                         className="object-contain"
                         fallbackText={
-                          conn.provider?.slice(0, 2).toUpperCase() || "PR"
+                          runtimeProvider?.slice(0, 2).toUpperCase() || "PR"
                         }
                       />
                     </div>
                     <div className="min-w-0">
                       <h3 className="text-sm font-semibold text-text-primary truncate">
-                        {providerLabel(conn.provider)}
+                        {quotaConnectionLabel(conn)}
                       </h3>
                       {getConnectionLabel(conn) ? (
                         <p className="text-xs text-text-muted truncate">

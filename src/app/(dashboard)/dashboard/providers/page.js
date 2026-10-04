@@ -309,7 +309,7 @@ export default function ProvidersPage() {
       };
     })
     .filter(
-      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
+      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, ["oauth", "apikey", "api_key"])),
     );
 
   // Dual-auth providers (oauth + apikey) store API keys as authType "apikey"
@@ -510,9 +510,9 @@ export default function ProvidersPage() {
                 key={info.id}
                 providerId={info.id}
                 provider={info}
-                stats={getProviderStats(info.id, "apikey")}
+                stats={getProviderStats(info.id, ["oauth", "apikey", "api_key"])}
                 authType="apikey"
-                onToggle={(active) => handleToggleProvider(info.id, "apikey", active)}
+                onToggle={(active) => handleToggleProvider(info.id, ["oauth", "apikey", "api_key"], active)}
               />
             ))}
           </div>

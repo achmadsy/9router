@@ -135,7 +135,7 @@ export function getConnectionsEmptyMessage(totals, providerFilter, accountFilter
       description:
         providerFilter === "all"
           ? "Try changing the account status filter to see more quota trackers."
-          : `No ${accountFilter === "inactive" ? "turned off" : accountFilter === "active" ? "active" : "matching"} accounts found for ${providerFilter}.`,
+          : `No ${accountFilter === "inactive" ? "turned off" : accountFilter === "active" ? "active" : "matching"} accounts found for ${providerFilter === "all" ? "any provider" : resolveRuntimeProviderId(providerFilter) !== providerFilter ? `${resolveRuntimeProviderId(providerFilter)} (duplicate)` : providerFilter}.`,
     };
   }
   return {
