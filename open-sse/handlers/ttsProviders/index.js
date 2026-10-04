@@ -10,6 +10,7 @@ import xiaomiMimo from "./xiaomi-mimo.js";
 import selfhostedTts from "./selfhostedTts.js";
 import { FORMAT_HANDLERS } from "./genericFormats.js";
 import { parseModelVoice } from "./_base.js";
+import { resolveRuntimeProviderId } from "../../providers/clones.js";
 
 // Special providers with custom synthesize() logic
 const SPECIAL_ADAPTERS = {
@@ -25,20 +26,21 @@ const SPECIAL_ADAPTERS = {
 };
 
 export function getTtsAdapter(provider) {
-  return SPECIAL_ADAPTERS[provider] || null;
+  return SPECIAL_ADAPTERS[resolveRuntimeProviderId(provider)] || null;
 }
 
 // Generic config-driven dispatcher (uses ttsConfig.format)
 export async function synthesizeViaConfig(provider, text, model, credentials) {
   const { AI_PROVIDERS } = await import("@/shared/constants/providers");
-  const cfg = AI_PROVIDERS[provider]?.ttsConfig;
+  const runtimeProvider = resolveRuntimeProviderId(provider);
+  const cfg = AI_PROVIDERS[runtimeProvider]?.ttsConfig;
   if (!cfg) return null;
   const handler = FORMAT_HANDLERS[cfg.format];
   if (!handler) return null;
   const apiKey = credentials?.apiKey;
   if (cfg.authType !== "none" && !apiKey) throw new Error(`${provider} API key required`);
   const { PROVIDER_MODELS } = await import("open-sse/config/providerModels.js");
-  const ttsModels = (PROVIDER_MODELS[provider] || []).filter(m => (m.kind || m.type) === "tts");
+  const ttsModels = (PROVIDER_MODELS[runtimeProvider] || []).filter(m => (m.kind || m.type) === "tts");
   const defaultModel = ttsModels[0]?.id || "";
   const { modelId, voiceId } = parseModelVoice(model, defaultModel, "", ttsModels);
   return handler({ baseUrl: cfg.baseUrl, apiKey, text, modelId, voiceId });

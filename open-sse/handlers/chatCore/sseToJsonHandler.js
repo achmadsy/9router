@@ -8,10 +8,11 @@ import { parseWaitHeaderCooldown } from "../../utils/retryAfter.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { isClaudeClassifierRequest, openAICompletionToClaudeMessage } from "./claudeMessageResponse.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
-
-// Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
-const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
+import { resolveRuntimeProviderId } from "../../providers/clones.js";
 import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
+
+// Responses-API clones inherit the base provider's response shape.
+const isResponsesProvider = (p) => PROVIDERS[resolveRuntimeProviderId(p)]?.format === FORMATS.OPENAI_RESPONSES;
 
 function textFromResponsesMessageItem(item) {
   if (!item?.content || !Array.isArray(item.content)) return "";

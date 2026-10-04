@@ -2,11 +2,12 @@
 // to be echoed back on assistant messages. Clients in OpenAI format don't send it,
 // so we inject a non-empty placeholder to satisfy upstream validation.
 import { PROVIDERS } from "../config/providers.js";
+import { resolveRuntimeProviderId } from "../providers/clones.js";
 
 const PLACEHOLDER = " ";
 
 // Provider-level rules derive from registry transport.reasoningInject (single source)
-const providerRuleFor = (provider) => PROVIDERS[provider]?.reasoningInject;
+const providerRuleFor = (provider) => PROVIDERS[resolveRuntimeProviderId(provider)]?.reasoningInject;
 
 // Model-level rules: matched by predicate against model id
 const MODEL_RULES = [
