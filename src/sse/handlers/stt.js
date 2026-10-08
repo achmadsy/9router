@@ -62,6 +62,7 @@ export async function handleStt(request) {
   if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
 
   const { provider, model } = modelInfo;
+
   log.info("ROUTING", `Provider: ${provider}, Model: ${model}`);
 
   const modelTransport = await resolveCustomModelTransport(provider, model);

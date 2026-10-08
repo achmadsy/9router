@@ -19,6 +19,7 @@ import {
   refreshTraeToken,
   refreshZedToken,
   refreshWindsurfToken,
+  refreshMiniMaxCodeToken,
   classifyOAuthRefreshError,
 } from "./tokenRefresh/providers.js";
 
@@ -40,6 +41,7 @@ export {
   refreshTraeToken,
   refreshZedToken,
   refreshWindsurfToken,
+  refreshMiniMaxCodeToken,
   classifyOAuthRefreshError,
 };
 
@@ -160,6 +162,10 @@ const REFRESH_HANDLERS = {
   kimi: (c, log) => refreshKimiToken(c.refreshToken, c, log),
   "kimi-coding": (c, log) => refreshKimiToken(c.refreshToken, c, log),
   glm: (c, log) => refreshGlmToken(c.refreshToken, c, log),
+  // MiniMax Code — single-use refresh tokens; the handler dedupes by token
+  // value and classifies invalid_grant (docs/minimax-code-proxy-plan.md §2.3)
+  "minimax-code": (c, log) => refreshMiniMaxCodeToken("minimax-code", c.refreshToken, log),
+  "minimax-code-global": (c, log) => refreshMiniMaxCodeToken("minimax-code-global", c.refreshToken, log),
   vertex: vertexRefreshHandler,
   "vertex-partner": vertexRefreshHandler
 };

@@ -3,7 +3,7 @@ import { makeKv } from "@/lib/db/helpers/kvStore.js";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 /** Header-based relays (not real HTTP/SOCKS proxies). CloakBrowser cannot use them. */
-export const RELAY_POOL_TYPES = ["vercel", "cloudflare", "deno"];
+export const RELAY_POOL_TYPES = ["vercel", "cloudflare", "deno", "netlify"];
 export function isRelayPoolType(type) {
   return RELAY_POOL_TYPES.includes(String(type || "").toLowerCase());
 }

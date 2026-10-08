@@ -4,6 +4,30 @@
 - **Provider duplicates**: inherit base provider capabilities across auto-ping, quota retrieval, reset credits, GLM CAPTCHA proxy restrictions, connection validation, and live model tools while preserving duplicate credential and settings isolation.
 - **Providers authentication**: preserve selected duplicate provider across OAuth callbacks, device-code login, manual token exchange, specialized credential imports, and bulk imports; retain provider metadata and reject invalid or cross-provider destinations.
 
+# v0.5.99 (2026-10-08)
+
+## Features
+- **Antigravity**: refresh model catalog with Gemini 3.8 Flash (High/Medium/Low), Gemini 3.6 Flash, and Gemini 3.1 Pro High; remove deprecated 3.5/3-flash models; update MITM default to `gemini-3.8-flash-medium`
+- **Antigravity**: add Claude Sonnet 5.5 and Opus 5.5 support with reasoning effort variants, pricing, and family quota routing
+- **Bedrock**: add Amazon Bedrock (`bedrock` and `bedrock-xai`) provider with static keys, AWS SSO profiles, native SigV4 signer, and shared EventStream decoder (#4157)
+- **Hermes**: per-profile configuration across API, Dashboard card, and CLI menu with bulk apply, scoped reset, and auxiliary roles (#4660)
+- **API Keys**: per-API-key access control — restrict keys to allowed combos and models via interactive modal
+- **ElevenLabs**: add Scribe speech-to-text support (#4537)
+- **Proxy Pools**: add Netlify serverless relay proxy pool with digest-deploy API and dashboard management modal
+- **Providers**: add MiniMax Code (`mcode`) credits provider
+- **System One**: support Cloudflare AI `clef-flash` endpoint
+- **Codebuddy CN**: sync catalog with 2026-09-30 server config
+- **Dashboard**: open 9Remote sidebar item directly to website
+
+## Fixes
+- **Gemini**: preserve function call/response pairing when `tool_call_id` repeats in long conversations; avoid mistaking a schema property named `properties` for a schema node (#4532, #4620)
+- **GLM**: mark GLM-5.3 thinking as non-disableable and correct GLM-5.2/5.3 context to 1M (#4544, #4656)
+- **Muse Spark**: route Responses-only models through `/responses` instead of `/chat/completions`
+- **Kimi Code**: route Responses clients through `/responses`
+- **CLI connect**: inherit model selections from the server; add `show`, `--save`, Pi, and Oh My Pi support
+- **Dashboard**: fix mobile layouts for endpoint, provider models, and CLI tools
+- **Codex/Cursor/Usage**: preserve explicit tool strict flags, forward Cursor reasoning effort, reject empty Cursor turns, and improve exact usage tracking
+
 # v0.5.95 (2026-10-01)
 
 ## Features

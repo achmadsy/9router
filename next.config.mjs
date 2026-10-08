@@ -20,6 +20,8 @@ const nextConfig = {
   // letter). That throw happens at module scope, so every consumer of `open` dies on
   // import — including xAI/Grok token refresh, which loads the OAuth service that imports
   // it. Keeping it external preserves the real `import.meta.url` at runtime.
+  // AWS credential providers also read ~/.aws/config and the SSO token cache at runtime,
+  // then resolve credential plugins by dynamic require. Bundling breaks both behaviors.
   serverExternalPackages: [
     "better-sqlite3",
     "sql.js",
@@ -30,6 +32,7 @@ const nextConfig = {
     "cloakbrowser",
     "playwright-core",
     "socks-proxy-agent",
+    "@aws-sdk/credential-providers",
   ],
   turbopack: {
     root: tracingRoot

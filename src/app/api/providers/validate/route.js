@@ -100,7 +100,9 @@ export async function POST(request) {
     provider = runtimeProvider;
 
     const isNoAuth = AI_PROVIDERS[runtimeProvider]?.noAuth === true;
-    if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth)) {
+    const apiKeySubstitute = AI_PROVIDERS[runtimeProvider]?.apiKeyOptionalWith;
+    const hasApiKeySubstitute = !!(apiKeySubstitute && providerSpecificData?.[apiKeySubstitute]);
+    if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth && !hasApiKeySubstitute)) {
       return NextResponse.json({ error: "Provider and API key required" }, { status: 400 });
     }
 

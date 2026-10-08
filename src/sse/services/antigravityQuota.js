@@ -29,6 +29,40 @@ const STRIKE_BLOCK_MS = 15 * 60_000;
 const strikeCounts = new Map(); // "connectionId|model" → { count, windowStart (anchored at first strike) }
 const strikeBlocks = new Map(); // "connectionId|model" → blockedUntil ms
 
+export function getAntigravityModelFamily(model) {
+  if (!model || typeof model !== "string") return null;
+  const clean = (model.includes("/") ? model.slice(model.indexOf("/") + 1) : model).toLowerCase();
+  if (clean.startsWith("claude-") || clean.startsWith("gpt-") || clean === "claude") return "claude_gpt";
+  if ((clean.startsWith("gemini-") && !clean.includes("image")) || clean === "gemini") return "gemini";
+  return null;
+}
+
+/** Resolve direct, tier-alias, and shared family quota buckets for one model. */
+export function getAntigravityModelQuota(quotas, model) {
+  if (!quotas || typeof quotas !== "object" || !model) return null;
+  const cleanModel = String(model).split("/").at(-1).replace(/\([^()]+\)\s*$/, "").trim();
+  const family = getAntigravityModelFamily(cleanModel);
+  const candidates = [];
+  if (quotas[cleanModel]) candidates.push(quotas[cleanModel]);
+  const aliases = {
+    "claude-sonnet-5-5": "claude-sonnet-5-5-high",
+    "claude-opus-5-5": "claude-opus-5-5-high",
+    "gemini-3.8-flash": "gemini-3.8-flash-medium",
+    "gemini-3.7-flash": "gemini-3.7-flash-medium",
+    "gemini-3.6-flash": "gemini-3.6-flash-medium",
+  };
+  if (aliases[cleanModel] && quotas[aliases[cleanModel]]) candidates.push(quotas[aliases[cleanModel]]);
+  if (family === "claude_gpt") candidates.push(quotas.claude_gpt_session, quotas.claude_gpt_weekly);
+  else if (family === "gemini") candidates.push(quotas.gemini_session, quotas.gemini_weekly);
+
+  const valid = candidates.filter((q) => q && typeof q.remainingPercentage === "number");
+  if (!valid.length) return null;
+  const exhausted = valid
+    .filter((q) => q.remainingPercentage <= 0 && (!q.resetAt || new Date(q.resetAt).getTime() > Date.now()))
+    .sort((a, b) => new Date(b.resetAt || 0).getTime() - new Date(a.resetAt || 0).getTime());
+  return exhausted[0] || valid.sort((a, b) => a.remainingPercentage - b.remainingPercentage)[0];
+}
+
 /**
  * Re-apply active strike blocks onto a fresh quotas snapshot so the auth
  * pre-filter (which reads this cache) keeps skipping the blocked pair across
@@ -187,7 +221,8 @@ export async function handleAntigravityQuotaError(connectionId, status, model, a
 
   // Throttle applies to error paths too: one quota request per account/30s.
   // The first 409/429 populates cache; concurrent or repeated errors reuse it.
-  const quota = (await refreshAntigravityQuota(connectionId, accessToken, providerSpecificData))?.[model];
+  const quotas = await refreshAntigravityQuota(connectionId, accessToken, providerSpecificData);
+  const quota = getAntigravityModelQuota(quotas, model);
 
   // Strike breaker: count every 429 whose quota reading is either optimistic
   // (remaining > 0) or unavailable (quota API 403/error). 3 within the window
@@ -239,6 +274,12 @@ export async function handleAntigravityQuotaError(connectionId, status, model, a
 
   const resetMs = new Date(quota.resetAt).getTime();
   if (resetMs <= Date.now()) return null;
+
+  // Materialize family-summary exhaustion under requested model for cache readers
+  // and observability tools that enumerate model entries.
+  const cached = quotaCache.get(connectionId) || {};
+  cached[model] = { ...quota, remainingPercentage: 0 };
+  quotaCache.set(connectionId, cached);
 
   log.warn("AG_QUOTA", `${connectionId.slice(0, 8)} | UPSTREAM_${status} ${model} — quota exhausted; CACHE_BLOCK until ${quota.resetAt}`);
   // Self-Aware: mirror quota-exhausted block into SQLite sidecar

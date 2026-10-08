@@ -59,7 +59,7 @@ async function normalizeProxyPoolUpdate(proxyPoolIdInput, providerId = null) {
     return {
       hasProxyPoolField: true,
       error:
-        "Relay proxies (Vercel/Cloudflare/Deno) are not supported for GLM — use a normal HTTP/SOCKS proxy pool",
+        "Relay proxies (Vercel/Cloudflare/Deno/Netlify) are not supported for GLM — use a normal HTTP/SOCKS proxy pool",
     };
   }
 
@@ -143,10 +143,18 @@ export async function PUT(request, { params }) {
         proxyPoolResult.hasProxyPoolField
       )
     ) {
+      const incomingProviderSpecificData = { ...(providerSpecificData || {}) };
+      // Blank AWS token means "keep saved"; null means explicit removal.
+      if (incomingProviderSpecificData.sessionToken === "") {
+        delete incomingProviderSpecificData.sessionToken;
+      }
       updateData.providerSpecificData = {
         ...(existing.providerSpecificData || {}),
-        ...(providerSpecificData || {}),
+        ...incomingProviderSpecificData,
       };
+      if (incomingProviderSpecificData.sessionToken === null) {
+        delete updateData.providerSpecificData.sessionToken;
+      }
 
       if (proxyConfig.hasAnyProxyField) {
         updateData.providerSpecificData.connectionProxyEnabled = proxyConfig.connectionProxyEnabled;

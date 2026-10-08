@@ -467,12 +467,32 @@ export function cleanJSONSchemaForAntigravity(schema) {
   return cleaned;
 }
 
+// Gemini treats `$ref` in functionResponse.response as an internal parts pointer.
+// Rename it recursively so JSON Schema/OpenAPI tool results remain ordinary data.
+export const GEMINI_RESERVED_RESPONSE_KEYS = { "$ref": "_ref" };
+
+export function sanitizeFunctionResponsePayload(value) {
+  if (Array.isArray(value)) return value.map(sanitizeFunctionResponsePayload);
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, val] of Object.entries(value)) {
+    out[GEMINI_RESERVED_RESPONSE_KEYS[key] ?? key] = sanitizeFunctionResponsePayload(val);
+  }
+  return out;
+}
+
+function sanitizeFunctionResponsePart(part) {
+  const response = part?.functionResponse?.response;
+  if (!response || typeof response !== "object") return part;
+  return { ...part, functionResponse: { ...part.functionResponse, response: sanitizeFunctionResponsePayload(response) } };
+}
+
 // Merge adjacent same-role messages, strip empty parts, ensure initial and terminal user turns
 export function normalizeGeminiContents(contents) {
   const out = [];
   for (const c of contents || []) {
     if (!c?.role || !Array.isArray(c.parts)) continue;
-    const parts = c.parts.filter(p => p && Object.keys(p).length > 0);
+    const parts = c.parts.filter(p => p && Object.keys(p).length > 0).map(sanitizeFunctionResponsePart);
     if (parts.length === 0) continue;
     const last = out.at(-1);
     if (last?.role === c.role) last.parts.push(...parts);

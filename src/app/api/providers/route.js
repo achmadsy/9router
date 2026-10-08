@@ -53,7 +53,7 @@ async function normalizeProxyPoolId(proxyPoolId, providerId = null) {
   if (providerId && supportsNormalProxyOnly(providerId) && isRelayPoolType(proxyPool.type)) {
     return {
       error:
-        "Relay proxies (Vercel/Cloudflare/Deno) are not supported for GLM — use a normal HTTP/SOCKS proxy pool",
+        "Relay proxies (Vercel/Cloudflare/Deno/Netlify) are not supported for GLM — use a normal HTTP/SOCKS proxy pool",
     };
   }
 
@@ -141,7 +141,9 @@ export async function POST(request) {
     if (!provider || !isValidProvider) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
     }
-    if (!apiKey && provider !== "ollama-local") {
+    const apiKeySubstitute = AI_PROVIDERS[provider]?.apiKeyOptionalWith;
+    const hasApiKeySubstitute = !!(apiKeySubstitute && body.providerSpecificData?.[apiKeySubstitute]);
+    if (!apiKey && provider !== "ollama-local" && !hasApiKeySubstitute) {
       return NextResponse.json({ error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required` }, { status: 400 });
     }
     const connectionName = name || displayName || cloneNode?.name || AI_PROVIDERS[provider]?.name;
