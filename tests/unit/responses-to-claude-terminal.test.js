@@ -65,6 +65,35 @@ describe("Responses -> Claude streaming termination (reasoning-only turn)", () =
     expect(output).toContain("event: message_stop");
   });
 
+  it("emits tool_use stop metadata for a Muse-style Responses function call", async () => {
+    const output = await runTransform(baseStream([
+      ["response.created", { response: { id: "resp_tool", status: "in_progress" } }],
+      ["response.output_item.added", {
+        output_index: 0,
+        item: { id: "fc_read", type: "function_call", call_id: "toolu_read", name: "Read", arguments: "" },
+      }],
+      ["response.function_call_arguments.delta", {
+        item_id: "fc_read",
+        output_index: 0,
+        delta: JSON.stringify({ file_path: "/tmp/file.js" }),
+      }],
+      ["response.output_item.done", {
+        output_index: 0,
+        item: { id: "fc_read", type: "function_call", call_id: "toolu_read", name: "Read" },
+      }],
+      ["response.completed", {
+        response: { id: "resp_tool", status: "completed", usage: { input_tokens: 10, output_tokens: 5 } },
+      }],
+    ]));
+
+    expect(output).toContain('"type":"tool_use"');
+    expect(output).toContain('"id":"toolu_read"');
+    expect(output).toContain('"name":"Read"');
+    expect(output).toContain('"type":"input_json_delta"');
+    expect(output).toContain('"stop_reason":"tool_use"');
+    expect(output).toContain("event: message_stop");
+  });
+
   it("emits Claude terminal sequence when stream EOFs without [DONE]", async () => {
     const output = await runTransform(resEvent("response.created", { response: { id: "resp_t", status: "in_progress" } })
       + resEvent("response.reasoning_summary_text.delta", { delta: "thinking..." })

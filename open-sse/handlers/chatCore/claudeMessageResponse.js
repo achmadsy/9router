@@ -1,5 +1,4 @@
-import { FORMATS } from "../../translator/formats.js";
-import { fromOpenAIFinish } from "../../translator/concerns/finishReason.js";
+import { toClaudeStopReason } from "../../translator/concerns/finishReason.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -62,6 +61,7 @@ export function openAICompletionToClaudeMessage(responseBody, { classifierMode =
   const content = [];
   const textContent = typeof message.content === "string" ? message.content : "";
   const reasoning = message.reasoning_content || message.provider_specific_fields?.reasoning_content || "";
+  const toolCalls = classifierMode || !Array.isArray(message.tool_calls) ? [] : message.tool_calls;
 
   if (classifierMode) {
     const decision = normalizeClassifierDecision(textContent);
@@ -72,7 +72,7 @@ export function openAICompletionToClaudeMessage(responseBody, { classifierMode =
   } else {
     if (reasoning) content.push({ type: "thinking", thinking: reasoning });
     if (textContent.length > 0) content.push({ type: "text", text: textContent });
-    for (const toolCall of message.tool_calls || []) {
+    for (const toolCall of toolCalls) {
       const fn = toolCall.function || {};
       content.push({
         type: "tool_use",
@@ -85,13 +85,14 @@ export function openAICompletionToClaudeMessage(responseBody, { classifierMode =
   }
 
   const usage = responseBody.usage || {};
+  const hasToolCalls = toolCalls.length > 0;
   return {
     id: String(responseBody.id || `msg_${Date.now()}`).replace(/^chatcmpl-/, ""),
     type: "message",
     role: "assistant",
     model: responseBody.model || "unknown",
     content,
-    stop_reason: fromOpenAIFinish(choice.finish_reason, FORMATS.CLAUDE),
+    stop_reason: toClaudeStopReason(choice.finish_reason, hasToolCalls),
     stop_sequence: null,
     usage: {
       input_tokens: usage.prompt_tokens || usage.input_tokens || 0,

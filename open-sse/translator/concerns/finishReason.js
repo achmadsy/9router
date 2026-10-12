@@ -66,3 +66,12 @@ export function fromOpenAIFinish(reason, format) {
       return reason;
   }
 }
+
+// Tool content is authoritative when providers return a misleading stop reason.
+// Preserve truncation/refusal so clients never execute incomplete or blocked args.
+export function toClaudeStopReason(reason, hasToolCalls = false) {
+  const stopReason = fromOpenAIFinish(reason, "claude");
+  if (!hasToolCalls) return stopReason;
+  if (reason === OPENAI_FINISH.LENGTH || reason === OPENAI_FINISH.CONTENT_FILTER) return stopReason;
+  return CLAUDE_STOP.TOOL_USE;
+}

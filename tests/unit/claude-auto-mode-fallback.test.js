@@ -159,6 +159,53 @@ describe("Claude Code auto-mode fallback", () => {
     expect(() => openAICompletionToClaudeMessage({ choices: [] }, { classifierMode: true })).toThrow(/invalid decision/i);
   });
 
+  it("uses tool_use when a non-streaming provider returns tool calls with stop", () => {
+    const result = openAICompletionToClaudeMessage({
+      id: "chatcmpl_tool",
+      model: "muse-spark-1.3",
+      choices: [{
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "toolu_read",
+            type: "function",
+            function: { name: "Read", arguments: JSON.stringify({ file_path: "/tmp/file.js" }) },
+          }],
+        },
+        finish_reason: "stop",
+      }],
+    });
+
+    expect(result.content).toEqual([{
+      type: "tool_use",
+      id: "toolu_read",
+      name: "Read",
+      input: { file_path: "/tmp/file.js" },
+    }]);
+    expect(result.stop_reason).toBe("tool_use");
+  });
+
+  it("keeps max_tokens when a non-streaming tool call is truncated", () => {
+    const result = openAICompletionToClaudeMessage({
+      id: "chatcmpl_tool_length",
+      model: "muse-spark-1.3",
+      choices: [{
+        message: {
+          role: "assistant",
+          tool_calls: [{
+            id: "toolu_edit",
+            type: "function",
+            function: { name: "Edit", arguments: "{}" },
+          }],
+        },
+        finish_reason: "length",
+      }],
+    });
+
+    expect(result.stop_reason).toBe("max_tokens");
+  });
+
   it("returns a real Anthropic Message JSON for a classifier allow decision from Responses SSE", async () => {
     const result = await runForcedClaudeResponses([
       { type: "reasoning", summary: [{ type: "summary_text", text: "Looks safe." }] },

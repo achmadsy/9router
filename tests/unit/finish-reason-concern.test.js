@@ -1,6 +1,6 @@
 // A1: locks toOpenAIFinish/fromOpenAIFinish behavior changes vs open-sse.old.
 import { describe, it, expect } from "vitest";
-import { toOpenAIFinish, fromOpenAIFinish } from "../../open-sse/translator/concerns/finishReason.js";
+import { toOpenAIFinish, fromOpenAIFinish, toClaudeStopReason } from "../../open-sse/translator/concerns/finishReason.js";
 import { OPENAI_FINISH, CLAUDE_STOP, GEMINI_FINISH } from "../../open-sse/translator/schema/finishReasons.js";
 
 describe("toOpenAIFinish - gemini", () => {
@@ -66,6 +66,19 @@ describe("fromOpenAIFinish round-trip - claude", () => {
   });
   it("length -> max_tokens", () => {
     expect(fromOpenAIFinish("length", "claude")).toBe("max_tokens");
+  });
+});
+
+describe("toClaudeStopReason", () => {
+  it.each([
+    ["stop", true, "tool_use"],
+    ["tool_calls", true, "tool_use"],
+    ["other", true, "tool_use"],
+    ["length", true, "max_tokens"],
+    ["content_filter", true, "refusal"],
+    ["stop", false, "end_turn"],
+  ])("%s with tools=%s -> %s", (reason, hasToolCalls, expected) => {
+    expect(toClaudeStopReason(reason, hasToolCalls)).toBe(expected);
   });
 });
 

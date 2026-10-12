@@ -1,7 +1,7 @@
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import { ROLE, CLAUDE_BLOCK, MODEL_FALLBACK } from "../schema/index.js";
-import { fromOpenAIFinish } from "../concerns/finishReason.js";
+import { toClaudeStopReason } from "../concerns/finishReason.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
 
 // Legacy "proxy_" prefix used by older request translators. Response strips it
@@ -250,7 +250,7 @@ export function openaiToClaudeResponse(chunk, state) {
     const finalUsage = state.usage || { input_tokens: 0, output_tokens: 0 };
     results.push({
       type: "message_delta",
-      delta: { stop_reason: convertFinishReason(choice.finish_reason) },
+      delta: { stop_reason: toClaudeStopReason(choice.finish_reason, state.toolCalls.size > 0) },
       usage: finalUsage
     });
     results.push({ type: "message_stop" });
@@ -258,8 +258,6 @@ export function openaiToClaudeResponse(chunk, state) {
 
   return results.length > 0 ? results : null;
 }
-
-const convertFinishReason = (reason) => fromOpenAIFinish(reason, "claude");
 
 // Register
 register(FORMATS.OPENAI, FORMATS.CLAUDE, null, openaiToClaudeResponse);

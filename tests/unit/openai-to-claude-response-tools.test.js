@@ -58,4 +58,55 @@ describe("openaiToClaudeResponse tool argument sanitization", () => {
       pages: "1-3",
     });
   });
+
+  it("uses tool_use when a provider ends a streamed tool call with stop", () => {
+    const state = createState();
+
+    const startEvents = openaiToClaudeResponse({
+      id: "chatcmpl-test-stop",
+      model: "test-model",
+      choices: [{ delta: { tool_calls: [{ index: 0, id: "toolu_read", function: { name: "Read" } }] } }],
+    }, state);
+
+    const finishEvents = openaiToClaudeResponse({
+      id: "chatcmpl-test-stop",
+      model: "test-model",
+      choices: [{
+        delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ file_path: "/tmp/file.js" }) } }] },
+        finish_reason: "stop",
+      }],
+    }, state);
+
+    expect(startEvents.find((event) => event.type === "content_block_start")?.content_block).toMatchObject({
+      type: "tool_use",
+      id: "toolu_read",
+      name: "Read",
+    });
+    expect(finishEvents.map((event) => event.type)).toEqual([
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ]);
+    expect(JSON.parse(getInputJsonDelta(finishEvents))).toEqual({ file_path: "/tmp/file.js" });
+    expect(finishEvents.find((event) => event.type === "message_delta")?.delta.stop_reason).toBe("tool_use");
+  });
+
+  it("keeps max_tokens when a streamed tool call is truncated", () => {
+    const state = createState();
+
+    openaiToClaudeResponse({
+      id: "chatcmpl-test-length",
+      model: "test-model",
+      choices: [{ delta: { tool_calls: [{ index: 0, id: "toolu_edit", function: { name: "Edit" } }] } }],
+    }, state);
+
+    const events = openaiToClaudeResponse({
+      id: "chatcmpl-test-length",
+      model: "test-model",
+      choices: [{ delta: {}, finish_reason: "length" }],
+    }, state);
+
+    expect(events.find((event) => event.type === "message_delta")?.delta.stop_reason).toBe("max_tokens");
+  });
 });
