@@ -60,20 +60,28 @@ export function generateRequestId(timestamp = Date.now()) {
   return `msg_${time}${unstableRandom()}`;
 }
 
+// Zen validates that the 12 hex prefix decodes to a recent inverted timestamp, so a hash
+// of the downstream session id (random bits) is rejected with 403 FreeTierError. Mint a
+// canonical id once per downstream session and reuse it, like the real CLI does.
+const translatedSessions = new Map();
+const MAX_TRANSLATED_SESSIONS = 1000;
+const TRANSLATED_SESSION_TTL_MS = 60 * 60 * 1000;
+
 export function translateSessionId(sessionId, clientTool = "") {
   if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
-  const digest = crypto
-    .createHash("sha256")
-    .update(`opencode\0${clientTool || "generic"}\0${sessionId || ""}`)
-    .digest();
-  const timeHex = digest.subarray(0, 6).toString("hex");
-  let randomPart = "";
-  for (let i = 6; i < 20; i++) {
-    randomPart += BASE62_CHARS[digest[i] % 62];
+  const key = `${clientTool || "generic"}\0${sessionId || ""}`;
+  const now = Date.now();
+  const hit = translatedSessions.get(key);
+  if (hit && now - hit.createdAt < TRANSLATED_SESSION_TTL_MS) return hit.id;
+  const id = generateSessionId();
+  translatedSessions.delete(key);
+  if (translatedSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedSessions.delete(translatedSessions.keys().next().value);
   }
-  return `ses_${timeHex}${randomPart}`;
+  translatedSessions.set(key, { id, createdAt: now });
+  return id;
 }
 
 function normalizeSession(value) {

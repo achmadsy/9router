@@ -346,3 +346,25 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
     expect(PROVIDERS.opencode?.forceStream).toBe(true);
   });
 });
+
+describe("translateSessionId produces a canonical inverted-timestamp session", () => {
+  // Zen rejects a ses_ whose 12 hex prefix is not ~(Date.now()*4096+n) with 403 FreeTierError.
+  const MASK = 0xffffffffffffn;
+  // The 12 hex chars are the low 48 bits of ~(ms * 4096 + counter); compare in that space.
+  const decodedUnits = (id) => MASK - BigInt("0x" + id.slice(4, 16));
+
+  it("encodes a recent timestamp, not hash bits", () => {
+    const id = translateSessionId("claude:550e8400-e29b-41d4-a716-446655440000", "claude");
+    expect(id).toMatch(OPENCODE_SESSION_RE);
+    const nowUnits = (BigInt(Date.now()) * 0x1000n) & MASK;
+    const diffMs = Number((decodedUnits(id) - nowUnits) / 0x1000n);
+    expect(Math.abs(diffMs)).toBeLessThan(60_000);
+  });
+
+  it("is stable for the same downstream session and differs across sessions", () => {
+    const a1 = translateSessionId("conv-a", "claude");
+    expect(translateSessionId("conv-a", "claude")).toBe(a1);
+    expect(translateSessionId("conv-b", "claude")).not.toBe(a1);
+    expect(translateSessionId("conv-a", "codex")).not.toBe(a1);
+  });
+});
