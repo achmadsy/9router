@@ -1,0 +1,39 @@
+:20128 {
+    bind 127.0.0.1
+
+    # Access log to stdout (docker logs). Caddy redacts sensitive headers.
+    log {
+        output stdout
+    }
+
+    # Reject malformed Next.js Server Action probes before they reach 9Router.
+    @bogusNextAction {
+        header Next-Action *
+        not header_regexp Next-Action ^[0-9a-fA-F]{40,64}$
+    }
+    handle @bogusNextAction {
+        respond 403
+    }
+
+    # Trust visitor headers only from local Nginx.
+    @localNginx {
+        remote_ip 127.0.0.1 ::1
+        header X-Real-IP *
+    }
+    handle @localNginx {
+        reverse_proxy 127.0.0.1:20129 {
+            header_up X-Real-IP {http.request.header.X-Real-IP}
+            header_up X-Forwarded-For {http.request.header.X-Real-IP}
+            header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+        }
+    }
+
+    # Replace forwarding headers for any non-Nginx client.
+    handle {
+        reverse_proxy 127.0.0.1:20129 {
+            header_up X-Real-IP {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {http.request.proto}
+        }
+    }
+}

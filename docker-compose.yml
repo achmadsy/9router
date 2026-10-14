@@ -1,33 +1,59 @@
 services:
   9router:
-    image: zzlinkzz/9router:latest
+    image: "${NINEROUTER_IMAGE:-zzlinkzz/9router:latest}"
     container_name: 9router
     restart: always
     ports:
-      - "20128:20128"
+      - "127.0.0.1:20129:20128"
+      - "127.0.0.1:6080:6080"
     volumes:
       - 9router-data:/app/data
+      - "${MIMOCODE_CONFIG_DIR:-/home/ubuntu/.local/share/mimocode}:/home/node/.local/share/mimocode:ro"
+      - "${XIAOMI_MIMO_CONFIG_DIR:-/home/ubuntu/.config/Xiaomi MiMo}:/home/node/.config/Xiaomi MiMo:ro"
     env_file:
       - .env
     environment:
       DATA_DIR: /app/data
       PORT: "20128"
       HOSTNAME: "0.0.0.0"
+      NINEROUTER_TRUSTED_PROXY_IPS: "${NINEROUTER_TRUSTED_PROXY_IPS:-172.18.0.1}"
       NODE_ENV: production
-      HEADROOM_URL: http://headroom:8787
+      HEADROOM_URL: "${HEADROOM_URL:-}"
+      HEADROOM_TOKEN: "${HEADROOM_TOKEN:-}"
       SENTRY_DSN: "${SENTRY_DSN:-}"
       DISPLAY: ":99"
-    depends_on:
-      - headroom
+      NOVNC_ENABLED: "${NOVNC_ENABLED:-true}"
 
-  headroom:
-    image: ghcr.io/headroomlabs-ai/headroom:latest
-    container_name: headroom
+  9router-proxy:
+    image: caddy:2-alpine
+    container_name: 9router-proxy
     restart: always
-    ports:
-      - "8787:8787"
+    network_mode: host
+    volumes:
+      - ./9router.Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - 9router
+
+  gluetun-fr:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun-fr
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
-      - HEADROOM_COMPRESS_ALLOW_REMOTE=true
+      VPN_SERVICE_PROVIDER: airvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: "${AIRVPN_PRIVATE_KEY}"
+      WIREGUARD_PRESHARED_KEY: "${AIRVPN_PRESHARED_KEY}"
+      WIREGUARD_ADDRESSES: "${AIRVPN_ADDRESSES}"
+      WIREGUARD_MTU: "${AIRVPN_MTU:-1320}"
+      SERVER_COUNTRIES: "${AIRVPN_COUNTRY:-Singapore}"
+      HEALTH_TARGET_ADDRESSES: 1.1.1.1:443
+      FIREWALL_OUTBOUND_SUBNETS: 172.18.0.0/16
+    volumes:
+      - ./iptables/post-rules.txt:/iptables/post-rules.txt:ro
 
 volumes:
   9router-data:
