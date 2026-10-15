@@ -250,7 +250,7 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
     // Free-tier gate: upstream 403s stream:false even when everything else is valid.
     if (out && typeof out === "object") out.stream = true;
     if (!isResponsesModel(model || body?.model)) {
-      ensureChatFingerprintTools(out);
+      applyFingerprintTools(out, false);
       return out;
     }
     const normalized = normalizeResponsesInput(out.input);
