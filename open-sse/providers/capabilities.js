@@ -213,6 +213,14 @@ const DEVIN_CLI_GPT_CAPS = { vision: true, reasoning: true, search: true, thinki
  * Provider-specific capability overrides. Keyed by provider alias/id.
  */
 export const PROVIDER_CAPABILITIES = {
+  // GLM China uses the OpenAI-compatible coding endpoint. Unlike the `glm`
+  // Start Plan provider, it expects Z.ai's thinking object plus low|high|max
+  // reasoning_effort for GLM-5.2+.
+  "glm-cn": {
+    "glm-5.3": { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, contextWindow: 1000000, maxOutput: 128000 },
+    "glm-5.3-flash": { vision: true, videoInput: true, pdf: true, reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, contextWindow: 1000000, maxOutput: 131072 },
+    "glm-5.2": { reasoning: true, thinkingFormat: "zai", thinkingEffortSupported: true, contextWindow: 1000000, maxOutput: 128000 },
+  },
   // NVIDIA NIM is OpenAI-compatible → rejects MiniMax/GLM native `thinking` field.
   // Force openai reasoning_effort format for its reasoning models. #issue
   "nvidia": {

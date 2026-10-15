@@ -155,7 +155,13 @@ describe("applyThinking per provider format", () => {
   });
   it("GLM-5.2 also gets reasoning_effort (supported from 5.2 onward)", () => {
     const out = apply("openai", "glm-5.2", { reasoning_effort: "low" }, "glm-cn");
+    expect(out.thinking).toEqual({ type: "enabled" });
     expect(out.reasoning_effort).toBe("low");
+  });
+  it("keeps GLM Coding Start Plan on Claude-style budgets", () => {
+    const out = apply("claude", "glm-5.3", { reasoning_effort: "high" }, "glm");
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 24576 });
+    expect(out.reasoning_effort).toBeUndefined();
   });
   it("GLM-4.7 (pre-5.2) does not get reasoning_effort — z.ai ignores it", () => {
     const out = apply("openai", "glm-4.7", { reasoning_effort: "low" }, "glm-cn");
