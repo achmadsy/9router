@@ -5,9 +5,10 @@ import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
   if (!key || typeof key !== "string") return null;
-  if (key.length <= 12) return key.charAt(0) + "***";
+  const trimmed = key.trim();
+  if (trimmed.length <= 12) return trimmed.charAt(0) + "***";
   // Keep the tail: keys sharing a machine-id prefix (team keys) must not collide.
-  return key.slice(0, 8) + "***" + key.slice(-4);
+  return trimmed.slice(0, 8) + "***" + trimmed.slice(-4);
 }
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
@@ -552,9 +553,11 @@ export async function getUsageStats(period = "all", options = {}) {
         const rawModel = ak.rawModel || "";
         const provider = ak.provider || "";
         const providerDisplayName = providerNodeNameMap[provider] || provider;
-        const apiKeyVal = ak.apiKeyId || (ak.apiKey && typeof ak.apiKey === "string" ? ak.apiKey : null);
-        const keyInfo = apiKeyVal ? apiKeyMap[apiKeyVal] : null;
-        const keyName = keyInfo?.name || (apiKeyVal ? (keyInfo?.keyHint || String(apiKeyVal).slice(0, 8) + "...") : "Local (No API Key)");
+        // New rows use apiKeyId. Keep masked display support for legacy daily
+        // aggregates that predate secret-free attribution.
+        const apiKeyVal = ak.apiKeyId || (ak.apiKey && typeof ak.apiKey === "string" ? ak.apiKey.trim() : null);
+        const keyInfo = ak.apiKeyId ? apiKeyMap[ak.apiKeyId] : null;
+        const keyName = keyInfo?.name || (apiKeyVal ? (keyInfo?.keyHint || maskApiKey(apiKeyVal) || String(apiKeyVal).slice(0, 8) + "...") : "Local (No API Key)");
         const apiKeyMasked = keyInfo?.keyHint || maskApiKey(apiKeyVal);
         const apiKeyKey = apiKeyVal || "local-no-key";
         if (!stats.byApiKey[akKey]) {
@@ -629,8 +632,8 @@ export async function getUsageStats(period = "all", options = {}) {
 
     for (const r of filtered) {
       const tokens = parseJson(r.tokens, {}) || {};
-      const promptTokens = tokens.prompt_tokens || 0;
-      const completionTokens = tokens.completion_tokens || 0;
+      const promptTokens = tokens.prompt_tokens || tokens.input_tokens || r.promptTokens || 0;
+      const completionTokens = tokens.completion_tokens || tokens.output_tokens || r.completionTokens || 0;
       const cachedTokens = tokens.cached_tokens || tokens.cache_read_input_tokens || 0;
       const entryCost = r.cost || 0;
       const providerDisplayName = providerNodeNameMap[r.provider] || r.provider;

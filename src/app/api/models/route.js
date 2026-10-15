@@ -11,6 +11,7 @@ import { getModelCapabilityOverrides } from "@/lib/db/repos/modelCapabilityRepo.
 import { AI_MODELS } from "@/shared/constants/config";
 import {
   AI_PROVIDERS,
+  ALIAS_TO_ID,
   getProviderAlias,
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
@@ -67,8 +68,8 @@ function matchesSearch(model, search) {
 }
 
 function withCapabilities(model) {
-  const c = getCapabilitiesForModel(model.provider, model.model);
-  const { storedCaps, ...result } = model;
+  const c = getCapabilitiesForModel(model.capabilityProvider || model.provider, model.model);
+  const { storedCaps, capabilityProvider, ...result } = model;
   return {
     ...result,
     caps: {
@@ -86,7 +87,7 @@ function withCapabilities(model) {
 // params retain the full-list response; the Models dashboard requests a bounded page.
 export async function GET(request) {
   try {
-    const { searchParams } = new URL(request.url);
+    const { searchParams } = new URL(request?.url || "http://localhost/api/models");
     const paginated = searchParams.has("page") || searchParams.has("pageSize") || searchParams.has("search");
     const requestedPage = positiveInteger(searchParams.get("page"), 1);
     const pageSize = Math.min(positiveInteger(searchParams.get("pageSize"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
@@ -96,9 +97,9 @@ export async function GET(request) {
       getModelAliases(),
       getDisabledModels(),
       getCustomModels(),
-      getProviderNodes(),
-      getProviderConnections(),
-      getModelCapabilityOverrides(),
+      typeof getProviderNodes === "function" ? getProviderNodes() : [],
+      typeof getProviderConnections === "function" ? getProviderConnections() : [],
+      typeof getModelCapabilityOverrides === "function" ? getModelCapabilityOverrides() : [],
     ]);
     const resolveProviderMetadata = buildProviderMetadata(nodes, connections);
     const overriddenModels = new Set(capabilityOverrides.map((item) => `${item.provider}|${item.model}`));
@@ -124,13 +125,18 @@ export async function GET(request) {
         };
       });
 
+    // Custom models ride along; their stored caps override the name heuristic.
+    // Drop rows that shadow a registry model under the same routed alias.
     const seenFull = new Set(descriptors.map((m) => m.fullModel));
+    const seenRouted = new Set(descriptors.map((m) => m.routedModel));
     for (const m of customModels) {
       if (!m?.id || (m.kind || m.type || "llm") !== "llm") continue;
       const fullModel = `${m.providerAlias}/${m.id}`;
-      if (seenFull.has(fullModel)) continue;
+      if (seenFull.has(fullModel) || seenRouted.has(fullModel)) continue;
+      const providerId = ALIAS_TO_ID[m.providerAlias] || m.providerAlias;
       descriptors.push({
         provider: m.providerAlias,
+        capabilityProvider: providerId,
         model: m.id,
         name: m.name || m.id,
         ...resolveProviderMetadata(m.providerAlias, m.providerAlias),

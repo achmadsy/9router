@@ -123,6 +123,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           connectionNoProxy: resolvedProxy.connectionNoProxy,
           connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
           vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+          strictProxy: resolvedProxy.strictProxy === true,
           // Self-Aware: which proxy identity this attempt is bound to
           ...(proxyScopeId ? {
             cooldownTarget: {

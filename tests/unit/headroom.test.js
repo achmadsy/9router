@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, headroomTokenHeaders } from "../../open-sse/rtk/headroom.js";
+import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../../open-sse/rtk/headroom.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete process.env.HEADROOM_TOKEN;
 });
 
 describe("compressWithHeadroom", () => {
@@ -38,116 +37,61 @@ describe("compressWithHeadroom", () => {
     });
   });
 
-  it("sends X-Headroom-Proxy-Token when HEADROOM_TOKEN is set", async () => {
-    process.env.HEADROOM_TOKEN = "test-token-abc";
+  it("counts Claude system compression without counting unchanged tool schemas", async () => {
+    const diagnostics = {};
+    const body = {
+      system: "long system prompt ".repeat(1000),
+      messages: [{ role: "user", content: [{ type: "text", text: "unchanged message" }] }],
+      tools: [{ name: "lookup", description: "tool schema ".repeat(10000), input_schema: { type: "object" } }],
+    };
+    const originalTools = structuredClone(body.tools);
     global.fetch = vi.fn(async () => new Response(JSON.stringify({
-      messages: [{ role: "user", content: "short" }],
+      messages: [
+        { role: "system", content: "short system prompt" },
+        { role: "user", content: "unchanged message" },
+      ],
+      tokens_before: 10000,
+      tokens_after: 100,
+      tokens_saved: 9900,
     }), { status: 200 }));
-    const body = { messages: [{ role: "user", content: "long" }] };
-
-    await compressWithHeadroom(body, { enabled: true, url: "http://headroom:8787", model: "gpt-4o" });
-
-    expect(global.fetch.mock.calls[0][1].headers).toMatchObject({
-      "Content-Type": "application/json",
-      "X-Headroom-Proxy-Token": "test-token-abc",
-    });
-  });
-
-  it("omits X-Headroom-Proxy-Token when HEADROOM_TOKEN is unset", async () => {
-    delete process.env.HEADROOM_TOKEN;
-    global.fetch = vi.fn(async () => new Response(JSON.stringify({
-      messages: [{ role: "user", content: "short" }],
-    }), { status: 200 }));
-    const body = { messages: [{ role: "user", content: "long" }] };
-
-    await compressWithHeadroom(body, { enabled: true, url: "http://headroom:8787" });
-
-    expect(global.fetch.mock.calls[0][1].headers).not.toHaveProperty("X-Headroom-Proxy-Token");
-  });
-
-  it("headroomTokenHeaders prefers non-empty override then env", () => {
-    delete process.env.HEADROOM_TOKEN;
-    expect(headroomTokenHeaders("  tok  ")).toEqual({ "X-Headroom-Proxy-Token": "tok" });
-    expect(headroomTokenHeaders("")).toEqual({});
-    expect(headroomTokenHeaders("   ")).toEqual({});
-    expect(headroomTokenHeaders(undefined)).toEqual({});
-    expect(headroomTokenHeaders(null)).toEqual({});
-
-    process.env.HEADROOM_TOKEN = "env-tok";
-    expect(headroomTokenHeaders("ui-tok")).toEqual({ "X-Headroom-Proxy-Token": "ui-tok" });
-    expect(headroomTokenHeaders("")).toEqual({ "X-Headroom-Proxy-Token": "env-tok" });
-    expect(headroomTokenHeaders(undefined)).toEqual({ "X-Headroom-Proxy-Token": "env-tok" });
-  });
-
-  it("uses settings token override over env for compress", async () => {
-    process.env.HEADROOM_TOKEN = "env-token";
-    global.fetch = vi.fn(async () => new Response(JSON.stringify({
-      messages: [{ role: "user", content: "short" }],
-    }), { status: 200 }));
-    const body = { messages: [{ role: "user", content: "long" }] };
-
-    await compressWithHeadroom(body, {
-      enabled: true,
-      url: "http://headroom:8787",
-      token: "settings-token",
-    });
-
-    expect(global.fetch.mock.calls[0][1].headers).toMatchObject({
-      "X-Headroom-Proxy-Token": "settings-token",
-    });
-  });
-
-  it("passes mode and protect_recent in config when specified", async () => {
-    let requestPayload;
-    global.fetch = vi.fn(async (_url, init) => {
-      requestPayload = JSON.parse(init.body);
-      return new Response(JSON.stringify({
-        messages: [{ role: "user", content: "compressed" }],
-        tokens_before: 100,
-        tokens_after: 50,
-        tokens_saved: 50,
-      }), { status: 200 });
-    });
-    const body = { messages: [{ role: "user", content: "long prompt" }] };
 
     const stats = await compressWithHeadroom(body, {
-      enabled: true,
-      url: "http://localhost:8787",
-      model: "gpt-4o",
-      mode: "lossy_inline",
-      protectRecent: 2,
+      enabled: true, url: "http://localhost:8787", model: "claude-sonnet-4.5", format: "claude", diagnostics,
     });
 
-    expect(stats.tokens_saved).toBe(50);
-    expect(requestPayload.config).toEqual({
-      mode: "lossy_inline",
-      protect_recent: 2,
-    });
+    expect(body.tools).toEqual(originalTools);
+    expect(body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "unchanged message" }] }]);
+    expect(body.system).toEqual(expect.arrayContaining([expect.objectContaining({ text: "short system prompt" })]));
+    expect(isHeadroomPhantomSavings(stats, diagnostics)).toBe(false);
   });
 
-  it("omits mode and protect_recent when default or unset", async () => {
-    let requestPayload;
-    global.fetch = vi.fn(async (_url, init) => {
-      requestPayload = JSON.parse(init.body);
-      return new Response(JSON.stringify({
-        messages: [{ role: "user", content: "compressed" }],
-        tokens_before: 100,
-        tokens_after: 50,
-        tokens_saved: 50,
-      }), { status: 200 });
-    });
-    const body = { messages: [{ role: "user", content: "long prompt" }] };
+  it.each([["absent", undefined], ["unchanged", "unchanged system ".repeat(1000)]])(
+    "does not warn when Claude messages shrink and the system prompt is %s",
+    async (_name, system) => {
+      const diagnostics = {};
+      const body = {
+        system,
+        messages: [{ role: "user", content: "x".repeat(1000) }],
+      };
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body);
+        return new Response(JSON.stringify({
+          messages: messages.map((message) => message.role === "user"
+            ? { ...message, content: "x".repeat(900) } : message),
+          tokens_before: 1000,
+          tokens_after: 900,
+          tokens_saved: 100,
+        }), { status: 200 });
+      });
 
-    await compressWithHeadroom(body, {
-      enabled: true,
-      url: "http://localhost:8787",
-      model: "gpt-4o",
-      mode: "",
-      protectRecent: 0,
-    });
+      const stats = await compressWithHeadroom(body, {
+        enabled: true, url: "http://localhost:8787", model: "claude-sonnet-4.5", format: "claude", diagnostics,
+      });
 
-    expect(requestPayload.config).toBeUndefined();
-  });
+      expect(body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "x".repeat(900) }] }]);
+      expect(isHeadroomPhantomSavings(stats, diagnostics)).toBe(false);
+    }
+  );
 
   it("compresses responses input in-place", async () => {
     global.fetch = vi.fn(async () => new Response(JSON.stringify({
@@ -305,114 +249,9 @@ describe("compressWithHeadroom", () => {
     expect(body.messages[0].content).toBe("long");
   });
 
-  it("compresses Antigravity request in-place", async () => {
-    let requestPayload;
-    global.fetch = vi.fn(async (_url, init) => {
-      requestPayload = JSON.parse(init.body);
-      return new Response(JSON.stringify({
-        messages: [
-          { role: "system", content: "compressed system" },
-          { role: "user", content: "compressed user" },
-          { role: "assistant", content: "compressed assistant" },
-          { role: "user", content: "compressed follow-up" },
-        ],
-        tokens_before: 60,
-        tokens_after: 25,
-        tokens_saved: 35,
-      }), { status: 200 });
-    });
-
-    const body = {
-      project: "test-proj-123",
-      model: "gemini-3.8-flash-high",
-      userAgent: "antigravity",
-      requestId: "agent-test-1",
-      requestType: "agent",
-      request: {
-        sessionId: 8888,
-        generationConfig: { temperature: 0.7 },
-        systemInstruction: { role: "user", parts: [{ text: "original system" }] },
-        contents: [
-          { role: "user", parts: [{ text: "original user long context" }] },
-          { role: "model", parts: [{ text: "original assistant long response" }] },
-          { role: "user", parts: [{ text: "original follow-up query" }] },
-        ],
-      },
-    };
-
-    const stats = await compressWithHeadroom(body, {
-      enabled: true,
-      url: "http://localhost:8787",
-      model: "gemini-3.8-flash-high",
-      format: "antigravity",
-    });
-
-    expect(stats.tokens_saved).toBe(35);
-    expect(requestPayload.messages).toEqual([
-      { role: "system", content: "original system" },
-      { role: "user", content: "original user long context" },
-      { role: "assistant", content: "original assistant long response" },
-      { role: "user", content: "original follow-up query" },
-    ]);
-    expect(body.project).toBe("test-proj-123");
-    expect(body.request.sessionId).toBe(8888);
-    expect(body.request.systemInstruction).toEqual({
-      role: "user",
-      parts: [{ text: "compressed system" }],
-    });
-    expect(body.request.contents).toEqual([
-      { role: "user", parts: [{ text: "compressed user" }] },
-      { role: "model", parts: [{ text: "compressed assistant" }] },
-      { role: "user", parts: [{ text: "compressed follow-up" }] },
-    ]);
-  });
-
-  it("compresses Gemini direct request in-place", async () => {
-    let requestPayload;
-    global.fetch = vi.fn(async (_url, init) => {
-      requestPayload = JSON.parse(init.body);
-      return new Response(JSON.stringify({
-        messages: [
-          { role: "system", content: "compressed gemini system" },
-          { role: "user", content: "compressed gemini user" },
-        ],
-        tokens_before: 40,
-        tokens_after: 15,
-        tokens_saved: 25,
-      }), { status: 200 });
-    });
-
-    const body = {
-      contents: [
-        { role: "user", parts: [{ text: "original gemini user prompt" }] },
-      ],
-      systemInstruction: { role: "user", parts: [{ text: "original gemini system" }] },
-    };
-
-    const stats = await compressWithHeadroom(body, {
-      enabled: true,
-      url: "http://localhost:8787",
-      model: "gemini-2.5-flash",
-      format: "gemini",
-    });
-
-    expect(stats.tokens_saved).toBe(25);
-    expect(requestPayload.messages).toEqual([
-      { role: "system", content: "original gemini system" },
-      { role: "user", content: "original gemini user prompt" },
-    ]);
-    expect(body.systemInstruction).toEqual({
-      role: "user",
-      parts: [{ text: "compressed gemini system" }],
-    });
-    expect(body.contents).toEqual([
-      { role: "user", parts: [{ text: "compressed gemini user" }] },
-    ]);
-  });
-
   it("skips unknown shapes", async () => {
     global.fetch = vi.fn();
-    const body = { customKey: "foo" };
+    const body = { contents: [{ parts: [{ text: "long" }] }] };
 
     const stats = await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787" });
 
@@ -527,5 +366,41 @@ describe("formatHeadroomLog", () => {
       before: { bodyBytes: 1000, messageBytes: 800, toolSchemaBytes: 100, toolHistoryBytes: 500 },
       after: { bodyBytes: 900, messageBytes: 700, toolSchemaBytes: 100, toolHistoryBytes: 400 },
     })).toContain("tools=100B→100B toolHistory=500B→400B effective=10.0%");
+  });
+});
+
+describe("isHeadroomPhantomSavings", () => {
+  it.each([
+    ["healthy message compression with large tools", 1000, 500, false],
+    ["barely smaller messages", 1000, 990, true],
+    ["unchanged messages", 1000, 1000, true],
+    ["larger messages", 1000, 1100, true],
+    ["missing message sizes", undefined, undefined, false],
+    ["empty original messages", 0, 10, false],
+    ["missing compressed size", 1000, 0, false],
+  ])("handles %s", (_name, before, after, expected) => {
+    expect(isHeadroomPhantomSavings({ tokens_saved: 500 }, {
+      before: { bodyBytes: 100000, messageBytes: before },
+      after: { bodyBytes: 99500, messageBytes: after },
+    })).toBe(expected);
+  });
+
+  it("does not warn without a positive reported token delta", () => {
+    const diagnostics = {
+      before: { bodyBytes: 100000, messageBytes: 1000 },
+      after: { bodyBytes: 100000, messageBytes: 1000 },
+    };
+    for (const stats of [null, {}, { tokens_saved: 0 }, { tokens_saved: -1 }]) {
+      expect(isHeadroomPhantomSavings(stats, diagnostics)).toBe(false);
+    }
+  });
+
+  it("honors the requested message shrink threshold", () => {
+    const diagnostics = {
+      before: { bodyBytes: 100000, messageBytes: 1000 },
+      after: { bodyBytes: 99900, messageBytes: 900 },
+    };
+    expect(isHeadroomPhantomSavings({ tokens_saved: 100 }, diagnostics)).toBe(false);
+    expect(isHeadroomPhantomSavings({ tokens_saved: 100 }, diagnostics, 0.2)).toBe(true);
   });
 });

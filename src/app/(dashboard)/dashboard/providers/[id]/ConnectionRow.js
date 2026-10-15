@@ -27,9 +27,18 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
       : hasLegacyProxy
         ? `Legacy: ${connection.providerSpecificData?.connectionProxyUrl}`
         : "";
-  const autoPingTooltip = autoPing?.provider === "codex"
-    ? "Auto-starts the next 5h Codex window after reset by sending a tiny gpt-5.5 request. Consumes a small amount of quota."
-    : "When your 5h quota runs out, auto-sends a request the moment it resets so a new window starts right away.";
+  const autoPingTooltip = (() => {
+    if (!autoPing) return "";
+    const activeModes = [];
+    if (autoPing.reactiveOn) activeModes.push("On reset");
+    if (autoPing.scheduleOn) activeModes.push(`Scheduled (${autoPing.scheduleSummary || "active"})`);
+    if (activeModes.length > 0) {
+      return `Auto-ping active: ${activeModes.join(" + ")}. Click to configure.`;
+    }
+    return autoPing.provider === "codex"
+      ? "Auto-starts the next 5h Codex window after reset or on schedule. Click to configure."
+      : "Auto-starts a new window on quota reset or fixed schedule. Click to configure.";
+  })();
 
   let maskedProxyUrl = "";
   if (boundProxyPool?.proxyUrl || connection.providerSpecificData?.connectionProxyUrl) {
@@ -247,7 +256,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
         <div className="grid flex-1 grid-cols-3 gap-1 sm:flex sm:flex-none">
           {/* Proxy button with inline dropdown */}
           {(proxyPools || []).length > 0 && (
-            <div className="relative" ref={proxyDropdownRef}>
+            <div ref={proxyDropdownRef}>
               <button
                 ref={proxyButtonRef}
                 onClick={() => setShowProxyDropdown((v) => !v)}
@@ -282,15 +291,15 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
                     </button>
                   ))}
                 </div>,
-                document.body,
+                document.body
               )}
             </div>
           )}
           {autoPing && (
             <Tooltip text={autoPingTooltip}>
               <button
-                onClick={() => autoPing.onToggle(!autoPing.on)}
-                className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPing.on ? "text-primary" : "text-text-muted hover:text-primary"}`}
+                onClick={autoPing.onConfigure}
+                className={`flex w-full flex-col items-center rounded px-2 py-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5 ${autoPing.isActive ? "text-primary" : "text-text-muted hover:text-primary"}`}
               >
                 <span className="material-symbols-outlined text-[18px]">bolt</span>
                 <span className="text-[10px] leading-tight">Auto-ping</span>
@@ -351,8 +360,11 @@ ConnectionRow.propTypes = {
     error: PropTypes.string,
   }),
   autoPing: PropTypes.shape({
-    on: PropTypes.bool,
-    onToggle: PropTypes.func,
+    isActive: PropTypes.bool,
     provider: PropTypes.string,
+    reactiveOn: PropTypes.bool,
+    scheduleOn: PropTypes.bool,
+    scheduleSummary: PropTypes.string,
+    onConfigure: PropTypes.func,
   }),
 };
