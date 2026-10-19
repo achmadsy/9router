@@ -87,10 +87,12 @@ export async function POST(request) {
     resolvedJudge = judge;
   }
 
-  // Early SSRF validation for custom endpoints (sidecar remains authoritative for pinning)
-  if (resolvedTarget?.endpoint) {
+  // Early SSRF validation for custom endpoints (sidecar remains authoritative for pinning).
+  // Validate every accepted URL field — the sidecar contract accepts baseUrl or endpoint.
+  const targetUrl = resolvedTarget?.endpoint || resolvedTarget?.baseUrl;
+  if (targetUrl) {
     try {
-      await assertPublicUrlResolved(resolvedTarget.endpoint);
+      await assertPublicUrlResolved(targetUrl, { requireResolve: true });
     } catch (err) {
       return NextResponse.json(
         { error: `Invalid target endpoint: ${err.message}` },
@@ -99,9 +101,10 @@ export async function POST(request) {
     }
   }
 
-  if (resolvedJudge?.endpoint) {
+  const judgeUrl = resolvedJudge?.endpoint || resolvedJudge?.baseUrl;
+  if (judgeUrl) {
     try {
-      await assertPublicUrlResolved(resolvedJudge.endpoint);
+      await assertPublicUrlResolved(judgeUrl, { requireResolve: true });
     } catch (err) {
       return NextResponse.json(
         { error: `Invalid judge endpoint: ${err.message}` },

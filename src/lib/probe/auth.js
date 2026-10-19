@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { timingSafeEqual } from "node:crypto";
 import { verifyDashboardAuthToken, getDashboardAuthSession } from "@/lib/auth/dashboardSession";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 
@@ -24,11 +25,12 @@ async function getCliToken() {
  * Returns { authorized: boolean, ownerId: string | null }
  */
 export async function verifyProbeAdminAuth(request) {
-  // 1. Check CLI token
+  // 1. Check CLI token (constant-time compare)
   const cliToken = request?.headers?.get?.(CLI_TOKEN_HEADER);
   if (cliToken) {
     const expected = await getCliToken();
-    if (expected && cliToken === expected) {
+    if (expected && cliToken.length === expected.length &&
+        timingSafeEqual(Buffer.from(cliToken), Buffer.from(expected))) {
       return { authorized: true, ownerId: "cli:machine" };
     }
   }
@@ -83,8 +85,14 @@ export function verifyCsrfOrigin(request) {
 
   try {
     const originUrl = new URL(origin);
+    // Host may be IPv6-bracketed ("[::1]:20128") — parse via URL, don't split on ":".
     const hostHeader = request.headers.get("host") || "";
-    const hostName = hostHeader.split(":")[0].toLowerCase();
+    let hostName = "";
+    try {
+      hostName = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+    } catch {
+      hostName = hostHeader.split(":")[0].toLowerCase();
+    }
     const originHost = originUrl.hostname.toLowerCase();
 
     if (originHost === hostName) return true;

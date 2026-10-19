@@ -676,13 +676,21 @@ export async function OPTIONS() {
  */
 export async function GET(request) {
   try {
+    // Invalid/paused presented keys → 401 even when requireApiKey is false.
+    // Auth runs before the (expensive) catalog build so bad keys never trigger
+    // live provider fetches, and the response carries the same CORS header.
+    const keyCtx = await resolveApiKeyContext(request);
+    if (keyCtx.errorResponse) {
+      return new Response(keyCtx.errorResponse.body, {
+        status: keyCtx.errorResponse.status,
+        headers: { "Access-Control-Allow-Origin": "*", ...Object.fromEntries(keyCtx.errorResponse.headers) },
+      });
+    }
+
     // Detect cross-instance recursive /models fetch (another 9router fetching our /models)
     const skipDynamicFetch = request?.headers?.get(INTERNAL_MODELS_FETCH_HEADER) === "1";
     const data = await buildModelsList([LLM_KIND], { skipDynamicFetch });
 
-    // Invalid/paused presented keys → 401 even when requireApiKey is false.
-    const keyCtx = await resolveApiKeyContext(request);
-    if (keyCtx.errorResponse) return keyCtx.errorResponse;
     const filtered = filterCatalogByPolicy(keyCtx.keyRow, data, {
       combos: await loadCombosForPolicy(),
     });
@@ -694,7 +702,7 @@ export async function GET(request) {
     console.log("Error fetching models:", error);
     return Response.json(
       { error: { message: error.message, type: "server_error" } },
-      { status: 500 }
+      { status: 500, headers: { "Access-Control-Allow-Origin": "*" } }
     );
   }
 }

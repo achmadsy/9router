@@ -47,6 +47,7 @@ const ALWAYS_PROTECTED = [
   "/api/oauth/kiro/auto-import",
   "/api/oauth/zed/auto-import",
   "/api/probe",
+  "/dashboard/probe",
 ];
 
 // Require auth, but allow through if requireLogin is disabled
@@ -227,6 +228,12 @@ export async function proxy(request) {
   if (ALWAYS_PROTECTED.some((p) => pathname.startsWith(p))) {
     if (await hasValidCliToken(request) || await hasValidToken(request))
       return NextResponse.next();
+    // Page paths get a login redirect; JSON APIs get 401.
+    if (!pathname.startsWith("/api/")) {
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("next", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

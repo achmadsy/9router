@@ -205,7 +205,10 @@ export function assertPublicUrl(rawUrl) {
 // domain that merely *resolves* to a private/loopback/metadata address (wildcard-DNS
 // services like nip.io/sslip.io, or an attacker-controlled domain with an A record
 // pointed at 127.0.0.1) is rejected too, not just IPs typed directly into the URL.
-export async function assertPublicUrlResolved(rawUrl) {
+// options.requireResolve — throw when DNS resolution itself fails instead of
+// letting the subsequent fetch surface the error (probe targets: an unresolvable
+// name here may resolve to an internal service in a different DNS namespace).
+export async function assertPublicUrlResolved(rawUrl, options = {}) {
   assertPublicUrl(rawUrl);
   const parsed = new URL(rawUrl);
   const host = normalizeHost(parsed.hostname);
@@ -218,7 +221,10 @@ export async function assertPublicUrlResolved(rawUrl) {
   let addresses;
   try {
     addresses = await dns.promises.lookup(host, { all: true, verbatim: true });
-  } catch {
+  } catch (err) {
+    if (options.requireResolve) {
+      throw new Error(`Blocked URL: hostname '${host}' could not be resolved (${err.code || err.message})`);
+    }
     // Resolution failure isn't an SSRF signal by itself — let the subsequent
     // fetch() fail with its own (clearer) network error.
     return;

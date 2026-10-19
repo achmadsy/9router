@@ -79,6 +79,12 @@ export function createBoundedSseStream(runId) {
       }
       finishActiveRun(runId);
     },
+    // Sidecar crashed / socket dropped mid-stream: flush() never runs on an
+    // errored or cancelled transform, so release the active-run slot here or
+    // every later run would 409 until process restart.
+    cancel() {
+      finishActiveRun(runId);
+    },
   });
 
   return transform;
