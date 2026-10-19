@@ -119,6 +119,11 @@ async function runHeavyStartup() {
   import("@/sse/services/backgroundTokenRefresh.js")
     .then(({ startBackgroundTokenRefresh }) => startBackgroundTokenRefresh())
     .catch((e) => console.log("[BackgroundTokenRefresh] scheduler start failed:", e.message));
+
+  // Purge expired probe profiles (24h TTL)
+  import("@/lib/db/repos/probeProfilesRepo.js")
+    .then(({ purgeExpiredProbeProfiles }) => purgeExpiredProbeProfiles())
+    .catch((e) => console.log("[ProbeProfiles] startup purge failed:", e?.message));
 }
 
 // Cheap local check: keeps the scheduler module (and its provider graph) unloaded

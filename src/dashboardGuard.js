@@ -46,6 +46,7 @@ const ALWAYS_PROTECTED = [
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
   "/api/oauth/zed/auto-import",
+  "/api/probe",
 ];
 
 // Require auth, but allow through if requireLogin is disabled
@@ -170,7 +171,13 @@ async function canAccessLocalOnlyRoute(request) {
 }
 
 async function hasValidToken(request) {
-  const token = request.cookies.get("auth_token")?.value;
+  let token = request.cookies.get("auth_token")?.value;
+  if (!token) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      token = authHeader.slice(7).trim();
+    }
+  }
   return await verifyDashboardAuthToken(token);
 }
 

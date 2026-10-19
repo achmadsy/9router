@@ -1,6 +1,12 @@
 # Unreleased
 
+## Features
+- **Probe API & Sidecar**: add always-protected admin-JWT probe APIs (`/api/probe/health`, `/api/probe/profiles`, `/api/probe/run`, `/api/probe/cancel`) with one active run enforcement, cancel ownership, CSRF/origin checks, and bounded SSE proxy stream.
+- **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
+
 ## Fixes
+- **Models**: restore root `/v1/models` API key context resolution and per-key policy filtering (`resolveApiKeyContext` + `filterCatalogByPolicy`).
+- **Security**: harden early SSRF validation for URL schemes, restricted ports, URL credentials, private DNS suffixes (`.lan`, `.home.arpa`, `.corp`), and manual cross-origin redirect credential stripping.
 - **Streaming**: return JSON when `stream` is omitted or false, while aggregating provider-required upstream SSE for non-streaming clients.
 - **Provider duplicates**: inherit base provider capabilities across auto-ping, quota retrieval, reset credits, GLM CAPTCHA proxy restrictions, connection validation, and live model tools while preserving duplicate credential and settings isolation.
 - **Providers authentication**: preserve selected duplicate provider across OAuth callbacks, device-code login, manual token exchange, specialized credential imports, and bulk imports; retain provider metadata and reject invalid or cross-provider destinations.
