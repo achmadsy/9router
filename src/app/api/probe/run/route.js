@@ -70,7 +70,7 @@ export async function POST(request) {
     );
   }
 
-  // Resolve judge
+  // Resolve judge (optional — engine runs identity/quality probes without one)
   let resolvedJudge = null;
   if (judgeProfileId) {
     const profile = await getProbeProfileSecrets(judgeProfileId);
@@ -85,11 +85,6 @@ export async function POST(request) {
     };
   } else if (judge && typeof judge === "object") {
     resolvedJudge = judge;
-  } else {
-    return NextResponse.json(
-      { error: "Judge configuration or judgeProfileId is required" },
-      { status: 400 }
-    );
   }
 
   // Early SSRF validation for custom endpoints (sidecar remains authoritative for pinning)
