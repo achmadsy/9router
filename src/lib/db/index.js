@@ -77,6 +77,12 @@ export {
   deleteCooldown, deleteByScope, deleteAllActive, purgeExpired,
 } from "./repos/selfAwareRepo.js";
 
+// Probe profiles (encrypted target/judge credentials + 24h TTL)
+export {
+  listProbeProfiles, getProbeProfileById, getProbeProfileSecrets,
+  createProbeProfile, deleteProbeProfile, purgeExpiredProbeProfiles,
+} from "./repos/probeProfilesRepo.js";
+
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();

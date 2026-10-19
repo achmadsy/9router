@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -243,6 +243,27 @@ export const TABLES = {
     indexes: [
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_sac_target ON selfAwareCooldowns(provider, model, scopeType, scopeId)",
       "CREATE INDEX IF NOT EXISTS idx_sac_expires ON selfAwareCooldowns(expiresAt)",
+    ],
+  },
+  // Probe target and judge profiles.
+  // 24-hour TTL, encrypted credentials at rest (AES-256-GCM), metadata only exposed.
+  // No report or run history persistence.
+  probeProfiles: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      name: "TEXT NOT NULL",
+      type: "TEXT NOT NULL",
+      provider: "TEXT",
+      model: "TEXT",
+      endpoint: "TEXT",
+      secretEncrypted: "TEXT NOT NULL",
+      expiresAt: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_probe_profiles_expiresAt ON probeProfiles(expiresAt)",
+      "CREATE INDEX IF NOT EXISTS idx_probe_profiles_type ON probeProfiles(type)",
     ],
   },
 };

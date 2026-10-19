@@ -20,8 +20,29 @@
 
 import dns from "node:dns";
 
-const BLOCKED_HOSTNAMES = new Set(["localhost", "ip6-localhost", "ip6-loopback"]);
-const BLOCKED_SUFFIXES = [".internal", ".local", ".localhost"];
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  "ip6-localhost",
+  "ip6-loopback",
+  "metadata",
+  "metadata.google.internal",
+  "instance-data",
+]);
+const BLOCKED_SUFFIXES = [
+  ".internal",
+  ".local",
+  ".localhost",
+  ".lan",
+  ".home.arpa",
+  ".corp",
+  ".home",
+  ".invalid",
+];
+
+const ALLOWED_SCHEMES = new Set(["http:", "https:"]);
+const BLOCKED_PORTS = new Set([
+  21, 22, 23, 25, 53, 110, 119, 143, 389, 636, 6379, 11211, 27017,
+]);
 
 // Parse dotted IPv4 to 32-bit integer, or null if not a valid IPv4 literal.
 function ipv4ToInt(host) {
@@ -161,6 +182,21 @@ function isBlockedHost(host) {
 // resolution — see assertPublicUrlResolved for that). Caller should map to 400.
 export function assertPublicUrl(rawUrl) {
   const parsed = new URL(rawUrl);
+  if (!ALLOWED_SCHEMES.has(parsed.protocol.toLowerCase())) {
+    throw new Error("Blocked URL: invalid scheme");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Blocked URL: credentials not allowed");
+  }
+  if (parsed.port) {
+    const port = Number(parsed.port);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      throw new Error("Blocked URL: invalid port");
+    }
+    if (BLOCKED_PORTS.has(port)) {
+      throw new Error("Blocked URL: restricted port");
+    }
+  }
   const host = normalizeHost(parsed.hostname);
   if (isBlockedHost(host)) throw new Error("Blocked URL: internal host");
 }
@@ -170,9 +206,9 @@ export function assertPublicUrl(rawUrl) {
 // services like nip.io/sslip.io, or an attacker-controlled domain with an A record
 // pointed at 127.0.0.1) is rejected too, not just IPs typed directly into the URL.
 export async function assertPublicUrlResolved(rawUrl) {
+  assertPublicUrl(rawUrl);
   const parsed = new URL(rawUrl);
   const host = normalizeHost(parsed.hostname);
-  if (isBlockedHost(host)) throw new Error("Blocked URL: internal host");
 
   // Already a literal IPv4/IPv6 address — isBlockedHost above already covered it,
   // no DNS lookup applies (and dns.lookup would just echo it back anyway).
@@ -202,14 +238,39 @@ export async function assertPublicUrlResolved(rawUrl) {
 export async function fetchPublic(url, init = {}, { maxRedirects = 5 } = {}) {
   await assertPublicUrlResolved(url);
   let currentUrl = url;
+  let currentInit = { ...init };
   for (let hop = 0; ; hop++) {
-    const res = await fetch(currentUrl, { ...init, redirect: "manual" });
+    const res = await fetch(currentUrl, { ...currentInit, redirect: "manual" });
     const isRedirect = res.status >= 300 && res.status < 400;
     const location = isRedirect ? res.headers.get("location") : null;
     if (!location) return res;
     if (hop >= maxRedirects) throw new Error("Blocked URL: too many redirects");
     const nextUrl = new URL(location, currentUrl).toString();
     await assertPublicUrlResolved(nextUrl);
+
+    // On redirect, update method and headers as appropriate
+    if (
+      res.status === 303 ||
+      ((res.status === 301 || res.status === 302) &&
+        currentInit.method &&
+        currentInit.method.toUpperCase() === "POST")
+    ) {
+      const { body, ...rest } = currentInit;
+      currentInit = { ...rest, method: "GET" };
+    }
+    // Cross-origin redirect: strip authorization headers
+    const currentOrigin = new URL(currentUrl).origin;
+    const nextOrigin = new URL(nextUrl).origin;
+    if (currentOrigin !== nextOrigin && currentInit.headers) {
+      if (typeof currentInit.headers.delete === "function") {
+        currentInit.headers.delete("authorization");
+      } else if (typeof currentInit.headers === "object") {
+        const h = { ...currentInit.headers };
+        delete h.authorization;
+        delete h.Authorization;
+        currentInit.headers = h;
+      }
+    }
     currentUrl = nextUrl;
   }
 }
