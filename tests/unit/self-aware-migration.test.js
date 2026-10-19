@@ -7,6 +7,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 let tempDir;
 const originalDataDir = process.env.DATA_DIR;
 
+// The runner stamps the newest registered migration version; do not hardcode.
+const expectedVersion = (await import("@/lib/db/migrations/index.js")).latestVersion();
+
 async function freshDb() {
   const { getAdapter } = await import("@/lib/db/driver.js");
   return getAdapter();
@@ -31,7 +34,7 @@ describe("self-aware schema v4", () => {
   it("fresh DB creates selfAwarePolicies + selfAwareCooldowns and stamps v4", async () => {
     const db = await freshDb();
     const row = db.get(`SELECT value FROM _meta WHERE key='schemaVersion'`);
-    expect(parseInt(row.value, 10)).toBe(5);
+    expect(parseInt(row.value, 10)).toBe(expectedVersion);
     const tables = db.all(`SELECT name FROM sqlite_master WHERE type='table'`).map(t => t.name);
     expect(tables).toEqual(expect.arrayContaining(["selfAwarePolicies", "selfAwareCooldowns"]));
   });
@@ -52,7 +55,7 @@ describe("self-aware schema v4", () => {
     vi.resetModules();
     db = await freshDb();
     const ver = parseInt(db.get(`SELECT value FROM _meta WHERE key='schemaVersion'`).value, 10);
-    expect(ver).toBe(5);
+    expect(ver).toBe(expectedVersion);
     const tables = db.all(`SELECT name FROM sqlite_master WHERE type='table'`).map(t => t.name);
     expect(tables).toEqual(expect.arrayContaining(["selfAwarePolicies", "selfAwareCooldowns"]));
     const settings = db.get(`SELECT data FROM settings WHERE id=1`);
