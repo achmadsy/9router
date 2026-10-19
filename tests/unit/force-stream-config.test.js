@@ -71,6 +71,7 @@ vi.mock("../../open-sse/rtk/index.js", () => ({
 vi.mock("../../open-sse/rtk/headroom.js", () => ({
   compressWithHeadroom: vi.fn(async () => null),
   formatHeadroomLog: vi.fn(() => ""),
+  formatHeadroomSizeLog: vi.fn(() => ""),
 }));
 
 vi.mock("../../open-sse/providers/capabilities.js", () => ({
@@ -104,8 +105,8 @@ vi.mock("@/lib/usageDb.js", () => ({
 
 const FORCED = ["openai", "codex", "commandcode"];
 
-function makeOptions(bodyStream) {
-  const body = {
+function makeOptions(bodyStream, provider = "openai", overrides = {}) {
+  const body = overrides.body || {
     model: "gpt-4.1",
     messages: [{ role: "user", content: "hello" }],
   };
@@ -113,7 +114,7 @@ function makeOptions(bodyStream) {
 
   return {
     body,
-    modelInfo: { provider: "openai", model: "gpt-4.1" },
+    modelInfo: { provider, model: body.model },
     credentials: { apiKey: "sk-test" },
     clientRawRequest: {
       endpoint: "/v1/chat/completions",
@@ -122,6 +123,7 @@ function makeOptions(bodyStream) {
     },
     connectionId: "test-connection",
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    ...overrides,
   };
 }
 
@@ -149,5 +151,36 @@ describe("forceStream provider config", () => {
 
     expect(executeMock).toHaveBeenCalledTimes(1);
     expect(executeMock.mock.calls[0][0].stream).toBe(true);
+  });
+
+  it.each([undefined, false])("defaults non-forced providers to JSON when body.stream is %s", async (bodyStream) => {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+
+    await handleChatCore(makeOptions(bodyStream, "deepseek"));
+
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock.mock.calls[0][0].stream).toBe(false);
+  });
+
+  it("streams non-forced providers only when the client explicitly requests it", async () => {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+
+    await handleChatCore(makeOptions(true, "deepseek"));
+
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock.mock.calls[0][0].stream).toBe(true);
+  });
+
+  it.each([
+    ["gemini", { model: "gpt-4.1", contents: [{ role: "user", parts: [{ text: "hello" }] }] }],
+    ["gemini-cli", { model: "gpt-4.1", contents: [{ role: "user", parts: [{ text: "hello" }] }] }],
+    ["antigravity", { model: "gpt-4.1", contents: [{ role: "user", parts: [{ text: "hello" }] }] }],
+  ])("does not infer client streaming from the %s source format", async (sourceFormatOverride, body) => {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+
+    await handleChatCore(makeOptions(undefined, "deepseek", { body, sourceFormatOverride }));
+
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock.mock.calls[0][0].stream).toBe(false);
   });
 });
