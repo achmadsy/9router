@@ -57,6 +57,7 @@ describe("Probe suite route", () => {
         description: "First probe.",
         optional: true,
         prompt: "hidden prompt",
+        expected: "expected value",
       },
       {
         id: "second",
@@ -64,6 +65,7 @@ describe("Probe suite route", () => {
         group: "identity",
         description: "Second probe.",
         neutral: true,
+        // Object scoring is a legacy shape; only bounded string metadata passes.
         scoring: { mode: "hidden" },
       },
     ]));
@@ -80,6 +82,8 @@ describe("Probe suite route", () => {
           group: "quality",
           description: "First probe.",
           optional: true,
+          prompt: "hidden prompt",
+          expected: "expected value",
         },
         {
           id: "second",
@@ -91,6 +95,27 @@ describe("Probe suite route", () => {
       ],
     });
     expect(mocks.getProbeCatalogFromSidecar).toHaveBeenCalledWith(expect.any(AbortSignal));
+  });
+
+  it("bounds drawer metadata fields", async () => {
+    mocks.getProbeCatalogFromSidecar.mockResolvedValue(catalog([
+      {
+        id: "bounded",
+        label: "Bounded",
+        group: "integrity",
+        description: "Bounded metadata.",
+        prompt: "P".repeat(600),
+        expected: "E".repeat(400),
+        scoring: "S".repeat(100),
+      },
+    ]));
+
+    const response = await GET(request());
+    expect(response.status).toBe(200);
+    const { probes } = await response.json();
+    expect(probes[0].prompt).toBe("P".repeat(500));
+    expect(probes[0].expected).toBe("E".repeat(300));
+    expect(probes[0].scoring).toBeUndefined();
   });
 
   it.each([
