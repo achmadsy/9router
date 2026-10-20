@@ -25,6 +25,7 @@ const navItems = [
   // { href: "/dashboard/basic-chat", label: "Basic Chat", icon: "chat" }, // Hidden
   { href: "/dashboard/combos", label: "Combo & Vision Adapter", icon: "layers" },
   { href: "/dashboard/usage", label: "Usage", icon: "bar_chart" },
+  { href: "/dashboard/probe", label: "Probe", icon: "radar" },
   { href: "/dashboard/quota", label: "Quota Tracker", icon: "data_usage" },
   { href: "/dashboard/self-aware", label: "Self-Aware", icon: "timer" },
   { href: "/dashboard/token-saver", label: "Token Saver", icon: "savings" },
@@ -34,7 +35,6 @@ const navItems = [
 
 const debugItems = [
   { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
-  { href: "/dashboard/probe", label: "Probe", icon: "radar" },
   { href: "/dashboard/translator", label: "Translator", icon: "translate" },
 ];
 

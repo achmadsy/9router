@@ -1,6 +1,8 @@
 # Unreleased
 
 ## Features
+- **Probe Model Discovery**: add shared target/judge source controls, secure sidecar-backed custom endpoint catalogs, local key-filtered 9Router catalogs, explicit fetch/custom model controls, and primary sidebar navigation.
+- **Container CI**: publish native amd64/arm64 `ghcr.io/achmadsy/9router:latest` images from `master` without automatic deployment.
 - **Probe API & Sidecar**: add always-protected admin-JWT probe APIs (`/api/probe/health`, `/api/probe/profiles`, `/api/probe/run`, `/api/probe/cancel`) with one active run enforcement, cancel ownership, CSRF/origin checks, and bounded SSE proxy stream.
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 

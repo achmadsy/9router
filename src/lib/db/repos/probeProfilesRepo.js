@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getAdapter } from "../driver.js";
 import { encryptProfileSecret, decryptProfileSecret } from "@/lib/probe/crypto.js";
+import { normalizeProbeSource } from "@/lib/probe/endpoints.js";
 
 const PROFILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -10,6 +11,7 @@ function rowToSafeProfile(r) {
     id: r.id,
     name: r.name,
     type: r.type,
+    source: normalizeProbeSource(r.source, r.endpoint),
     provider: r.provider || null,
     model: r.model || null,
     endpoint: r.endpoint || null,
@@ -77,6 +79,7 @@ export async function getProbeProfileSecrets(id) {
 export async function createProbeProfile({
   name,
   type,
+  source = null,
   provider = null,
   model = null,
   endpoint = null,
@@ -91,12 +94,13 @@ export async function createProbeProfile({
   const secretEncrypted = encryptProfileSecret(secrets);
 
   db.run(
-    `INSERT INTO probeProfiles(id, name, type, provider, model, endpoint, secretEncrypted, expiresAt, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO probeProfiles(id, name, type, source, provider, model, endpoint, secretEncrypted, expiresAt, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       name,
       type,
+      normalizeProbeSource(source, endpoint),
       provider || null,
       model || null,
       endpoint || null,

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// .env is not loaded in Vitest; self-source gateway resolution must stay a
+// valid absolute URL so the server-derived endpoint can be compared by origin.
+process.env.NEXT_PUBLIC_BASE_URL = "https://router.test";
+process.env.BASE_URL = "https://router.test";
+
 const mocks = vi.hoisted(() => ({
   verifyProbeAdminAuth: vi.fn(),
   verifyCsrfOrigin: vi.fn(() => true),
@@ -20,6 +25,7 @@ vi.mock("@/lib/db/repos/probeProfilesRepo.js", () => ({
 vi.mock("@/lib/probe/sidecarClient.js", () => ({
   runProbeOnSidecar: mocks.runProbeOnSidecar,
   cancelProbeOnSidecar: mocks.cancelProbeOnSidecar,
+  discoverModelsOnSidecar: vi.fn(),
   getSidecarHealth: vi.fn(async () => ({ reachable: true, status: 200 })),
 }));
 
@@ -72,8 +78,8 @@ describe("Probe Run & One Active Run Enforcement", () => {
     );
 
     const body = {
-      target: { provider: "openai", model: "gpt-4o" },
-      judge: { provider: "anthropic", model: "claude-3-5-sonnet" },
+      target: { source: "this_9router", model: "gpt-4o" },
+      judge: { source: "this_9router", model: "claude-3-5-sonnet" },
     };
 
     const req1 = new Request("https://router.test/api/probe/run", {
@@ -287,8 +293,8 @@ describe("Early SSRF Validation on Target/Judge Endpoints", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        target: { provider: "custom", endpoint },
-        judge: { provider: "openai", model: "gpt-4o" },
+        target: { source: "custom", endpoint },
+        judge: { source: "this_9router", model: "gpt-4o" },
       }),
     });
 

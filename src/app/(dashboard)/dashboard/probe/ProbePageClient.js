@@ -13,9 +13,9 @@ export default function ProbePageClient() {
   const [health, setHealth] = useState(null);
   const [healthLoading, setHealthLoading] = useState(true);
 
-  // Models catalog from /v1/models
-  const [models, setModels] = useState([]);
-  const [modelsLoading, setModelsLoading] = useState(true);
+  // Target and judge catalogs are fetched explicitly through the protected Probe API.
+  const [targetCatalog, setTargetCatalog] = useState({ models: [], loading: false, error: null });
+  const [judgeCatalog, setJudgeCatalog] = useState({ models: [], loading: false, error: null });
 
   // Saved Profiles (24h TTL)
   const [profiles, setProfiles] = useState([]);
@@ -24,20 +24,20 @@ export default function ProbePageClient() {
 
   // Target Configuration
   const [target, setTarget] = useState({
+    source: "this_9router",
     endpoint: "",
     apiKey: "",
     model: "",
     claimedModel: "",
-    provider: "openai",
   });
 
   // Optional Custom Judge Configuration
   const [useCustomJudge, setUseCustomJudge] = useState(false);
   const [judge, setJudge] = useState({
+    source: "this_9router",
     endpoint: "",
     apiKey: "",
     model: "",
-    provider: "openai",
   });
 
   // Run lifecycle state
@@ -90,14 +90,6 @@ export default function ProbePageClient() {
   useEffect(() => {
     let ignore = false;
 
-    // Asynchronously set default target endpoint from window origin
-    const timerId = setTimeout(() => {
-      if (!ignore && typeof window !== "undefined") {
-        const defaultEndpoint = `${window.location.origin}/v1`;
-        setTarget((prev) => (prev.endpoint ? prev : { ...prev, endpoint: defaultEndpoint }));
-      }
-    }, 0);
-
     // Health
     fetch("/api/probe/health")
       .then((res) => res.json())
@@ -121,23 +113,6 @@ export default function ProbePageClient() {
       })
       .catch(() => {});
 
-    // Models
-    fetch("/v1/models")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (!ignore && json?.data) {
-          const list = Array.isArray(json.data) ? json.data : [];
-          setModels(list);
-          if (list.length > 0) {
-            setTarget((prev) => (prev.model ? prev : { ...prev, model: list[0].id }));
-          }
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!ignore) setModelsLoading(false);
-      });
-
     // Active Run check
     fetch("/api/probe/run")
       .then((res) => (res.ok ? res.json() : null))
@@ -151,7 +126,6 @@ export default function ProbePageClient() {
 
     return () => {
       ignore = true;
-      clearTimeout(timerId);
     };
   }, []);
 
@@ -181,9 +155,9 @@ export default function ProbePageClient() {
     const payload = {
       name,
       type,
-      provider: src?.provider || "openai",
+      source: src?.source || "this_9router",
       model: src?.model || null,
-      endpoint: src?.endpoint || null,
+      endpoint: src?.source === "custom" ? (src?.endpoint || null) : null,
       secrets: src?.apiKey ? { apiKey: src.apiKey } : {},
     };
 
@@ -227,7 +201,7 @@ export default function ProbePageClient() {
     if (found) {
       setTarget((prev) => ({
         ...prev,
-        provider: found.provider || prev.provider,
+        source: found.source || (found.endpoint ? "custom" : "this_9router"),
         model: found.model || prev.model,
         endpoint: found.endpoint || prev.endpoint,
         apiKey: "", // Secrets remain encrypted on server
@@ -242,11 +216,40 @@ export default function ProbePageClient() {
     if (found) {
       setJudge((prev) => ({
         ...prev,
-        provider: found.provider || prev.provider,
+        source: found.source || (found.endpoint ? "custom" : "this_9router"),
         model: found.model || prev.model,
         endpoint: found.endpoint || prev.endpoint,
         apiKey: "",
       }));
+    }
+  };
+
+  const handleFetchModels = async (kind) => {
+    const isTarget = kind === "target";
+    const config = isTarget ? target : judge;
+    const setCatalog = isTarget ? setTargetCatalog : setJudgeCatalog;
+    const setConfig = isTarget ? setTarget : setJudge;
+
+    setCatalog((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const res = await fetch("/api/probe/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source: config.source,
+          ...(config.source === "custom" ? { endpoint: config.endpoint } : {}),
+          ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Model discovery failed with HTTP ${res.status}`);
+      const models = Array.isArray(data.models) ? data.models : [];
+      setCatalog({ models, loading: false, error: null });
+      if (models.length && !config.model) {
+        setConfig((current) => ({ ...current, model: models[0].id }));
+      }
+    } catch (error) {
+      setCatalog({ models: [], loading: false, error: error.message || "Model discovery failed" });
     }
   };
 
@@ -310,9 +313,9 @@ export default function ProbePageClient() {
       body.targetProfileId = selectedTargetProfileId;
     } else {
       body.target = {
-        provider: target.provider || "openai",
+        source: target.source,
         model: target.model,
-        endpoint: target.endpoint,
+        ...(target.source === "custom" ? { endpoint: target.endpoint } : {}),
         ...(target.apiKey ? { apiKey: target.apiKey } : {}),
         claimedModel: target.claimedModel || target.model,
       };
@@ -323,7 +326,7 @@ export default function ProbePageClient() {
         body.judgeProfileId = selectedJudgeProfileId;
       } else {
         body.judge = {
-          provider: judge.provider || "openai",
+          source: judge.source,
           model: judge.model,
           ...(judge.endpoint ? { endpoint: judge.endpoint } : {}),
           ...(judge.apiKey ? { apiKey: judge.apiKey } : {}),
@@ -335,9 +338,9 @@ export default function ProbePageClient() {
         body.judgeProfileId = selectedTargetProfileId;
       } else {
         body.judge = {
-          provider: target.provider || "openai",
+          source: target.source,
           model: target.model,
-          endpoint: target.endpoint,
+          ...(target.source === "custom" ? { endpoint: target.endpoint } : {}),
           ...(target.apiKey ? { apiKey: target.apiKey } : {}),
         };
       }
@@ -584,8 +587,9 @@ export default function ProbePageClient() {
         onSelectJudgeProfile={handleSelectJudgeProfile}
         onSaveProfile={handleSaveProfile}
         onDeleteProfile={handleDeleteProfile}
-        models={models}
-        modelsLoading={modelsLoading}
+        targetCatalog={targetCatalog}
+        judgeCatalog={judgeCatalog}
+        onFetchModels={handleFetchModels}
         isRunning={isRunning}
         isOffline={!health?.sidecar?.reachable}
         onStartRun={handleStartRun}

@@ -1,5 +1,6 @@
 // Sidecar contract (achmadsy/LLMprobe-engine):
 //   GET  /health
+//   POST /v1/models          { baseUrl, apiKey? } → { models: [{ id, name? }] }
 //   POST /v1/runs            { id, baseUrl, apiKey, modelId, claimedModel?, judge? }  → SSE
 //   POST /v1/runs/:id/cancel
 export function getSidecarUrl() {
@@ -53,13 +54,30 @@ function toEndpointConfig(node) {
   const apiKey = node.apiKey ?? node.secrets?.apiKey ?? node.secrets?.token;
   const out = {
     baseUrl: node.baseUrl ?? node.endpoint,
-    apiKey,
     modelId: node.model ?? node.modelId,
   };
   if (node.claimedModel ?? node.claimedModelId) out.claimedModel = node.claimedModel ?? node.claimedModelId;
   if (!out.baseUrl || !out.modelId) return undefined;
-  if (!out.apiKey) delete out.apiKey;
+  // Keyless self-gateway probes run without credentials; keyless custom targets
+  // rely on endpoints that do not require auth.
+  if (apiKey) out.apiKey = apiKey;
   return out;
+}
+
+/**
+ * Fetch an OpenAI-compatible catalog through the sidecar's pinned egress path.
+ */
+export async function discoverModelsOnSidecar({ baseUrl, apiKey }, signal) {
+  const timeoutSignal = AbortSignal.timeout(12_000);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
+  return fetch(`${getSidecarUrl()}/v1/models`, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify({ baseUrl, ...(apiKey ? { apiKey } : {}) }),
+    signal: combinedSignal,
+  });
 }
 
 /**

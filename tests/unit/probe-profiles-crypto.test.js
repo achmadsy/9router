@@ -71,6 +71,7 @@ describe("Probe Profile Repository & 24h TTL", () => {
     const profile = await createProbeProfile({
       name: "GPT-4o Target",
       type: "target",
+      source: "custom",
       provider: "openai",
       model: "gpt-4o",
       endpoint: "https://api.openai.com/v1",
@@ -81,6 +82,7 @@ describe("Probe Profile Repository & 24h TTL", () => {
     expect(profile.id).toMatch(/^prf_/);
     expect(profile.name).toBe("GPT-4o Target");
     expect(profile.type).toBe("target");
+    expect(profile.source).toBe("custom");
     expect(profile.provider).toBe("openai");
     expect(profile.model).toBe("gpt-4o");
     expect(profile.endpoint).toBe("https://api.openai.com/v1");
@@ -112,6 +114,25 @@ describe("Probe Profile Repository & 24h TTL", () => {
     // Internal getter decrypts secrets
     const withSecrets = await getProbeProfileSecrets(profile.id);
     expect(withSecrets.secrets).toEqual({ apiKey: "sk-secret-key-123" });
+  });
+
+  it("infers legacy profile sources from endpoint metadata", async () => {
+    const { createProbeProfile, getProbeProfileById } = await import(
+      "../../src/lib/db/repos/probeProfilesRepo.js"
+    );
+
+    const custom = await createProbeProfile({
+      name: "Legacy Custom",
+      type: "target",
+      endpoint: "https://api.example.com/v1",
+    });
+    const self = await createProbeProfile({
+      name: "Legacy Self",
+      type: "judge",
+    });
+
+    expect((await getProbeProfileById(custom.id)).source).toBe("custom");
+    expect((await getProbeProfileById(self.id)).source).toBe("this_9router");
   });
 
   it("filters profiles by type (target vs judge)", async () => {

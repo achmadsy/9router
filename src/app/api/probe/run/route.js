@@ -6,6 +6,7 @@ import { getProbeProfileSecrets } from "@/lib/db/repos/probeProfilesRepo.js";
 import { runProbeOnSidecar } from "@/lib/probe/sidecarClient.js";
 import { createBoundedSseStream, boundErrorMessage } from "@/lib/probe/sseProxy.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
+import { getCurrentGatewayBaseUrl, normalizeProbeSource, PROBE_SOURCE_SELF } from "@/lib/probe/endpoints.js";
 
 export async function GET(request) {
   const auth = await verifyProbeAdminAuth(request);
@@ -56,7 +57,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Target profile not found" }, { status: 400 });
     }
     resolvedTarget = {
-      provider: profile.provider,
+      source: profile.source,
       model: profile.model,
       endpoint: profile.endpoint,
       ...(profile.secrets || {}),
@@ -78,7 +79,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Judge profile not found" }, { status: 400 });
     }
     resolvedJudge = {
-      provider: profile.provider,
+      source: profile.source,
       model: profile.model,
       endpoint: profile.endpoint,
       ...(profile.secrets || {}),
@@ -87,30 +88,32 @@ export async function POST(request) {
     resolvedJudge = judge;
   }
 
-  // Early SSRF validation for custom endpoints (sidecar remains authoritative for pinning).
-  // Validate every accepted URL field — the sidecar contract accepts baseUrl or endpoint.
-  const targetUrl = resolvedTarget?.endpoint || resolvedTarget?.baseUrl;
-  if (targetUrl) {
-    try {
-      await assertPublicUrlResolved(targetUrl, { requireResolve: true });
-    } catch (err) {
-      return NextResponse.json(
-        { error: `Invalid target endpoint: ${err.message}` },
-        { status: 400 }
-      );
+  // Self-source URLs come only from server configuration/request origin. Custom
+  // endpoints remain public-only; sidecar performs authoritative connect-time pinning.
+  const prepareEndpoint = async (node, label) => {
+    if (!node) return null;
+    const source = normalizeProbeSource(node.source, node.endpoint || node.baseUrl);
+    if (source === PROBE_SOURCE_SELF) {
+      return { ...node, source, endpoint: getCurrentGatewayBaseUrl(request) };
     }
-  }
+    const endpoint = node.endpoint || node.baseUrl;
+    if (!endpoint) throw new Error(`${label} endpoint is required`);
+    try {
+      await assertPublicUrlResolved(endpoint, { requireResolve: true });
+    } catch (err) {
+      throw new Error(`Invalid ${label.toLowerCase()} endpoint: ${err.message}`);
+    }
+    return { ...node, source, endpoint };
+  };
 
-  const judgeUrl = resolvedJudge?.endpoint || resolvedJudge?.baseUrl;
-  if (judgeUrl) {
-    try {
-      await assertPublicUrlResolved(judgeUrl, { requireResolve: true });
-    } catch (err) {
-      return NextResponse.json(
-        { error: `Invalid judge endpoint: ${err.message}` },
-        { status: 400 }
-      );
-    }
+  try {
+    resolvedTarget = await prepareEndpoint(resolvedTarget, "Target");
+    resolvedJudge = await prepareEndpoint(resolvedJudge, "Judge");
+  } catch (err) {
+    return NextResponse.json(
+      { error: err.message },
+      { status: 400 }
+    );
   }
 
   const runId = `prun_${randomUUID()}`;
