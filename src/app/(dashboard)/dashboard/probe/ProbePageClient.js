@@ -326,6 +326,40 @@ export default function ProbePageClient() {
     });
   }, []);
 
+  // Normalize a finished ProbeResult (probe_result event, sidecar "progress"
+  // payload, or report row) into a rail record update.
+  const applyProbeResult = useCallback((r) => {
+    if (!r || !(r.probeId || r.id)) return;
+    let status = "neutral";
+    if (r.status === "error") {
+      status = "error";
+    } else if (r.status === "skipped") {
+      status = "skipped";
+    } else if (typeof r.passed === "boolean") {
+      status = r.passed ? "passed" : "failed";
+    } else if (r.neutral) {
+      status = "neutral";
+    } else if (r.status) {
+      status = r.status;
+    }
+    updateProbeRecord({
+      id: r.probeId || r.id,
+      label: r.label,
+      group: r.group,
+      neutral: Boolean(r.neutral),
+      status,
+      passed: r.passed,
+      passReason: r.passReason,
+      durationMs: r.durationMs,
+      ttftMs: r.ttftMs,
+      inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens,
+      tps: r.tps,
+      response: r.response,
+      error: r.error,
+    });
+  }, [updateProbeRecord]);
+
   // Cancel Probe Run
   const handleCancelRun = async () => {
     if (abortControllerRef.current) {
@@ -495,76 +529,23 @@ export default function ProbePageClient() {
               inputTokens: parsed.inputTokens,
               outputTokens: parsed.outputTokens,
             });
+          } else if (msgType === "progress" && parsed.result && typeof parsed.result === "object") {
+            // Sidecar protocol: each live event wraps the finished ProbeResult.
+            applyProbeResult(parsed.result);
           } else if (msgType === "probe_result" || parsed.step === "probe_result") {
-            const probeId = parsed.probeId || parsed.id;
-            let status = "neutral";
-            if (parsed.status === "error") {
-              status = "error";
-            } else if (parsed.status === "skipped") {
-              status = "skipped";
-            } else if (typeof parsed.passed === "boolean") {
-              status = parsed.passed ? "passed" : "failed";
-            } else if (parsed.neutral) {
-              status = "neutral";
-            } else if (parsed.status) {
-              status = parsed.status;
-            }
-
-            updateProbeRecord({
-              id: probeId,
-              label: parsed.label,
-              group: parsed.group,
-              neutral: Boolean(parsed.neutral),
-              status,
-              passed: parsed.passed,
-              passReason: parsed.passReason,
-              durationMs: parsed.durationMs,
-              ttftMs: parsed.ttftMs,
-              inputTokens: parsed.inputTokens,
-              outputTokens: parsed.outputTokens,
-              tps: parsed.tps,
-              response: parsed.response,
-              error: parsed.error,
-            });
+            applyProbeResult(parsed);
           } else if (
             msgType === "report" ||
             msgType === "done" ||
             msgType === "complete" ||
             parsed.score !== undefined
           ) {
-            setReport(parsed);
-            if (Array.isArray(parsed.results)) {
-              for (const r of parsed.results) {
-                const probeId = r.probeId || r.id;
-                let status = "neutral";
-                if (r.status === "error") {
-                  status = "error";
-                } else if (r.status === "skipped") {
-                  status = "skipped";
-                } else if (typeof r.passed === "boolean") {
-                  status = r.passed ? "passed" : "failed";
-                } else if (r.neutral) {
-                  status = "neutral";
-                } else if (r.status) {
-                  status = r.status;
-                }
-
-                updateProbeRecord({
-                  id: probeId,
-                  label: r.label,
-                  group: r.group,
-                  neutral: Boolean(r.neutral),
-                  status,
-                  passed: r.passed,
-                  passReason: r.passReason,
-                  durationMs: r.durationMs,
-                  ttftMs: r.ttftMs,
-                  inputTokens: r.inputTokens,
-                  outputTokens: r.outputTokens,
-                  tps: r.tps,
-                  response: r.response,
-                  error: r.error,
-                });
+            // Sidecar wraps the report: { runId, report: {...} }.
+            const reportPayload = parsed.report && typeof parsed.report === "object" ? parsed.report : parsed;
+            setReport(reportPayload);
+            if (Array.isArray(reportPayload.results)) {
+              for (const r of reportPayload.results) {
+                applyProbeResult(r);
               }
             }
           }
