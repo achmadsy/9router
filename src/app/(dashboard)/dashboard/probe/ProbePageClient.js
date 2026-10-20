@@ -5,12 +5,6 @@ import SidecarHealthStrip from "./components/SidecarHealthStrip";
 import ProbeConfigCard from "./components/ProbeConfigCard";
 import { DEFAULT_PROBES } from "./components/probeConstants";
 
-const FALLBACK_SUITE_VERSION = null;
-
-function pendingProbes(templates) {
-  return templates.map((probe) => ({ ...probe, status: "pending" }));
-}
-
 function validSuiteCatalog(data) {
   if (!data || typeof data.version !== "string" || !Array.isArray(data.probes) || data.probes.length === 0) {
     return false;
@@ -71,135 +65,13 @@ export default function ProbePageClient() {
   const [isRunning, setIsRunning] = useState(false);
   const [activeRunId, setActiveRunId] = useState(null);
   const [runError, setRunError] = useState(null);
-  const [activeProbeId, setActiveProbeId] = useState(null);
-  const [selectedProbeId, setSelectedProbeId] = useState(null);
-  const [elapsedSec, setElapsedSec] = useState(0);
 
-  // Suite templates stay separate from mutable run results.
+  // Suite templates drive probe count shown before starting a run.
   const [suiteTemplates, setSuiteTemplates] = useState(DEFAULT_PROBES);
-  const [suiteVersion, setSuiteVersion] = useState(FALLBACK_SUITE_VERSION);
-  const [probes, setProbes] = useState(() => pendingProbes(DEFAULT_PROBES));
-
-  // Final transient report
-  const [report, setReport] = useState(null);
-
-  // Server-persisted run history (survives refresh)
-  const [runs, setRuns] = useState([]);
-  const [viewingRun, setViewingRun] = useState(null);
 
   // Internal refs
   const abortControllerRef = useRef(null);
-  const timerRef = useRef(null);
-  const startTimeRef = useRef(null);
   const isRunningRef = useRef(false);
-  const suiteTemplatesRef = useRef(DEFAULT_PROBES);
-  const pollTimerRef = useRef(null);
-
-  // Helper to upsert incoming probe record
-  const updateProbeRecord = useCallback((incoming) => {
-    if (!incoming || !incoming.id) return;
-    setProbes((prev) => {
-      const index = prev.findIndex((p) => p.id === incoming.id);
-      if (index >= 0) {
-        const next = [...prev];
-        next[index] = { ...next[index], ...incoming };
-        return next;
-      }
-      // New probe discovered from sidecar not in default list
-      return [...prev, incoming];
-    });
-  }, []);
-
-  // Normalize a finished ProbeResult (probe_result event, sidecar "progress"
-  // payload, or report row) into a rail record update.
-  const applyProbeResult = useCallback((r) => {
-    if (!r || !(r.probeId || r.id)) return;
-    let status = "neutral";
-    if (r.status === "error") {
-      status = "error";
-    } else if (r.status === "skipped") {
-      status = "skipped";
-    } else if (typeof r.passed === "boolean") {
-      status = r.passed ? "passed" : "failed";
-    } else if (r.neutral) {
-      status = "neutral";
-    } else if (r.status) {
-      status = r.status;
-    }
-    updateProbeRecord({
-      id: r.probeId || r.id,
-      label: r.label,
-      group: r.group,
-      neutral: Boolean(r.neutral),
-      status,
-      passed: r.passed,
-      passReason: r.passReason,
-      durationMs: r.durationMs,
-      ttftMs: r.ttftMs,
-      inputTokens: r.inputTokens,
-      outputTokens: r.outputTokens,
-      tps: r.tps,
-      response: r.response,
-      error: r.error,
-    });
-  }, [updateProbeRecord]);
-
-  const fetchRuns = useCallback(async () => {
-    try {
-      const res = await fetch("/api/probe/runs?limit=20");
-      if (res.ok) {
-        const data = await res.json();
-        setRuns(Array.isArray(data.runs) ? data.runs : []);
-      }
-    } catch {
-      // History is best-effort; the page works without it.
-    }
-  }, []);
-
-  const stopRunPolling = useCallback(() => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-  }, []);
-
-  // Load a persisted run into the rail/detail. While the run is still active
-  // server-side, poll until it finishes — this is what makes a refresh
-  // mid-run re-attach to live progress.
-  const loadRun = useCallback(async (runId) => {
-    try {
-      const res = await fetch(`/api/probe/runs/${encodeURIComponent(runId)}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const run = data.run;
-      if (!run) return null;
-
-      setViewingRun(run);
-      setRuns((prev) => prev.map((item) => (item.id === run.id ? { ...item, ...run } : item)));
-      if (Array.isArray(run.results)) {
-        for (const r of run.results) {
-          applyProbeResult(r);
-        }
-      }
-      if (run.status === "complete" && Array.isArray(run.results) && run.results.length > 0) {
-        setReport({ results: run.results });
-      }
-      return run;
-    } catch {
-      return null;
-    }
-  }, [applyProbeResult]);
-
-  const pollRunUntilDone = useCallback((runId) => {
-    stopRunPolling();
-    pollTimerRef.current = setInterval(async () => {
-      const run = await loadRun(runId);
-      if (!run || run.status !== "running") {
-        stopRunPolling();
-        fetchRuns();
-      }
-    }, 4000);
-  }, [loadRun, stopRunPolling, fetchRuns]);
 
   // Fetch Sidecar Health (callable on demand)
   const fetchHealth = useCallback(async () => {
@@ -257,15 +129,7 @@ export default function ProbePageClient() {
         if (ignore || !validSuiteCatalog(data)) return;
 
         const templates = data.probes.map((probe) => ({ ...probe }));
-        const validIds = new Set(templates.map((probe) => probe.id));
-        suiteTemplatesRef.current = templates;
         setSuiteTemplates(templates);
-        setSuiteVersion(data.version);
-        if (!runIdFromUrl) {
-          setProbes(pendingProbes(templates));
-          setSelectedProbeId((id) => (validIds.has(id) ? id : null));
-          setActiveProbeId((id) => (validIds.has(id) ? id : null));
-        }
       })
       .catch(() => {});
 
@@ -279,57 +143,20 @@ export default function ProbePageClient() {
       })
       .catch(() => {});
 
-    // Persisted history + selected run. The run id in the URL gives every run
-    // a stable detail view and lets refresh re-hydrate progress.
-    fetch("/api/probe/runs?limit=20")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!ignore && Array.isArray(data?.runs)) setRuns(data.runs);
-      })
-      .catch(() => {});
-
-    // Active Run check
+    // Active Run check keeps the start button honest; open it from Probe > Runs.
     fetch("/api/probe/run")
       .then((res) => (res.ok ? res.json() : null))
-      .then(async (data) => {
-        if (ignore) return;
-        const activeId = data?.active && data.run?.runId ? data.run.runId : null;
-        const selectedRunId = runIdFromUrl || activeId;
-        if (activeId) {
+      .then((data) => {
+        if (!ignore && data?.active && data.run?.runId) {
           isRunningRef.current = true;
-          setActiveRunId(activeId);
+          setActiveRunId(data.run.runId);
           setIsRunning(true);
-        }
-        if (selectedRunId) {
-          const run = await loadRun(selectedRunId);
-          if (!ignore && run?.status === "running") pollRunUntilDone(selectedRunId);
         }
       })
       .catch(() => {});
 
-    return () => {
-      ignore = true;
-      stopRunPolling();
-    };
-  }, [fetchRuns, loadRun, pollRunUntilDone, stopRunPolling]);
-
-  // Elapsed timer handling
-  useEffect(() => {
-    if (isRunning) {
-      startTimeRef.current = Date.now();
-      timerRef.current = setInterval(() => {
-        if (startTimeRef.current) {
-          setElapsedSec((Date.now() - startTimeRef.current) / 1000);
-        }
-      }, 100);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isRunning]);
+    return () => { ignore = true; };
+  }, []);
 
   // Profile Save
   const handleSaveProfile = async ({ name, type, target: targetData, judge: judgeData }) => {
@@ -466,16 +293,11 @@ export default function ProbePageClient() {
     isRunningRef.current = false;
     setIsRunning(false);
     setActiveRunId(null);
-    setActiveProbeId(null);
   };
 
   // Start Probe Run
   const handleStartRun = async () => {
     setRunError(null);
-    setReport(null);
-
-    // Reset probe rail from active suite templates.
-    setProbes(pendingProbes(suiteTemplatesRef.current));
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -561,13 +383,8 @@ export default function ProbePageClient() {
       isRunningRef.current = false;
       setIsRunning(false);
       setActiveRunId(null);
-      setActiveProbeId(null);
-      fetchRuns();
     }
   };
-
-  const selectedProbe = probes.find((p) => p.id === selectedProbeId) || null;
-  const activeProbe = probes.find((p) => p.id === activeProbeId) || null;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 py-6">
@@ -594,54 +411,6 @@ export default function ProbePageClient() {
         loading={healthLoading}
         onRefresh={fetchHealth}
       />
-
-      {/* Persisted runs: probe page → run detail, mirroring BazaarLink's runId model. */}
-      {runs.length > 0 && (
-        <section className="rounded-[12px] border border-border bg-bg-elevated overflow-hidden">
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-text-main">Probe runs</h2>
-              <p className="text-xs text-text-muted mt-0.5">Saved results survive refresh. Select a run to inspect live progress and evidence.</p>
-            </div>
-            <button
-              type="button"
-              onClick={fetchRuns}
-              className="text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded"
-            >
-              Refresh
-            </button>
-          </div>
-          <div className="divide-y divide-border max-h-64 overflow-y-auto">
-            {runs.map((run) => {
-              const total = run.totalProbes || 0;
-              const percent = total > 0 ? Math.round((run.completedProbes / total) * 100) : 0;
-              return (
-                <button
-                  key={run.id}
-                  type="button"
-                  onClick={() => {
-                    window.location.assign(`/dashboard/probe/runs/${encodeURIComponent(run.id)}`);
-                  }}
-                  className="w-full px-4 py-3 text-left hover:bg-bg-subtle transition-colors"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-text-main truncate">{run.targetModel || "Unknown model"}</div>
-                      <div className="text-[11px] text-text-muted font-mono truncate">{run.id}</div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className={`text-xs font-semibold ${run.status === "running" ? "text-primary" : run.status === "complete" ? "text-emerald-600 dark:text-emerald-400" : "text-text-muted"}`}>
-                        {run.status === "running" ? `${run.completedProbes}/${total || "?"} · ${percent}%` : run.status}
-                      </div>
-                      <div className="text-[11px] text-text-muted">{new Date(run.createdAt).toLocaleString()}</div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      )}
 
       {/* Global Run Error Banner */}
       {runError && (

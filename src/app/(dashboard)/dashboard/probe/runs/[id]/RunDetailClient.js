@@ -98,7 +98,7 @@ export default function RunDetailClient({ runId }) {
   if (error) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-4">
-        <button type="button" onClick={() => router.push("/dashboard/probe")} className="text-sm text-primary hover:underline">Back to Probe runs</button>
+        <button type="button" onClick={() => router.push("/dashboard/probe/runs")} className="text-sm text-primary hover:underline">Back to Probe runs</button>
         <div role="alert" className="rounded-[12px] border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">{error}</div>
       </div>
     );
@@ -112,7 +112,7 @@ export default function RunDetailClient({ runId }) {
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 py-6">
       <header className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
-          <button type="button" onClick={() => router.push("/dashboard/probe")} className="text-xs text-primary hover:underline mb-2">Back to Probe runs</button>
+          <button type="button" onClick={() => router.push("/dashboard/probe/runs")} className="text-xs text-primary hover:underline mb-2">Back to Probe runs</button>
           <h1 className="text-2xl font-bold tracking-tight text-text-main">{run.targetModel || "Probe run"}</h1>
           <p className="text-xs text-text-muted font-mono mt-1">{run.id}</p>
         </div>
