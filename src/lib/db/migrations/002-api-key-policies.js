@@ -7,6 +7,14 @@ import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 const HMAC_CONTEXT = "9router-api-key:v1:";
 
 function apiSecret() {
+  // Legacy-key hashing under the public default is forgeable — warn once.
+  if (!process.env.API_KEY_SECRET && !apiSecret.warned) {
+    apiSecret.warned = true;
+    console.error(
+      "[9router] SECURITY: API_KEY_SECRET is not set — legacy API keys are being " +
+        "hashed under a public default. Set API_KEY_SECRET and rotate affected keys."
+    );
+  }
   return process.env.API_KEY_SECRET || "endpoint-proxy-api-key-secret";
 }
 

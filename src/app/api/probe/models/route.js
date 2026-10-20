@@ -9,6 +9,7 @@ import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
 import { buildModelsList } from "@/app/api/v1/models/route.js";
 import { resolveApiKeyContext } from "@/sse/services/apiKeyPolicy.js";
 import { filterCatalogByPolicy, loadCombosForPolicy } from "@/lib/apiKeys/policy.js";
+import { normalizeProbeCustomHeaders } from "@/lib/probe/customHeaders.js";
 
 const MAX_BODY_BYTES = 32_768;
 const MAX_ENDPOINT_LENGTH = 4096;
@@ -51,6 +52,12 @@ export async function POST(request) {
   const source = body?.source;
   const endpoint = typeof body?.endpoint === "string" ? body.endpoint.trim() : "";
   const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+  let customHeaders;
+  try {
+    customHeaders = normalizeProbeCustomHeaders(body?.customHeaders);
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
   if (![PROBE_SOURCE_SELF, PROBE_SOURCE_CUSTOM].includes(source)) {
     return NextResponse.json({ error: "Invalid model source" }, { status: 400 });
   }
@@ -77,7 +84,10 @@ export async function POST(request) {
 
   try {
     await assertPublicUrlResolved(endpoint, { requireResolve: true });
-    const sidecarResponse = await discoverModelsOnSidecar({ baseUrl: endpoint, apiKey }, request.signal);
+    const sidecarResponse = await discoverModelsOnSidecar(
+      { baseUrl: endpoint, apiKey, customHeaders },
+      request.signal
+    );
     const data = await sidecarResponse.json().catch(() => ({}));
     if (!sidecarResponse.ok) {
       const message = data?.error?.message || data?.error || `Probe sidecar returned HTTP ${sidecarResponse.status}`;

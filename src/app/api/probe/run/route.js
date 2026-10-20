@@ -5,8 +5,10 @@ import { getActiveRun, startActiveRun, finishActiveRun } from "@/lib/probe/activ
 import { getProbeProfileSecrets } from "@/lib/db/repos/probeProfilesRepo.js";
 import { runProbeOnSidecar } from "@/lib/probe/sidecarClient.js";
 import { createBoundedSseStream, boundErrorMessage } from "@/lib/probe/sseProxy.js";
+import { redactSensitiveText } from "@/lib/sentry.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
 import { getCurrentGatewayBaseUrl, normalizeProbeSource, PROBE_SOURCE_SELF } from "@/lib/probe/endpoints.js";
+import { normalizeProbeCustomHeaders } from "@/lib/probe/customHeaders.js";
 
 export async function GET(request) {
   const auth = await verifyProbeAdminAuth(request);
@@ -93,8 +95,9 @@ export async function POST(request) {
   const prepareEndpoint = async (node, label) => {
     if (!node) return null;
     const source = normalizeProbeSource(node.source, node.endpoint || node.baseUrl);
+    const customHeaders = normalizeProbeCustomHeaders(node.customHeaders);
     if (source === PROBE_SOURCE_SELF) {
-      return { ...node, source, endpoint: getCurrentGatewayBaseUrl(request) };
+      return { ...node, source, customHeaders, endpoint: getCurrentGatewayBaseUrl(request) };
     }
     const endpoint = node.endpoint || node.baseUrl;
     if (!endpoint) throw new Error(`${label} endpoint is required`);
@@ -103,7 +106,7 @@ export async function POST(request) {
     } catch (err) {
       throw new Error(`Invalid ${label.toLowerCase()} endpoint: ${err.message}`);
     }
-    return { ...node, source, endpoint };
+    return { ...node, source, customHeaders, endpoint };
   };
 
   try {
@@ -145,7 +148,7 @@ export async function POST(request) {
     );
   } catch (err) {
     finishActiveRun(runId);
-    const boundedErr = boundErrorMessage(err.message);
+    const boundedErr = boundErrorMessage(redactSensitiveText(err.message));
     return NextResponse.json(
       { error: `Failed to reach probe sidecar: ${boundedErr}` },
       { status: 502 }
@@ -155,7 +158,7 @@ export async function POST(request) {
   if (!sidecarRes.ok) {
     finishActiveRun(runId);
     const text = await sidecarRes.text().catch(() => "");
-    const boundedErr = boundErrorMessage(text || `Sidecar returned HTTP ${sidecarRes.status}`);
+    const boundedErr = boundErrorMessage(redactSensitiveText(text) || `Sidecar returned HTTP ${sidecarRes.status}`);
     return NextResponse.json(
       { error: boundedErr },
       { status: sidecarRes.status >= 400 && sidecarRes.status < 600 ? sidecarRes.status : 502 }

@@ -9,8 +9,12 @@ export async function GET(request) {
   }
 
   const health = await getSidecarHealth();
+  // Safe to expose to the browser: no sidecar URL, version banner, or internals.
   return NextResponse.json({
     status: health.reachable ? "ok" : "degraded",
-    sidecar: health,
+    sidecar: {
+      reachable: health.reachable,
+      status: health.status,
+    },
   });
 }

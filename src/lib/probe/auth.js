@@ -66,7 +66,14 @@ export async function verifyProbeAdminAuth(request) {
     return { authorized: false, ownerId: null };
   }
 
-  const ownerId = session.sub || session.id || session.username || "admin:session";
+  const ownerId =
+    session.sub ||
+    session.id ||
+    session.username ||
+    session.samlEmail || // SAML sessions carry identity, not a local account id
+    session.oidcEmail ||
+    session.oidcSub ||
+    "admin:session";
   return { authorized: true, ownerId };
 }
 
@@ -87,21 +94,43 @@ export function verifyCsrfOrigin(request) {
     const originUrl = new URL(origin);
     // Host may be IPv6-bracketed ("[::1]:20128") — parse via URL, don't split on ":".
     const hostHeader = request.headers.get("host") || "";
-    let hostName = "";
+    let hostUrl = null;
     try {
-      hostName = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+      // Build the expected origin from request/proxy metadata, never from the
+      // untrusted Origin header itself. Only accept canonical proxy schemes.
+      const forwardedProto = request.headers.get("x-forwarded-proto")?.toLowerCase();
+      const requestProtocol = new URL(request.url).protocol;
+      const scheme =
+        forwardedProto === "http" || forwardedProto === "https"
+          ? forwardedProto
+          : requestProtocol.slice(0, -1);
+      hostUrl = new URL(`${scheme}://${hostHeader}`);
     } catch {
-      hostName = hostHeader.split(":")[0].toLowerCase();
+      hostUrl = null;
     }
+    const originOrigin = originUrl.origin;
     const originHost = originUrl.hostname.toLowerCase();
 
-    if (originHost === hostName) return true;
-    if (LOOPBACK_HOSTS.has(originHost) && LOOPBACK_HOSTS.has(hostName)) return true;
+    if (hostUrl && originOrigin === hostUrl.origin) return true;
+    // Loopback fallback tolerates hostname variation (127.0.0.1 vs ::1) while
+    // retaining exact scheme and port checks.
+    if (
+      hostUrl &&
+      originUrl.protocol === hostUrl.protocol &&
+      originUrl.port === hostUrl.port &&
+      LOOPBACK_HOSTS.has(originHost) &&
+      LOOPBACK_HOSTS.has(hostUrl.hostname.toLowerCase())
+    ) {
+      return true;
+    }
 
     const baseUrl = process.env.BASE_URL || process.env.NEXT_PUBLIC_BASE_URL;
     if (baseUrl) {
-      const baseHostname = new URL(baseUrl).hostname.toLowerCase();
-      if (originHost === baseHostname) return true;
+      try {
+        if (originOrigin === new URL(baseUrl).origin) return true;
+      } catch {
+        // Malformed configured URL cannot authorize an origin.
+      }
     }
 
     return false;

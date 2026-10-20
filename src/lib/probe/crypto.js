@@ -3,6 +3,15 @@ import crypto from "node:crypto";
 const HMAC_CONTEXT = "9router-api-key:v1:";
 
 function apiSecret() {
+  // Mirror the loud warning in lib/apiKeys/auth.js — default-secret digests are
+  // forgeable, and probe profile secrets are encrypted under this key.
+  if (!process.env.API_KEY_SECRET && !apiSecret.warned) {
+    apiSecret.warned = true;
+    console.error(
+      "[9router] SECURITY: API_KEY_SECRET is not set — probe profile secrets are " +
+        "encrypted under a public default key. Set API_KEY_SECRET in the environment."
+    );
+  }
   return process.env.API_KEY_SECRET || "endpoint-proxy-api-key-secret";
 }
 

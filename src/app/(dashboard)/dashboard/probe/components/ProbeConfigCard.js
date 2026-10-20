@@ -26,11 +26,28 @@ function EndpointFields({
   profileSelected,
 }) {
   const [showKey, setShowKey] = useState(false);
+  const [showHeaderValues, setShowHeaderValues] = useState(false);
   const [customModel, setCustomModel] = useState(false);
   const listId = useId();
   const isSelf = value.source === "this_9router";
 
   const update = (patch) => onChange({ ...value, ...patch });
+  const customHeaders = Array.isArray(value.customHeaders) ? value.customHeaders : [];
+  const updateHeader = (index, patch) => {
+    update({
+      customHeaders: customHeaders.map((header, currentIndex) =>
+        currentIndex === index ? { ...header, ...patch } : header
+      ),
+    });
+  };
+  const addHeader = () => {
+    if (customHeaders.length < 16) {
+      update({ customHeaders: [...customHeaders, { name: "", value: "" }] });
+    }
+  };
+  const removeHeader = (index) => {
+    update({ customHeaders: customHeaders.filter((_, currentIndex) => currentIndex !== index) });
+  };
   const changeSource = (source) => {
     if (source !== value.source) {
       update({ source, endpoint: source === "custom" ? "" : value.endpoint });
@@ -91,6 +108,99 @@ function EndpointFields({
           </div>
           <p className="text-[11px] text-text-subtle">Sent only to 9Router. Never returned by profile APIs.</p>
         </div>
+      </div>
+
+      <div className="rounded-[10px] border border-border-subtle bg-surface-2/40 p-3 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h5 className="text-sm font-medium text-text-main">Additional headers</h5>
+            <p className="text-[11px] text-text-subtle">
+              Sent to upstream gateway for model discovery and probes. Authorization and connection headers are blocked.
+            </p>
+          </div>
+          {!profileSelected && (
+            <div className="flex items-center gap-1">
+              {customHeaders.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowHeaderValues((visible) => !visible)}
+                  disabled={disabled}
+                  className="p-1.5 rounded-[7px] text-text-muted hover:text-text-main hover:bg-surface-2 disabled:opacity-50 cursor-pointer"
+                  title={showHeaderValues ? "Hide header values" : "Show header values"}
+                  aria-label={showHeaderValues ? "Hide header values" : "Show header values"}
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    {showHeaderValues ? "visibility_off" : "visibility"}
+                  </span>
+                </button>
+              )}
+              <Button
+                variant="outline"
+                size="xs"
+                icon="add"
+                disabled={disabled || customHeaders.length >= 16}
+                onClick={addHeader}
+              >
+                Add header
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {profileSelected ? (
+          <div className="flex items-center gap-2 py-2 text-xs text-text-muted">
+            <span className="material-symbols-outlined text-[17px]">lock</span>
+            Header values stay encrypted in profile and are never returned to browser.
+          </div>
+        ) : customHeaders.length ? (
+          <div className="space-y-2">
+            {customHeaders.map((header, index) => (
+              <div key={index} className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto] gap-2 items-center">
+                <input
+                  type="text"
+                  placeholder="Header name"
+                  value={header.name}
+                  onChange={(event) => updateHeader(index, { name: event.target.value })}
+                  disabled={disabled}
+                  autoComplete="off"
+                  spellCheck="false"
+                  aria-label={`${kind} additional header ${index + 1} name`}
+                  className="w-full py-2 px-3 text-[16px] sm:text-xs font-mono text-text-main bg-surface border border-border-subtle rounded-[8px] focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50"
+                />
+                <input
+                  type={showHeaderValues ? "text" : "password"}
+                  placeholder="Header value"
+                  value={header.value}
+                  onChange={(event) => updateHeader(index, { value: event.target.value })}
+                  disabled={disabled}
+                  autoComplete="off"
+                  spellCheck="false"
+                  aria-label={`${kind} additional header ${index + 1} value`}
+                  className="col-start-1 row-start-2 sm:col-start-2 sm:row-start-1 w-full py-2 px-3 text-[16px] sm:text-xs font-mono text-text-main bg-surface border border-border-subtle rounded-[8px] focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeHeader(index)}
+                  disabled={disabled}
+                  className="col-start-2 row-span-2 row-start-1 sm:col-start-3 sm:row-span-1 p-2 rounded-[8px] text-text-muted hover:text-red-500 hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                  title="Remove header"
+                  aria-label={`Remove ${kind} additional header ${index + 1}`}
+                >
+                  <span className="material-symbols-outlined text-[18px]">delete</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={addHeader}
+            disabled={disabled}
+            className="w-full py-2.5 rounded-[8px] border border-dashed border-border text-xs text-text-muted hover:text-text-main hover:border-brand-500/50 disabled:opacity-50 cursor-pointer"
+          >
+            Add User-Agent or another required gateway header
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col gap-1.5">

@@ -1,6 +1,17 @@
 import crypto from "crypto";
 
-const API_KEY_SECRET = process.env.API_KEY_SECRET || "endpoint-proxy-api-key-secret";
+const apiKeyFallbackWarned = { done: false };
+const API_KEY_SECRET = process.env.API_KEY_SECRET || (() => {
+  // Known-public fallback must never run silently — warn once, loudly.
+  if (!apiKeyFallbackWarned.done) {
+    apiKeyFallbackWarned.done = true;
+    console.error(
+      "[9router] SECURITY: API_KEY_SECRET is not set — API-key digests fall back " +
+        "to a public default. Set API_KEY_SECRET in the environment."
+    );
+  }
+  return "endpoint-proxy-api-key-secret";
+})();
 
 /**
  * Generate 6-char random keyId

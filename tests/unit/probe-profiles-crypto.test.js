@@ -23,6 +23,30 @@ afterEach(() => {
   else process.env.DATA_DIR = originalDataDir;
 });
 
+const routeMocks = vi.hoisted(() => ({
+  verifyProbeAdminAuth: vi.fn(),
+  verifyCsrfOrigin: vi.fn(() => true),
+}));
+
+beforeEach(() => {
+  routeMocks.verifyProbeAdminAuth.mockResolvedValue({ authorized: true, ownerId: "admin" });
+  routeMocks.verifyCsrfOrigin.mockReturnValue(true);
+});
+
+vi.mock("@/lib/probe/auth.js", () => ({
+  verifyProbeAdminAuth: routeMocks.verifyProbeAdminAuth,
+  verifyCsrfOrigin: routeMocks.verifyCsrfOrigin,
+}));
+
+vi.mock("@/shared/utils/ssrfGuard.js", () => ({
+  assertPublicUrlResolved: vi.fn(async () => {}),
+}));
+
+vi.mock("@/lib/probe/endpoints.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getCurrentGatewayBaseUrl: () => "https://router.test",
+}));
+
 describe("Probe Profile Crypto (AES-256-GCM)", () => {
   it("encrypts and decrypts secrets payload successfully", async () => {
     const { encryptProfileSecret, decryptProfileSecret } = await import(
@@ -75,7 +99,13 @@ describe("Probe Profile Repository & 24h TTL", () => {
       provider: "openai",
       model: "gpt-4o",
       endpoint: "https://api.openai.com/v1",
-      secrets: { apiKey: "sk-secret-key-123" },
+      secrets: {
+        apiKey: "sk-secret-key-123",
+        customHeaders: {
+          "User-Agent": "Secret Probe Agent/1.0",
+          "X-Private-Tenant": "tenant-secret",
+        },
+      },
     });
 
     const after = Date.now();
@@ -87,10 +117,14 @@ describe("Probe Profile Repository & 24h TTL", () => {
     expect(profile.model).toBe("gpt-4o");
     expect(profile.endpoint).toBe("https://api.openai.com/v1");
 
-    // Safe metadata only: no secretEncrypted or plaintext apiKey
+    // Safe metadata only: no encrypted blob or plaintext credentials/headers.
     expect(profile.secretEncrypted).toBeUndefined();
     expect(profile.apiKey).toBeUndefined();
+    expect(profile.customHeaders).toBeUndefined();
     expect(profile.secrets).toBeUndefined();
+    expect(JSON.stringify(profile)).not.toContain("Secret Probe Agent");
+    expect(JSON.stringify(profile)).not.toContain("X-Private-Tenant");
+    expect(JSON.stringify(profile)).not.toContain("tenant-secret");
 
     // Verify 24-hour expiration window
     const createdAtMs = new Date(profile.createdAt).getTime();
@@ -105,15 +139,25 @@ describe("Probe Profile Repository & 24h TTL", () => {
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe(profile.id);
     expect(list[0].secretEncrypted).toBeUndefined();
+    expect(list[0].customHeaders).toBeUndefined();
+    expect(JSON.stringify(list)).not.toContain("tenant-secret");
 
     // getProbeProfileById only returns safe metadata
     const fetched = await getProbeProfileById(profile.id);
     expect(fetched.id).toBe(profile.id);
     expect(fetched.secretEncrypted).toBeUndefined();
+    expect(fetched.customHeaders).toBeUndefined();
+    expect(JSON.stringify(fetched)).not.toContain("X-Private-Tenant");
 
     // Internal getter decrypts secrets
     const withSecrets = await getProbeProfileSecrets(profile.id);
-    expect(withSecrets.secrets).toEqual({ apiKey: "sk-secret-key-123" });
+    expect(withSecrets.secrets).toEqual({
+      apiKey: "sk-secret-key-123",
+      customHeaders: {
+        "User-Agent": "Secret Probe Agent/1.0",
+        "X-Private-Tenant": "tenant-secret",
+      },
+    });
   });
 
   it("infers legacy profile sources from endpoint metadata", async () => {
@@ -207,5 +251,100 @@ describe("Probe Profile Repository & 24h TTL", () => {
     expect(deleted).toBe(true);
 
     expect(await getProbeProfileById(profile.id)).toBeNull();
+  });
+});
+
+describe("Probe Profiles POST Route Limits", () => {
+  const postJson = async (payloadObj, authed = true) => {
+    const { POST: profilesPost } = await import(
+      "../../src/app/api/probe/profiles/route.js"
+    );
+    const req = new Request("https://router.test/api/probe/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: typeof payloadObj === "string" ? payloadObj : JSON.stringify(payloadObj),
+    });
+    if (!authed) routeMocks.verifyProbeAdminAuth.mockResolvedValueOnce({ authorized: false, ownerId: null });
+    const res = await profilesPost(req);
+    return res;
+  };
+
+  beforeEach(() => {
+    routeMocks.verifyProbeAdminAuth.mockResolvedValue({ authorized: true, ownerId: "admin" });
+    routeMocks.verifyCsrfOrigin.mockReturnValue(true);
+  });
+
+  it("returns 401 when not authorized", async () => {
+    const res = await postJson({ name: "x", type: "target" }, false);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 413 for oversized bodies", async () => {
+    const res = await postJson({
+      name: "Big",
+      type: "target",
+      fill: "x".repeat(40_000),
+    });
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toMatch(/too large/i);
+  });
+
+  it("returns 400 for an over-long API key", async () => {
+    const res = await postJson({
+      name: "Mega key",
+      type: "target",
+      secrets: { apiKey: "k".repeat(9000) },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/too long/i);
+  });
+
+  it("returns 400 for missing name and for name over 128 chars", async () => {
+    const resMissing = await postJson({ type: "target" });
+    expect(resMissing.status).toBe(400);
+    expect((await resMissing.json()).error).toMatch(/name is required/i);
+
+    const resLong = await postJson({ name: "n".repeat(129), type: "target" });
+    expect(resLong.status).toBe(400);
+    expect((await resLong.json()).error).toMatch(/128 characters/i);
+  });
+
+  it("rejects oversized custom headers before persisting", async () => {
+    const res = await postJson({
+      name: "Header bomb",
+      type: "target",
+      secrets: {
+        customHeaders: Object.fromEntries(
+          Array.from({ length: 20 }, (_, i) => [`X-H${i}`, `v${i}`])
+        ),
+      },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/additional header/i);
+  });
+
+  it("creates a profile with trimmed name and normalized custom headers", async () => {
+    const res = await postJson({
+      name: "  Outer Target  ",
+      type: "target",
+      source: "custom",
+      endpoint: "https://api.example.com/v1",
+      secrets: {
+        apiKey: "sk-ok",
+        customHeaders: [{ name: "User-Agent", value: "Probe/1.0" }],
+      },
+    });
+    expect(res.status).toBe(201);
+    const { profile } = await res.json();
+    expect(profile.name).toBe("Outer Target");
+    expect(JSON.stringify(profile)).not.toContain("sk-ok");
+    expect(JSON.stringify(profile)).not.toContain("Probe/1.0");
+
+    const { getProbeProfileSecrets } = await import(
+      "../../src/lib/db/repos/probeProfilesRepo.js"
+    );
+    const withSecrets = await getProbeProfileSecrets(profile.id);
+    expect(withSecrets.secrets.customHeaders).toEqual({ "User-Agent": "Probe/1.0" });
+    expect(withSecrets.secrets.apiKey).toBe("sk-ok");
   });
 });

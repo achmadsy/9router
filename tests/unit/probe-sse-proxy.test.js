@@ -72,6 +72,117 @@ describe("Probe Run & One Active Run Enforcement", () => {
     });
   });
 
+  it("keeps target and judge custom headers separate in the sidecar payload", async () => {
+    mocks.runProbeOnSidecar.mockResolvedValue(
+      createMockSseResponse(["event: message\ndata: {\"step\":\"started\"}\n\n"])
+    );
+
+    const response = await runPost(new Request("https://router.test/api/probe/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        target: {
+          source: "this_9router",
+          model: "target-model",
+          customHeaders: [
+            { name: "User-Agent", value: "Target Probe/1.0" },
+            { name: "X-Target", value: "target-only" },
+          ],
+        },
+        judge: {
+          source: "this_9router",
+          model: "judge-model",
+          customHeaders: [{ name: "X-Judge", value: "judge-only" }],
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runProbeOnSidecar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          model: "target-model",
+          customHeaders: {
+            "User-Agent": "Target Probe/1.0",
+            "X-Target": "target-only",
+          },
+        }),
+        judge: expect.objectContaining({
+          model: "judge-model",
+          customHeaders: { "X-Judge": "judge-only" },
+        }),
+      }),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("resolves encrypted profile headers without returning them to the browser", async () => {
+    mocks.getProbeProfileSecrets
+      .mockResolvedValueOnce({
+        source: "this_9router",
+        model: "profile-target",
+        endpoint: null,
+        secrets: {
+          apiKey: "target-secret",
+          customHeaders: { "User-Agent": "Stored Target/1.0" },
+        },
+      })
+      .mockResolvedValueOnce({
+        source: "this_9router",
+        model: "profile-judge",
+        endpoint: null,
+        secrets: {
+          apiKey: "judge-secret",
+          customHeaders: { "X-Judge": "stored-judge" },
+        },
+      });
+    mocks.runProbeOnSidecar.mockResolvedValue(
+      createMockSseResponse(["event: message\ndata: {\"step\":\"started\"}\n\n"])
+    );
+
+    const response = await runPost(new Request("https://router.test/api/probe/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ targetProfileId: "target-profile", judgeProfileId: "judge-profile" }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runProbeOnSidecar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          apiKey: "target-secret",
+          customHeaders: { "User-Agent": "Stored Target/1.0" },
+        }),
+        judge: expect.objectContaining({
+          apiKey: "judge-secret",
+          customHeaders: { "X-Judge": "stored-judge" },
+        }),
+      }),
+      expect.any(AbortSignal)
+    );
+    expect(response.headers.get("x-probe-run-id")).toMatch(/^prun_/);
+    expect([...response.headers.entries()].join(" ")).not.toContain("Stored Target");
+    expect([...response.headers.entries()].join(" ")).not.toContain("stored-judge");
+  });
+
+  it("rejects protected custom headers before calling the sidecar", async () => {
+    const response = await runPost(new Request("https://router.test/api/probe/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        target: {
+          source: "this_9router",
+          model: "target-model",
+          customHeaders: { Authorization: "Bearer attacker" },
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Additional header Authorization is not allowed" });
+    expect(mocks.runProbeOnSidecar).not.toHaveBeenCalled();
+  });
+
   it("starts a run successfully and rejects concurrent second run with 409", async () => {
     mocks.runProbeOnSidecar.mockResolvedValue(
       createMockSseResponse(["event: message\ndata: {\"step\":\"started\"}\n\n"])
@@ -240,6 +351,51 @@ describe("Probe Bounded SSE Proxy & Errors", () => {
 
     const shortMsg = "Connection timeout";
     expect(boundErrorMessage(shortMsg)).toBe("Connection timeout");
+  });
+
+  it("redacts credentials in sidecar failure body before echoing to the client", async () => {
+    __testResetActiveRun();
+    mocks.verifyProbeAdminAuth.mockResolvedValue({ authorized: true, ownerId: "admin" });
+    mocks.runProbeOnSidecar.mockResolvedValue(
+      new Response("upstream failed with Authorization: Bearer sk-live-secret-x and token=abc123def456", {
+        status: 502,
+      })
+    );
+
+    const req = new Request("https://router.test/api/probe/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        target: { source: "custom", endpoint: "https://example.com/v1" },
+      }),
+    });
+
+    const res = await runPost(req);
+    expect(res.status).toBe(502);
+    const err = await res.json();
+    expect(err.error).not.toContain("sk-live-secret-x");
+    expect(err.error).not.toContain("abc123def456");
+  });
+
+  it("redacts credentials in sidecar connection errors", async () => {
+    __testResetActiveRun();
+    mocks.verifyProbeAdminAuth.mockResolvedValue({ authorized: true, ownerId: "admin" });
+    mocks.runProbeOnSidecar.mockRejectedValue(
+      new Error("connect ECONNREFUSED to https://user:topsecret@sidecar.internal:9999/works")
+    );
+
+    const req = new Request("https://router.test/api/probe/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        target: { source: "custom", endpoint: "https://example.com/v1" },
+      }),
+    });
+
+    const res = await runPost(req);
+    expect(res.status).toBe(502);
+    const err = await res.json();
+    expect(err.error).not.toContain("topsecret");
   });
 
   it("bounds single SSE event size to 64KB and terminates stream", async () => {

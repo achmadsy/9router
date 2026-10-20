@@ -1,8 +1,8 @@
 // Sidecar contract (achmadsy/LLMprobe-engine):
 //   GET  /health
 //   GET  /v1/probes          → { version, probes: [{ id, label, group, description, ...flags }] }
-//   POST /v1/models          { baseUrl, apiKey? } → { models: [{ id, name? }] }
-//   POST /v1/runs            { id, baseUrl, apiKey, modelId, claimedModel?, judge? }  → SSE
+//   POST /v1/models          { baseUrl, apiKey?, customHeaders? } → { models: [{ id, name? }] }
+//   POST /v1/runs            { id, baseUrl, apiKey, customHeaders?, modelId, claimedModel?, judge? }  → SSE
 //   POST /v1/runs/:id/cancel
 export function getSidecarUrl() {
   return (process.env.PROBE_SIDECAR_URL || "http://127.0.0.1:3001").replace(/\/+$/, "");
@@ -62,6 +62,9 @@ function toEndpointConfig(node) {
   // Keyless self-gateway probes run without credentials; keyless custom targets
   // rely on endpoints that do not require auth.
   if (apiKey) out.apiKey = apiKey;
+  if (node.customHeaders && Object.keys(node.customHeaders).length) {
+    out.customHeaders = node.customHeaders;
+  }
   return out;
 }
 
@@ -126,7 +129,7 @@ export async function getProbeCatalogFromSidecar(signal) {
 /**
  * Fetch an OpenAI-compatible catalog through the sidecar's pinned egress path.
  */
-export async function discoverModelsOnSidecar({ baseUrl, apiKey }, signal) {
+export async function discoverModelsOnSidecar({ baseUrl, apiKey, customHeaders }, signal) {
   const timeoutSignal = AbortSignal.timeout(12_000);
   const combinedSignal = signal
     ? AbortSignal.any([signal, timeoutSignal])
@@ -134,7 +137,11 @@ export async function discoverModelsOnSidecar({ baseUrl, apiKey }, signal) {
   return fetch(`${getSidecarUrl()}/v1/models`, {
     method: "POST",
     headers: buildHeaders(),
-    body: JSON.stringify({ baseUrl, ...(apiKey ? { apiKey } : {}) }),
+    body: JSON.stringify({
+      baseUrl,
+      ...(apiKey ? { apiKey } : {}),
+      ...(customHeaders && Object.keys(customHeaders).length ? { customHeaders } : {}),
+    }),
     signal: combinedSignal,
   });
 }

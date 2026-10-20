@@ -71,15 +71,42 @@ describe("Probe model discovery route", () => {
     expect((await POST(request({ source: "this_9router", apiKey: "bad" }))).status).toBe(401);
   });
 
-  it("validates custom URL then delegates to sidecar", async () => {
+  it("validates custom URL then delegates normalized headers to sidecar", async () => {
     mocks.discoverModelsOnSidecar.mockResolvedValue(Response.json({ models: [{ id: "custom/a" }] }));
-    const response = await POST(request({ source: "custom", endpoint: "https://api.example.com/v1", apiKey: "secret" }));
+    const response = await POST(request({
+      source: "custom",
+      endpoint: "https://api.example.com/v1",
+      apiKey: "secret",
+      customHeaders: [
+        { name: "User-Agent", value: "Probe Client/1.0" },
+        { name: "X-Tenant", value: "acme" },
+      ],
+    }));
     expect(response.status).toBe(200);
     expect(mocks.assertPublicUrlResolved).toHaveBeenCalledWith("https://api.example.com/v1", { requireResolve: true });
     expect(mocks.discoverModelsOnSidecar).toHaveBeenCalledWith(
-      { baseUrl: "https://api.example.com/v1", apiKey: "secret" },
+      {
+        baseUrl: "https://api.example.com/v1",
+        apiKey: "secret",
+        customHeaders: {
+          "User-Agent": "Probe Client/1.0",
+          "X-Tenant": "acme",
+        },
+      },
       expect.any(AbortSignal)
     );
+  });
+
+  it("rejects protected custom headers before URL resolution", async () => {
+    const response = await POST(request({
+      source: "custom",
+      endpoint: "https://api.example.com/v1",
+      customHeaders: { Authorization: "Bearer attacker" },
+    }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Additional header Authorization is not allowed" });
+    expect(mocks.assertPublicUrlResolved).not.toHaveBeenCalled();
+    expect(mocks.discoverModelsOnSidecar).not.toHaveBeenCalled();
   });
 
   it("returns 400 when custom URL is blocked", async () => {

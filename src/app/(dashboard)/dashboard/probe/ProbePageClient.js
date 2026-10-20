@@ -57,6 +57,7 @@ export default function ProbePageClient() {
     apiKey: "",
     model: "",
     claimedModel: "",
+    customHeaders: [],
   });
 
   // Optional Custom Judge Configuration
@@ -66,6 +67,7 @@ export default function ProbePageClient() {
     endpoint: "",
     apiKey: "",
     model: "",
+    customHeaders: [],
   });
 
   // Run lifecycle state
@@ -208,7 +210,10 @@ export default function ProbePageClient() {
       source: src?.source || "this_9router",
       model: src?.model || null,
       endpoint: src?.source === "custom" ? (src?.endpoint || null) : null,
-      secrets: src?.apiKey ? { apiKey: src.apiKey } : {},
+      secrets: {
+        ...(src?.apiKey ? { apiKey: src.apiKey } : {}),
+        ...(src?.customHeaders?.length ? { customHeaders: src.customHeaders } : {}),
+      },
     };
 
     const res = await fetch("/api/probe/profiles", {
@@ -255,6 +260,7 @@ export default function ProbePageClient() {
         model: found.model || prev.model,
         endpoint: found.endpoint || prev.endpoint,
         apiKey: "", // Secrets remain encrypted on server
+        customHeaders: [],
       }));
     }
   };
@@ -270,6 +276,7 @@ export default function ProbePageClient() {
         model: found.model || prev.model,
         endpoint: found.endpoint || prev.endpoint,
         apiKey: "",
+        customHeaders: [],
       }));
     }
   };
@@ -289,6 +296,7 @@ export default function ProbePageClient() {
           source: config.source,
           ...(config.source === "custom" ? { endpoint: config.endpoint } : {}),
           ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+          ...(config.customHeaders?.length ? { customHeaders: config.customHeaders } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -368,6 +376,7 @@ export default function ProbePageClient() {
         model: target.model,
         ...(target.source === "custom" ? { endpoint: target.endpoint } : {}),
         ...(target.apiKey ? { apiKey: target.apiKey } : {}),
+        ...(target.customHeaders?.length ? { customHeaders: target.customHeaders } : {}),
         claimedModel: target.claimedModel || target.model,
       };
     }
@@ -381,6 +390,7 @@ export default function ProbePageClient() {
           model: judge.model,
           ...(judge.endpoint ? { endpoint: judge.endpoint } : {}),
           ...(judge.apiKey ? { apiKey: judge.apiKey } : {}),
+          ...(judge.customHeaders?.length ? { customHeaders: judge.customHeaders } : {}),
         };
       }
     } else {
@@ -393,6 +403,7 @@ export default function ProbePageClient() {
           model: target.model,
           ...(target.source === "custom" ? { endpoint: target.endpoint } : {}),
           ...(target.apiKey ? { apiKey: target.apiKey } : {}),
+          ...(target.customHeaders?.length ? { customHeaders: target.customHeaders } : {}),
         };
       }
     }
