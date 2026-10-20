@@ -26,7 +26,7 @@ jobs:
       - run: npm install --no-audit --no-fund --legacy-peer-deps
         working-directory: tests
       - name: Run focused tests
-        run: npx vitest run unit/probe-admin-auth.test.js unit/probe-models-route.test.js unit/probe-profiles-crypto.test.js unit/v1-models-acl.test.js
+        run: npx vitest run unit/probe-admin-auth.test.js unit/probe-models-route.test.js unit/probe-suite-route.test.js unit/probe-display-group.test.js unit/probe-profiles-crypto.test.js unit/v1-models-acl.test.js
         working-directory: tests
       - run: npm run build
 

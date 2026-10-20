@@ -183,6 +183,7 @@ export default function ProbeConfigCard({
   targetCatalog,
   judgeCatalog,
   onFetchModels,
+  probeCount,
   isRunning,
   isOffline,
   onStartRun,
@@ -262,7 +263,7 @@ export default function ProbeConfigCard({
       subtitle="Configure target and optional judge for behavioral verification"
       icon="settings_input_component"
       className={className}
-      action={<Badge variant={isRunning ? "warning" : "default"} dot={isRunning} size="sm">{isRunning ? "Run Active" : "Full Suite (84+ probes)"}</Badge>}
+      action={<Badge variant={isRunning ? "warning" : "default"} dot={isRunning} size="sm">{isRunning ? "Run Active" : `Full Suite (${probeCount} probes)`}</Badge>}
     >
       <div className="space-y-6">
         {profileSelector("Target", selectedTargetProfileId, onSelectTargetProfile, targetProfiles)}
@@ -321,7 +322,7 @@ export default function ProbeConfigCard({
           <span className="material-symbols-outlined text-[18px] text-amber-500 shrink-0">toll</span>
           <div>
             <p className="font-semibold">Full Suite Resource Commitment Warning</p>
-            <p className="text-text-muted">Runs ~84–100 sequential LLM calls over 2–5 minutes. Verify quota first.</p>
+            <p className="text-text-muted">Runs about {probeCount} sequential LLM calls over several minutes. Verify quota first.</p>
           </div>
         </div>
 
@@ -385,6 +386,7 @@ ProbeConfigCard.propTypes = {
   targetCatalog: PropTypes.object.isRequired,
   judgeCatalog: PropTypes.object.isRequired,
   onFetchModels: PropTypes.func.isRequired,
+  probeCount: PropTypes.number.isRequired,
   isRunning: PropTypes.bool.isRequired,
   isOffline: PropTypes.bool.isRequired,
   onStartRun: PropTypes.func.isRequired,

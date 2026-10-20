@@ -3,10 +3,11 @@
 import { useMemo } from "react";
 import PropTypes from "prop-types";
 import { cn } from "@/shared/utils/cn";
-import { PROBE_CATEGORIES, STATUS_META } from "./probeConstants";
+import { PROBE_CATEGORIES, STATUS_META, getProbeDisplayGroup } from "./probeConstants";
 
 export default function ProbeRail({
   probes,
+  suiteVersion,
   activeProbeId,
   selectedProbeId,
   onSelectProbe,
@@ -23,7 +24,7 @@ export default function ProbeRail({
     }
 
     for (const probe of probes) {
-      const groupKey = probe.group || "quality";
+      const groupKey = getProbeDisplayGroup(probe);
       const bucket = map.get(groupKey);
       if (bucket) {
         bucket.items.push(probe);
@@ -66,14 +67,14 @@ export default function ProbeRail({
               radar
             </span>
             <h3 className="text-base font-semibold text-text-main tracking-tight">
-              100-Check Probe Rail
+              {totalCount}-Check Probe Rail
             </h3>
             <span className="px-2 py-0.5 text-[11px] font-mono font-semibold rounded-full bg-surface-2 text-text-muted">
               {completedCount} / {totalCount} ({percentComplete}%)
             </span>
           </div>
           <p className="text-xs text-text-muted">
-            Engine pipeline execution order (v0.11.0). Click any check to inspect payload and response.
+            Engine pipeline execution order{suiteVersion ? ` (${suiteVersion})` : ""}. Click any check to inspect payload and response.
           </p>
         </div>
 
@@ -109,7 +110,7 @@ export default function ProbeRail({
       {/* Screen Reader Live Announcement */}
       <div className="sr-only" aria-live="polite">
         {activeProbe
-          ? `Current probe: ${activeProbe.label} in group ${activeProbe.group}`
+          ? `Current probe: ${activeProbe.label} in group ${getProbeDisplayGroup(activeProbe)}`
           : `Probe rail: ${completedCount} of ${totalCount} completed.`}
       </div>
 
@@ -228,6 +229,7 @@ export default function ProbeRail({
 }
 
 ProbeRail.propTypes = {
+  suiteVersion: PropTypes.string,
   probes: PropTypes.arrayOf(
     PropTypes.shape({
       id: PropTypes.string.isRequired,

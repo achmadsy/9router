@@ -1,5 +1,6 @@
 // Sidecar contract (achmadsy/LLMprobe-engine):
 //   GET  /health
+//   GET  /v1/probes          → { version, probes: [{ id, label, group, description, ...flags }] }
 //   POST /v1/models          { baseUrl, apiKey? } → { models: [{ id, name? }] }
 //   POST /v1/runs            { id, baseUrl, apiKey, modelId, claimedModel?, judge? }  → SSE
 //   POST /v1/runs/:id/cancel
@@ -62,6 +63,64 @@ function toEndpointConfig(node) {
   // rely on endpoints that do not require auth.
   if (apiKey) out.apiKey = apiKey;
   return out;
+}
+
+/**
+ * Fetch display-safe probe metadata from the authenticated sidecar.
+ */
+export async function getProbeCatalogFromSidecar(signal) {
+  const maxBytes = 262_144;
+  const timeoutSignal = AbortSignal.timeout(5000);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
+  const response = await fetch(`${getSidecarUrl()}/v1/probes`, {
+    headers: buildHeaders(),
+    signal: combinedSignal,
+  });
+
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel();
+    throw new Error("Probe catalog response too large");
+  }
+
+  if (!response.body) {
+    return { ok: response.ok, status: response.status, data: null };
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel("Probe catalog response too large");
+        throw new Error("Probe catalog response too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let data = null;
+  try {
+    data = JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    throw new Error("Probe catalog response was not valid JSON");
+  }
+  return { ok: response.ok, status: response.status, data };
 }
 
 /**

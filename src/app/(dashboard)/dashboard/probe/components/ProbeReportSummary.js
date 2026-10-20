@@ -7,7 +7,7 @@ import Card from "@/shared/components/Card";
 import Badge from "@/shared/components/Badge";
 import Button from "@/shared/components/Button";
 import Input from "@/shared/components/Input";
-import { PROBE_CATEGORIES, STATUS_META, VERDICT_MAP } from "./probeConstants";
+import { PROBE_CATEGORIES, STATUS_META, VERDICT_MAP, getProbeDisplayGroup } from "./probeConstants";
 
 function formatDuration(ms) {
   if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
@@ -49,7 +49,7 @@ export default function ProbeReportSummary({
   // Category statistics
   const categoryStats = useMemo(() => {
     return PROBE_CATEGORIES.map((cat) => {
-      const items = results.filter((r) => r.group === cat.id);
+      const items = results.filter((r) => getProbeDisplayGroup(r) === cat.id);
       const passed = items.filter((r) => r.status === "passed").length;
       const failed = items.filter((r) => r.status === "failed").length;
       const neutral = items.filter((r) => r.status === "neutral").length;
@@ -69,7 +69,7 @@ export default function ProbeReportSummary({
   // Filtered rows for results table
   const filteredResults = useMemo(() => {
     return results.filter((r) => {
-      if (groupFilter !== "all" && r.group !== groupFilter) return false;
+      if (groupFilter !== "all" && getProbeDisplayGroup(r) !== groupFilter) return false;
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -390,7 +390,7 @@ export default function ProbeReportSummary({
                       </td>
                       <td className="py-2.5 px-3">
                         <span className="capitalize text-text-muted font-medium">
-                          {row.group || "—"}
+                          {getProbeDisplayGroup(row)}
                         </span>
                       </td>
                       <td className="py-2.5 px-3">

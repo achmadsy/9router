@@ -8,6 +8,34 @@ import ProbeResultPanel from "./components/ProbeResultPanel";
 import ProbeReportSummary from "./components/ProbeReportSummary";
 import { DEFAULT_PROBES } from "./components/probeConstants";
 
+const FALLBACK_SUITE_VERSION = null;
+
+function pendingProbes(templates) {
+  return templates.map((probe) => ({ ...probe, status: "pending" }));
+}
+
+function validSuiteCatalog(data) {
+  if (!data || typeof data.version !== "string" || !Array.isArray(data.probes) || data.probes.length === 0) {
+    return false;
+  }
+
+  const ids = new Set();
+  return data.probes.every((probe) => {
+    if (
+      !probe ||
+      typeof probe.id !== "string" ||
+      typeof probe.label !== "string" ||
+      typeof probe.group !== "string" ||
+      typeof probe.description !== "string" ||
+      ids.has(probe.id)
+    ) {
+      return false;
+    }
+    ids.add(probe.id);
+    return true;
+  });
+}
+
 export default function ProbePageClient() {
   // Sidecar Health
   const [health, setHealth] = useState(null);
@@ -48,8 +76,10 @@ export default function ProbePageClient() {
   const [selectedProbeId, setSelectedProbeId] = useState(null);
   const [elapsedSec, setElapsedSec] = useState(0);
 
-  // Live Probes state (initialized with 84 default probes in engine order)
-  const [probes, setProbes] = useState(() => DEFAULT_PROBES.map((p) => ({ ...p, status: "pending" })));
+  // Suite templates stay separate from mutable run results.
+  const [suiteTemplates, setSuiteTemplates] = useState(DEFAULT_PROBES);
+  const [suiteVersion, setSuiteVersion] = useState(FALLBACK_SUITE_VERSION);
+  const [probes, setProbes] = useState(() => pendingProbes(DEFAULT_PROBES));
 
   // Final transient report
   const [report, setReport] = useState(null);
@@ -58,6 +88,8 @@ export default function ProbePageClient() {
   const abortControllerRef = useRef(null);
   const timerRef = useRef(null);
   const startTimeRef = useRef(null);
+  const isRunningRef = useRef(false);
+  const suiteTemplatesRef = useRef(DEFAULT_PROBES);
 
   // Fetch Sidecar Health (callable on demand)
   const fetchHealth = useCallback(async () => {
@@ -103,6 +135,23 @@ export default function ProbePageClient() {
         if (!ignore) setHealthLoading(false);
       });
 
+    // Authoritative suite catalog. Static definitions remain fallback only.
+    fetch("/api/probe/suite")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (ignore || !validSuiteCatalog(data) || isRunningRef.current) return;
+
+        const templates = data.probes.map((probe) => ({ ...probe }));
+        const validIds = new Set(templates.map((probe) => probe.id));
+        suiteTemplatesRef.current = templates;
+        setSuiteTemplates(templates);
+        setSuiteVersion(data.version);
+        setProbes(pendingProbes(templates));
+        setSelectedProbeId((id) => (validIds.has(id) ? id : null));
+        setActiveProbeId((id) => (validIds.has(id) ? id : null));
+      })
+      .catch(() => {});
+
     // Profiles
     fetch("/api/probe/profiles")
       .then((res) => (res.ok ? res.json() : null))
@@ -118,6 +167,7 @@ export default function ProbePageClient() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!ignore && data?.active && data.run?.runId) {
+          isRunningRef.current = true;
           setActiveRunId(data.run.runId);
           setIsRunning(true);
         }
@@ -288,6 +338,7 @@ export default function ProbePageClient() {
       }
     }
 
+    isRunningRef.current = false;
     setIsRunning(false);
     setActiveRunId(null);
     setActiveProbeId(null);
@@ -298,8 +349,8 @@ export default function ProbePageClient() {
     setRunError(null);
     setReport(null);
 
-    // Reset probe rail to pending
-    setProbes(DEFAULT_PROBES.map((p) => ({ ...p, status: "pending" })));
+    // Reset probe rail from active suite templates.
+    setProbes(pendingProbes(suiteTemplatesRef.current));
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -346,6 +397,7 @@ export default function ProbePageClient() {
       }
     }
 
+    isRunningRef.current = true;
     setIsRunning(true);
 
     try {
@@ -512,6 +564,7 @@ export default function ProbePageClient() {
         setRunError(err.message || "Probe execution aborted");
       }
     } finally {
+      isRunningRef.current = false;
       setIsRunning(false);
       setActiveRunId(null);
       setActiveProbeId(null);
@@ -590,6 +643,7 @@ export default function ProbePageClient() {
         targetCatalog={targetCatalog}
         judgeCatalog={judgeCatalog}
         onFetchModels={handleFetchModels}
+        probeCount={suiteTemplates.length}
         isRunning={isRunning}
         isOffline={!health?.sidecar?.reachable}
         onStartRun={handleStartRun}
@@ -599,6 +653,7 @@ export default function ProbePageClient() {
       {/* Signature 100-Check Probe Rail */}
       <ProbeRail
         probes={probes}
+        suiteVersion={suiteVersion}
         activeProbeId={activeProbeId}
         selectedProbeId={selectedProbeId}
         onSelectProbe={(p) => setSelectedProbeId(p.id)}

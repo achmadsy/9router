@@ -17,6 +17,18 @@ export const CATEGORY_MAP = Object.fromEntries(
   PROBE_CATEGORIES.map((cat, idx) => [cat.id, { ...cat, index: idx }])
 );
 
+const IDENTITY_DISPLAY_PROBES = new Set([
+  "infra_probe",
+  "bedrock_probe",
+  "channel_signature",
+]);
+
+export function getProbeDisplayGroup(probe) {
+  return IDENTITY_DISPLAY_PROBES.has(probe?.id)
+    ? "identity"
+    : probe?.group || "quality";
+}
+
 export const DEFAULT_PROBES = [
   // 1. Quality (10)
   { id: "zh_reasoning", label: "Chinese Reasoning", group: "quality", description: "Multi-step logic in Chinese" },
