@@ -4,7 +4,7 @@ import { verifyProbeAdminAuth, verifyCsrfOrigin } from "@/lib/probe/auth.js";
 import { getActiveRun, startActiveRun, finishActiveRun } from "@/lib/probe/activeRun.js";
 import { getProbeProfileSecrets } from "@/lib/db/repos/probeProfilesRepo.js";
 import { createProbeRun, finishProbeRun } from "@/lib/db/repos/probeRunsRepo.js";
-import { runProbeOnSidecar } from "@/lib/probe/sidecarClient.js";
+import { runProbeOnSidecar, fetchBaselineMap } from "@/lib/probe/sidecarClient.js";
 import { createBoundedSseStream, boundErrorMessage } from "@/lib/probe/sseProxy.js";
 import { redactSensitiveText } from "@/lib/sentry.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
@@ -153,12 +153,14 @@ export async function POST(request) {
 
   let sidecarRes;
   try {
+    const baseline = await fetchBaselineMap(resolvedTarget.model);
     sidecarRes = await runProbeOnSidecar(
       {
         runId,
         target: resolvedTarget,
         judge: resolvedJudge,
         config,
+        ...(baseline ? { baseline } : {}),
       },
       abortController.signal
     );

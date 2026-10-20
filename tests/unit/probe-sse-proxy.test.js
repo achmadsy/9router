@@ -36,6 +36,7 @@ vi.mock("@/lib/probe/sidecarClient.js", () => ({
   cancelProbeOnSidecar: mocks.cancelProbeOnSidecar,
   discoverModelsOnSidecar: vi.fn(),
   getSidecarHealth: vi.fn(async () => ({ reachable: true, status: 200 })),
+  fetchBaselineMap: vi.fn(async () => null),
 }));
 
 const { POST: runPost, GET: runGet } = await import(
@@ -456,7 +457,10 @@ describe("Probe Bounded SSE Proxy & Errors", () => {
       [{ probeId: "p1", status: "done", passed: true }],
       86,
     );
-    expect(mocks.finishProbeRun).toHaveBeenCalledWith(runId, "complete", []);
+    // Other tests share the module mock; match this run's completion call.
+    expect(mocks.finishProbeRun.mock.calls.some(
+      ([id, status, rows]) => id === runId && status === "complete" && Array.isArray(rows) && rows.length === 0,
+    )).toBe(true);
   });
 });
 

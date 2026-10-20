@@ -32,7 +32,14 @@ async function persistSseEvent(runId, eventName, dataText) {
   if (eventName === "progress" && parsed.result && typeof parsed.result === "object") {
     await appendProbeRunResults(runId, [parsed.result], parsed.total ?? null);
   } else if (eventName === "complete" && parsed.report) {
-    await finishProbeRun(runId, "complete", Array.isArray(parsed.report.results) ? parsed.report.results : []);
+    // Persist score/identity metadata separately from result rows so the
+    // verdict card survives refresh; truncated JSON still closes the run.
+    await finishProbeRun(
+      runId,
+      "complete",
+      Array.isArray(parsed.report.results) ? parsed.report.results : [],
+      parsed.report,
+    );
   } else if (eventName === "canceled") {
     await finishProbeRun(runId, "canceled");
   } else if (eventName === "error") {

@@ -3,31 +3,45 @@
  * Follows v0.9.0 - v0.11.0 pipeline engine order.
  */
 
+// Categories mirror the original BazaarLink report: four result sections.
+// Engine groups map in — quality/multimodal land under Integrity,
+// signature lands under Security.
 export const PROBE_CATEGORIES = [
-  { id: "quality", label: "Quality", color: "#10B981", badgeVariant: "success" },
-  { id: "security", label: "Security", color: "#EF4444", badgeVariant: "error" },
-  { id: "integrity", label: "Integrity", color: "#3B82F6", badgeVariant: "info" },
   { id: "identity", label: "Identity", color: "#8B5CF6", badgeVariant: "primary", neutral: true },
-  { id: "signature", label: "Signature", color: "#F59E0B", badgeVariant: "warning" },
-  { id: "multimodal", label: "Multimodal", color: "#EC4899", badgeVariant: "default" },
-  { id: "submodel", label: "Sub-Model", color: "#06B6D4", badgeVariant: "default", neutral: true },
+  { id: "submodel", label: "Sub-Model ID", color: "#06B6D4", badgeVariant: "default", neutral: true },
+  { id: "security", label: "Security Probes", color: "#EF4444", badgeVariant: "error" },
+  { id: "integrity", label: "Integrity Checks", color: "#3B82F6", badgeVariant: "info" },
 ];
 
 export const CATEGORY_MAP = Object.fromEntries(
   PROBE_CATEGORIES.map((cat, idx) => [cat.id, { ...cat, index: idx }])
 );
 
-const IDENTITY_DISPLAY_PROBES = new Set([
+const GROUP_TO_CATEGORY = {
+  identity: "identity",
+  submodel: "submodel",
+  security: "security",
+  signature: "security",
+  integrity: "integrity",
+  quality: "integrity",
+  multimodal: "integrity",
+};
+
+// Original-page exceptions: channel/infra probes display under Security,
+// multimodal runs under Integrity.
+const SECURITY_DISPLAY_PROBES = new Set([
   "infra_probe",
   "bedrock_probe",
   "channel_signature",
 ]);
 
 export function getProbeDisplayGroup(probe) {
-  return IDENTITY_DISPLAY_PROBES.has(probe?.id)
-    ? "identity"
-    : probe?.group || "quality";
+  if (SECURITY_DISPLAY_PROBES.has(probe?.id)) return "security";
+  return GROUP_TO_CATEGORY[probe?.group] || "integrity";
 }
+
+// Back-compat alias for older call sites.
+export const getProbeDisplayCategories = (probe) => [getProbeDisplayGroup(probe)];
 
 export const DEFAULT_PROBES = [
   // 1. Quality (10)

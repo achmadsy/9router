@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Drawer from "@/shared/components/Drawer";
 import ProbeRail from "../../components/ProbeRail";
 import ProbeResultPanel from "../../components/ProbeResultPanel";
 import ProbeReportSummary from "../../components/ProbeReportSummary";
@@ -21,12 +22,114 @@ function mergeRunResults(templates, results) {
     const result = byId.get(probe.id);
     if (!result) return { ...probe, status: "pending" };
     byId.delete(probe.id);
-    return { ...probe, ...result, id: probe.id, status: statusOf(result) };
+    // The catalog template is the English-canonical label/description; older
+    // persisted rows may carry pre-translation Chinese labels.
+    return { ...result, ...probe, status: statusOf(result) };
   });
   for (const result of byId.values()) {
     merged.push({ ...result, id: result.probeId || result.id, status: statusOf(result) });
   }
   return merged;
+}
+
+/** Human wording for the engine verdict statuses. */
+const VERDICT_TEXT = {
+  clean_match: { headline: "Model verified — full match", tone: "good" },
+  clean_match_family_only: { headline: "Same family — exact model unconfirmed", tone: "partial" },
+  clean_match_submodel_mismatch: { headline: "Family matches — different sub-model", tone: "warn" },
+  plain_mismatch: { headline: "Model does not match the claim", tone: "bad" },
+  spoof_behavior_induced: { headline: "Behavior was steered (spoof detected)", tone: "bad" },
+  spoof_selfclaim_forged: { headline: "Self-identification was faked", tone: "bad" },
+  ambiguous: { headline: "Ambiguous evidence", tone: "partial" },
+  insufficient_data: { headline: "Not enough data for a verdict", tone: "neutral" },
+};
+
+function IdentityCard({ summary }) {
+  if (!summary?.identityAssessment) return null;
+  const identity = summary.identityAssessment;
+  const verdict = identity.verdict || {};
+  const key = verdict.status || identity.status;
+  const text = VERDICT_TEXT[key] || { headline: key, tone: "neutral" };
+  const toneClass = {
+    good: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+    partial: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    warn: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    bad: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
+    neutral: "border-border bg-surface-2 text-text-muted",
+  }[text.tone] || "border-border bg-surface-2 text-text-muted";
+
+  const confidencePct = typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
+  const candidates = Array.isArray(identity.predictedCandidates) ? identity.predictedCandidates.slice(0, 5) : [];
+
+  return (
+    <section className="rounded-[14px] bg-surface border border-border-subtle p-5 space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-text-main">Model Identity Verification</h2>
+          <p className="text-xs text-text-muted mt-0.5">
+            {identity.claimedModel ? <>Claimed model: <span className="font-mono">{identity.claimedModel}</span></> : "No claimed model"}
+          </p>
+        </div>
+        {confidencePct !== null && (
+          <div className="text-right">
+            <div className="text-2xl font-bold text-text-main leading-none">{confidencePct}%</div>
+            <div className="text-[11px] text-text-muted mt-0.5">Family confidence</div>
+          </div>
+        )}
+      </div>
+
+      <div className={`rounded-[10px] border p-3 text-sm font-semibold ${toneClass}`}>
+        {text.headline}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+        <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
+          <span className="text-text-subtle text-[10px] block uppercase font-mono">Inferred family</span>
+          <span className="font-semibold text-text-main break-words">{identity.predictedFamily || "—"}</span>
+        </div>
+        <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
+          <span className="text-text-subtle text-[10px] block uppercase font-mono">Verdict status</span>
+          <span className="font-semibold text-text-main break-words">{key || "—"}</span>
+        </div>
+        <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
+          <span className="text-text-subtle text-[10px] block uppercase font-mono">Verdict confidence</span>
+          <span className="font-semibold text-text-main break-words">{verdict.confidence || "—"}</span>
+        </div>
+      </div>
+
+      {candidates.length > 0 && (
+        <div className="space-y-1">
+          <span className="font-semibold text-text-subtle text-[10px] uppercase font-mono block">Closest sub-models</span>
+          <div className="space-y-1">
+            {candidates.map((candidate) => (
+              <div key={candidate.modelId} className="flex items-center justify-between text-xs bg-surface-2 rounded-[8px] px-2.5 py-1.5">
+                <span className="font-medium text-text-main truncate">{candidate.displayName || candidate.modelId}</span>
+                <span className="font-mono text-text-muted shrink-0">{Math.round((candidate.score || 0) * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {Array.isArray(verdict.reasoning) && verdict.reasoning.length > 0 && (
+        <div className="space-y-1">
+          <span className="font-semibold text-text-subtle text-[10px] uppercase font-mono block">Why this verdict</span>
+          <ul className="text-xs text-text-muted space-y-1 list-disc pl-4">
+            {verdict.reasoning.map((line, index) => <li key={index}>{line}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {Array.isArray(identity.riskFlags) && identity.riskFlags.length > 0 && (
+        <div className="rounded-[8px] border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+          <span className="font-semibold uppercase font-mono text-[10px] block mb-1">Behavior warnings</span>
+          <ul className="space-y-1 list-disc pl-4">
+            {identity.riskFlags.map((flag, index) => <li key={index}>{flag}</li>)}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export default function RunDetailClient({ runId }) {
@@ -126,6 +229,22 @@ export default function RunDetailClient({ runId }) {
         </div>
       </header>
 
+      {run.score !== null && run.score !== undefined && (
+        <div className="rounded-[14px] bg-surface border border-border-subtle p-5 flex items-center gap-6">
+          <div>
+            <div className="text-3xl font-bold text-text-main leading-none">{run.score}<span className="text-lg text-text-muted"> / {run.scoreMax ?? 100}</span></div>
+            <div className="text-[11px] text-text-muted mt-1">Endpoint integrity score</div>
+          </div>
+          <div className="h-10 w-px bg-border" />
+          <div className="text-xs text-text-muted">
+            {completeResults.length} checks recorded
+            {run.summary?.totalInputTokens ? ` · ${run.summary.totalInputTokens} in / ${run.summary.totalOutputTokens ?? 0} out tokens` : ""}
+          </div>
+        </div>
+      )}
+
+      <IdentityCard summary={run.summary} />
+
       <div className="rounded-[12px] border border-border bg-bg-elevated p-4">
         <div className="flex justify-between text-xs text-text-muted mb-2">
           <span>Live progress</span>
@@ -145,13 +264,6 @@ export default function RunDetailClient({ runId }) {
         onSelectProbe={(probe) => setSelectedProbeId(probe.id)}
       />
 
-      <ProbeResultPanel
-        activeProbe={isRunning ? nextPending : null}
-        selectedProbe={selectedProbe}
-        elapsedSec={0}
-        isRunning={isRunning}
-      />
-
       {!isRunning && completeResults.length > 0 && (
         <ProbeReportSummary
           report={{ startedAt: run.createdAt, completedAt: run.finishedAt }}
@@ -159,6 +271,23 @@ export default function RunDetailClient({ runId }) {
           onSelectProbe={(probe) => setSelectedProbeId(probe.id)}
         />
       )}
+
+      {/* Right-side probe detail drawer (original-page interaction pattern). */}
+      <Drawer
+        isOpen={Boolean(selectedProbe)}
+        onClose={() => setSelectedProbeId(null)}
+        title={selectedProbe ? `${selectedProbe.label}` : "Check Inspector"}
+        width="lg"
+      >
+        {selectedProbe && (
+          <ProbeResultPanel
+            selectedProbe={selectedProbe}
+            elapsedSec={0}
+            isRunning={false}
+            asDrawerContent
+          />
+        )}
+      </Drawer>
     </div>
   );
 }

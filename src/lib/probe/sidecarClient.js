@@ -159,6 +159,9 @@ export async function runProbeOnSidecar(payload, signal) {
     id: payload.runId,
     ...target,
     ...(judge ? { judge } : {}),
+    // Official baseline responses keyed by probeId, used by llm_judge
+    // similarity scoring (engine contract: Record<probeId, string>).
+    ...(payload.baseline ? { baseline: payload.baseline } : {}),
     ...(payload.config?.timeoutMs ? { timeoutMs: payload.config.timeoutMs } : {}),
   };
   return fetch(`${getSidecarUrl()}/v1/runs`, {
@@ -175,6 +178,56 @@ export async function runProbeOnSidecar(payload, signal) {
 /**
  * Request cancellation of an active sidecar run.
  */
+
+// Official baseline responses keyed by probeId, fetched from the BazaarLink
+// public API and cached per model. Fail-open: without a baseline the engine's
+// rubric fallback grades llm_judge probes instead.
+const BASELINE_TTL_MS = 6 * 60 * 60 * 1000;
+const baselineCache = new Map(); // modelId -> { map, fetchedAt }
+const baselineInFlight = new Map();
+
+export function getBaselineApiUrl() {
+  return (process.env.PROBE_BASELINE_URL || "https://bazaarlink.ai").replace(/\/+$/, "");
+}
+
+export async function fetchBaselineMap(modelId) {
+  if (!modelId) return null;
+  const cached = baselineCache.get(modelId);
+  if (cached && Date.now() - cached.fetchedAt < BASELINE_TTL_MS) {
+    return cached.map;
+  }
+  if (baselineInFlight.has(modelId)) {
+    return baselineInFlight.get(modelId);
+  }
+  const promise = (async () => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      const res = await fetch(
+        `${getBaselineApiUrl()}/api/probe/baselines?modelId=${encodeURIComponent(modelId)}`,
+        { signal: controller.signal },
+      ).finally(() => clearTimeout(timer));
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!Array.isArray(data?.probes) || data.probes.length === 0) return null;
+      const map = {};
+      for (const probe of data.probes) {
+        if (probe?.probeId && typeof probe.responseText === "string" && probe.responseText.length > 0) {
+          map[probe.probeId] = probe.responseText;
+        }
+      }
+      const result = Object.keys(map).length > 0 ? map : null;
+      if (result) baselineCache.set(modelId, { map: result, fetchedAt: Date.now() });
+      return result;
+    } catch {
+      return null;
+    } finally {
+      baselineInFlight.delete(modelId);
+    }
+  })();
+  baselineInFlight.set(modelId, promise);
+  return promise;
+}
 export async function cancelProbeOnSidecar(runId) {
   const url = `${getSidecarUrl()}/v1/runs/${encodeURIComponent(runId)}/cancel`;
   try {

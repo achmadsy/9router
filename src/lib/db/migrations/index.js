@@ -9,8 +9,9 @@ import m005 from "./005-self-aware-daily-reset.js";
 import m006 from "./006-probe-profiles.js";
 import m009 from "./009-probe-profile-source.js";
 import m010 from "./010-probe-runs.js";
+import m011 from "./011-probe-run-summary.js";
 
-export const MIGRATIONS = [m001, m002, m003, m004, m005, m006, m009, m010].sort((a, b) => a.version - b.version);
+export const MIGRATIONS = [m001, m002, m003, m004, m005, m006, m009, m010, m011].sort((a, b) => a.version - b.version);
 
 export function latestVersion() {
   return MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : 0;

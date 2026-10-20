@@ -51,6 +51,10 @@ function normalizeCatalog(data) {
       label,
       group,
       description,
+      // Bounded drawer metadata from the engine (prompt ≤ 500 chars).
+      ...(typeof item.scoring === "string" && item.scoring.length <= 64 ? { scoring: item.scoring } : {}),
+      ...(typeof item.prompt === "string" && item.prompt ? { prompt: item.prompt.slice(0, 500) } : {}),
+      ...(typeof item.expected === "string" && item.expected ? { expected: item.expected.slice(0, 300) } : {}),
       ...(item.optional === true ? { optional: true } : {}),
       ...(item.isNew === true ? { isNew: true } : {}),
       ...(item.neutral === true ? { neutral: true } : {}),

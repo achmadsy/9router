@@ -24,15 +24,8 @@ export default function ProbeRail({
     }
 
     for (const probe of probes) {
-      const groupKey = getProbeDisplayGroup(probe);
-      const bucket = map.get(groupKey);
-      if (bucket) {
-        bucket.items.push(probe);
-      } else {
-        // Fallback bucket
-        const qualityBucket = map.get("quality");
-        if (qualityBucket) qualityBucket.items.push(probe);
-      }
+      const bucket = map.get(getProbeDisplayGroup(probe));
+      if (bucket) bucket.items.push(probe);
     }
 
     return Array.from(map.values());

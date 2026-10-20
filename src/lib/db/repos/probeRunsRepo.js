@@ -89,11 +89,25 @@ export async function appendProbeRunResults(runId, rows, totalProbes = null) {
   );
 }
 
-export async function finishProbeRun(runId, status = "complete", rows = null) {
+export async function finishProbeRun(runId, status = "complete", rows = null, summary = null) {
   const db = await getAdapter();
   const now = new Date().toISOString();
   if (Array.isArray(rows) && rows.length > 0) {
     await appendProbeRunResults(runId, rows);
+  }
+  if (summary && typeof summary === "object") {
+    // Keep only the verdict/metadata the dashboard renders; result rows live
+    // in reportJson and secrets were already redacted by the engine.
+    const { score, scoreMax, identityAssessment, totalInputTokens, totalOutputTokens, modelId, startedAt, completedAt } = summary;
+    db.run(
+      `UPDATE probeRuns SET score = ?, scoreMax = ?, summaryJson = ?, updatedAt = ? WHERE id = ?`,
+      [
+        typeof score === "number" ? Math.round(score) : null,
+        typeof scoreMax === "number" ? Math.round(scoreMax) : null,
+        JSON.stringify({ identityAssessment, totalInputTokens, totalOutputTokens, modelId, startedAt, completedAt }).slice(0, 2 * 1024 * 1024),
+        now, runId,
+      ],
+    );
   }
   db.run(
     `UPDATE probeRuns SET status = ?, finishedAt = ?, updatedAt = ? WHERE id = ?`,
@@ -107,7 +121,15 @@ export async function getProbeRun(runId) {
   if (!r) return null;
   let results = [];
   try { results = r.reportJson ? JSON.parse(r.reportJson) : []; } catch { results = []; }
-  return { ...rowToSummary(r), results };
+  let summary = null;
+  try { summary = r.summaryJson ? JSON.parse(r.summaryJson) : null; } catch { summary = null; }
+  return {
+    ...rowToSummary(r),
+    score: r.score ?? null,
+    scoreMax: r.scoreMax ?? null,
+    summary,
+    results,
+  };
 }
 
 export async function listProbeRuns(limit = 20) {
