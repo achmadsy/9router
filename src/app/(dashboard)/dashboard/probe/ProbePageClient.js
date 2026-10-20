@@ -3,9 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import SidecarHealthStrip from "./components/SidecarHealthStrip";
 import ProbeConfigCard from "./components/ProbeConfigCard";
-import ProbeRail from "./components/ProbeRail";
-import ProbeResultPanel from "./components/ProbeResultPanel";
-import ProbeReportSummary from "./components/ProbeReportSummary";
 import { DEFAULT_PROBES } from "./components/probeConstants";
 
 const FALLBACK_SUITE_VERSION = null;
@@ -235,6 +232,10 @@ export default function ProbePageClient() {
   useEffect(() => {
     let ignore = false;
     const runIdFromUrl = new URLSearchParams(window.location.search).get("runId");
+    if (runIdFromUrl) {
+      window.location.replace(`/dashboard/probe/runs/${encodeURIComponent(runIdFromUrl)}`);
+      return () => { ignore = true; };
+    }
 
     // Health
     fetch("/api/probe/health")
@@ -544,100 +545,14 @@ export default function ProbePageClient() {
       }
 
       const runId = res.headers.get("x-probe-run-id");
-      if (runId) {
-        setActiveRunId(runId);
-        window.history.replaceState(null, "", `${window.location.pathname}?runId=${encodeURIComponent(runId)}`);
-        fetchRuns();
-        pollRunUntilDone(runId);
-      }
+      if (!runId) throw new Error("Probe server did not return a run id");
 
-      // Consume bounded SSE stream
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split(/\r?\n\r?\n/);
-        buffer = parts.pop() || "";
-
-        for (const part of parts) {
-          if (!part.trim()) continue;
-
-          // Parse event name and data lines
-          const lines = part.split(/\r?\n/);
-          let eventName = "message";
-          let dataText = "";
-
-          for (const line of lines) {
-            if (line.startsWith("event:")) {
-              eventName = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              dataText += (dataText ? "\n" : "") + line.slice(5).trim();
-            }
-          }
-
-          if (!dataText) continue;
-
-          let parsed = null;
-          try {
-            parsed = JSON.parse(dataText);
-          } catch {
-            continue;
-          }
-
-          // Handle event types
-          if (eventName === "error") {
-            setRunError(parsed.error || "Probe stream error received");
-            continue;
-          }
-
-          const msgType = eventName || parsed.type || parsed.event;
-
-          if (msgType === "probe_start" || parsed.step === "probe_start") {
-            const probeId = parsed.probeId || parsed.id;
-            setActiveProbeId(probeId);
-            updateProbeRecord({
-              id: probeId,
-              label: parsed.label,
-              group: parsed.group,
-              status: "running",
-            });
-          } else if (msgType === "probe_progress" || parsed.step === "probe_progress") {
-            const probeId = parsed.probeId || parsed.id;
-            updateProbeRecord({
-              id: probeId,
-              label: parsed.label,
-              group: parsed.group,
-              ttftMs: parsed.ttftMs,
-              inputTokens: parsed.inputTokens,
-              outputTokens: parsed.outputTokens,
-            });
-          } else if (msgType === "progress" && parsed.result && typeof parsed.result === "object") {
-            // Sidecar protocol: each live event wraps the finished ProbeResult.
-            applyProbeResult(parsed.result);
-          } else if (msgType === "probe_result" || parsed.step === "probe_result") {
-            applyProbeResult(parsed);
-          } else if (
-            msgType === "report" ||
-            msgType === "done" ||
-            msgType === "complete" ||
-            parsed.score !== undefined
-          ) {
-            // Sidecar wraps the report: { runId, report: {...} }.
-            const reportPayload = parsed.report && typeof parsed.report === "object" ? parsed.report : parsed;
-            setReport(reportPayload);
-            if (Array.isArray(reportPayload.results)) {
-              for (const r of reportPayload.results) {
-                applyProbeResult(r);
-              }
-            }
-          }
-        }
-      }
+      // Server persistence owns the sidecar stream. Release this page's branch
+      // and navigate to the dedicated run detail route, which polls stored live
+      // progress and survives refresh/reconnect.
+      await res.body?.cancel().catch(() => {});
+      window.location.assign(`/dashboard/probe/runs/${encodeURIComponent(runId)}`);
+      return;
     } catch (err) {
       if (err.name !== "AbortError") {
         setRunError(err.message || "Probe execution aborted");
@@ -698,23 +613,16 @@ export default function ProbePageClient() {
           </div>
           <div className="divide-y divide-border max-h-64 overflow-y-auto">
             {runs.map((run) => {
-              const selected = viewingRun?.id === run.id;
               const total = run.totalProbes || 0;
               const percent = total > 0 ? Math.round((run.completedProbes / total) * 100) : 0;
               return (
                 <button
                   key={run.id}
                   type="button"
-                  onClick={async () => {
-                    stopRunPolling();
-                    setReport(null);
-                    setProbes(pendingProbes(suiteTemplatesRef.current));
-                    setSelectedProbeId(null);
-                    window.history.replaceState(null, "", `${window.location.pathname}?runId=${encodeURIComponent(run.id)}`);
-                    const loaded = await loadRun(run.id);
-                    if (loaded?.status === "running") pollRunUntilDone(run.id);
+                  onClick={() => {
+                    window.location.assign(`/dashboard/probe/runs/${encodeURIComponent(run.id)}`);
                   }}
-                  className={`w-full px-4 py-3 text-left hover:bg-bg-subtle transition-colors ${selected ? "bg-primary/5" : ""}`}
+                  className="w-full px-4 py-3 text-left hover:bg-bg-subtle transition-colors"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -785,31 +693,6 @@ export default function ProbePageClient() {
         onCancelRun={handleCancelRun}
       />
 
-      {/* Signature 100-Check Probe Rail */}
-      <ProbeRail
-        probes={probes}
-        suiteVersion={suiteVersion}
-        activeProbeId={activeProbeId}
-        selectedProbeId={selectedProbeId}
-        onSelectProbe={(p) => setSelectedProbeId(p.id)}
-      />
-
-      {/* Check Inspector Panel */}
-      <ProbeResultPanel
-        activeProbe={activeProbe}
-        selectedProbe={selectedProbe}
-        elapsedSec={elapsedSec}
-        isRunning={isRunning}
-      />
-
-      {/* Final Transient Report (visible when report received) */}
-      {report && (
-        <ProbeReportSummary
-          report={report}
-          results={probes.filter((p) => p.status && p.status !== "pending")}
-          onSelectProbe={(p) => setSelectedProbeId(p.id)}
-        />
-      )}
     </div>
   );
 }

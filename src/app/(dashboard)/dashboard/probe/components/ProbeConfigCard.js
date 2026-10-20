@@ -437,7 +437,7 @@ export default function ProbeConfigCard({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-border-subtle">
-          <span className="text-xs text-text-muted">Suite results are transient and cleared on refresh.</span>
+          <span className="text-xs text-text-muted">Runs are saved automatically. Open any run to monitor progress and inspect results.</span>
           {isRunning ? (
             <Button variant="danger" size="md" icon="stop_circle" onClick={onCancelRun}>Cancel Probe Run</Button>
           ) : (
