@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { verifyProbeAdminAuth, verifyCsrfOrigin } from "@/lib/probe/auth.js";
 import { getActiveRun, startActiveRun, finishActiveRun } from "@/lib/probe/activeRun.js";
 import { getProbeProfileSecrets } from "@/lib/db/repos/probeProfilesRepo.js";
+import { createProbeRun, finishProbeRun } from "@/lib/db/repos/probeRunsRepo.js";
 import { runProbeOnSidecar } from "@/lib/probe/sidecarClient.js";
 import { createBoundedSseStream, boundErrorMessage } from "@/lib/probe/sseProxy.js";
 import { redactSensitiveText } from "@/lib/sentry.js";
@@ -135,6 +136,21 @@ export async function POST(request) {
     );
   }
 
+  // Persist the run up front so a page refresh mid-run can hydrate from the DB.
+  try {
+    await createProbeRun({
+      id: runId,
+      targetModel: resolvedTarget.model,
+      targetSource: resolvedTarget.source,
+      claimedModel: resolvedTarget.claimedModel,
+      totalProbes: null,
+      ownerId: auth.ownerId,
+    });
+  } catch {
+    finishActiveRun(runId);
+    return NextResponse.json({ error: "Failed to create probe run" }, { status: 500 });
+  }
+
   let sidecarRes;
   try {
     sidecarRes = await runProbeOnSidecar(
@@ -148,6 +164,7 @@ export async function POST(request) {
     );
   } catch (err) {
     finishActiveRun(runId);
+    await finishProbeRun(runId, "error").catch(() => {});
     const boundedErr = boundErrorMessage(redactSensitiveText(err.message));
     return NextResponse.json(
       { error: `Failed to reach probe sidecar: ${boundedErr}` },
@@ -157,6 +174,7 @@ export async function POST(request) {
 
   if (!sidecarRes.ok) {
     finishActiveRun(runId);
+    await finishProbeRun(runId, "error").catch(() => {});
     const text = await sidecarRes.text().catch(() => "");
     const boundedErr = boundErrorMessage(redactSensitiveText(text) || `Sidecar returned HTTP ${sidecarRes.status}`);
     return NextResponse.json(
@@ -165,15 +183,21 @@ export async function POST(request) {
     );
   }
 
-  // Handle client disconnect
-  request.signal?.addEventListener("abort", () => {
-    try {
-      abortController.abort();
-    } catch { /* ignore */ }
+  // Detach persistence from the browser connection. A refresh may cancel the
+  // client branch, but the persistence branch keeps consuming the sidecar SSE,
+  // stores every result, and owns active-run cleanup. Explicit Cancel still
+  // reaches the sidecar via /api/probe/cancel.
+  const [clientBranch, persistenceBranch] = sidecarRes.body.tee();
+  const boundedStream = clientBranch.pipeThrough(
+    createBoundedSseStream(runId, { manageLifecycle: false }),
+  );
+  const persistenceStream = persistenceBranch.pipeThrough(
+    createBoundedSseStream(runId, { persist: true, manageLifecycle: true }),
+  );
+  void persistenceStream.pipeTo(new WritableStream()).catch(async () => {
     finishActiveRun(runId);
+    await finishProbeRun(runId, "interrupted").catch(() => {});
   });
-
-  const boundedStream = sidecarRes.body.pipeThrough(createBoundedSseStream(runId));
 
   return new Response(boundedStream, {
     status: 200,

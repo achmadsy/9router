@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   getProbeProfileSecrets: vi.fn(),
   runProbeOnSidecar: vi.fn(),
   cancelProbeOnSidecar: vi.fn(async () => ({ ok: true })),
+  createProbeRun: vi.fn(async () => ({})),
+  appendProbeRunResults: vi.fn(async () => {}),
+  finishProbeRun: vi.fn(async () => {}),
 }));
 
 vi.mock("@/lib/probe/auth.js", () => ({
@@ -20,6 +23,12 @@ vi.mock("@/lib/probe/auth.js", () => ({
 
 vi.mock("@/lib/db/repos/probeProfilesRepo.js", () => ({
   getProbeProfileSecrets: mocks.getProbeProfileSecrets,
+}));
+
+vi.mock("@/lib/db/repos/probeRunsRepo.js", () => ({
+  createProbeRun: mocks.createProbeRun,
+  appendProbeRunResults: mocks.appendProbeRunResults,
+  finishProbeRun: mocks.finishProbeRun,
 }));
 
 vi.mock("@/lib/probe/sidecarClient.js", () => ({
@@ -420,6 +429,34 @@ describe("Probe Bounded SSE Proxy & Errors", () => {
     }
 
     expect(output).toContain("Single SSE event size exceeded 64KB limit");
+  });
+
+  it("persists sidecar progress and completion events in stream order", async () => {
+    const runId = "prun_persist_test";
+    const progress = `event: progress\ndata: ${JSON.stringify({
+      runId,
+      index: 1,
+      total: 86,
+      result: { probeId: "p1", status: "done", passed: true },
+    })}\n\n`;
+    const complete = `event: complete\ndata: ${JSON.stringify({ runId, report: { results: [] } })}\n\n`;
+    const readable = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(progress + complete));
+        controller.close();
+      },
+    });
+
+    await readable
+      .pipeThrough(createBoundedSseStream(runId, { persist: true }))
+      .pipeTo(new WritableStream());
+
+    expect(mocks.appendProbeRunResults).toHaveBeenCalledWith(
+      runId,
+      [{ probeId: "p1", status: "done", passed: true }],
+      86,
+    );
+    expect(mocks.finishProbeRun).toHaveBeenCalledWith(runId, "complete", []);
   });
 });
 

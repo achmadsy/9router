@@ -247,7 +247,7 @@ export const TABLES = {
   },
   // Probe target and judge profiles.
   // 24-hour TTL, encrypted credentials at rest (AES-256-GCM), metadata only exposed.
-  // No report or run history persistence.
+  // No credentials persisted — only run state and redacted report rows.
   probeProfiles: {
     columns: {
       id: "TEXT PRIMARY KEY",
@@ -265,6 +265,34 @@ export const TABLES = {
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_probe_profiles_expiresAt ON probeProfiles(expiresAt)",
       "CREATE INDEX IF NOT EXISTS idx_probe_profiles_type ON probeProfiles(type)",
+    ],
+  },
+
+  // Probe run history. Results are the already-redacted engine report rows, so
+  // no secret ever reaches this table. Written incrementally as SSE events land
+  // so a page refresh mid-run can hydrate from the server.
+  probeRuns: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      status: "TEXT NOT NULL",
+      targetModel: "TEXT",
+      targetSource: "TEXT",
+      claimedModel: "TEXT",
+      totalProbes: "INTEGER",
+      completedProbes: "INTEGER",
+      passedCount: "INTEGER",
+      failedCount: "INTEGER",
+      errorCount: "INTEGER",
+      neutralCount: "INTEGER",
+      reportJson: "TEXT",
+      ownerId: "TEXT",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+      finishedAt: "TEXT",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_probe_runs_createdAt ON probeRuns(createdAt)",
+      "CREATE INDEX IF NOT EXISTS idx_probe_runs_status ON probeRuns(status)",
     ],
   },
 };

@@ -105,14 +105,14 @@ export default function ProbeReportSummary({
 
   return (
     <div className={cn("space-y-6", className)}>
-      {/* Transient Disclaimer Banner */}
+      {/* Persistent report banner */}
       <div className="flex items-center justify-between gap-3 p-3.5 rounded-[12px] bg-brand-500/10 border border-brand-500/20 text-xs text-brand-700 dark:text-brand-300">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="material-symbols-outlined text-[20px] text-brand-500 shrink-0">
-            history_toggle_off
+            history
           </span>
           <span className="truncate">
-            <strong>Transient Report:</strong> Maintained in browser memory only. Refreshing clears this report. Download JSON to preserve.
+            <strong>Saved report:</strong> Results remain available after refresh from Probe runs.
           </span>
         </div>
         <Button
