@@ -1,9 +1,16 @@
 import { finishActiveRun } from "./activeRun.js";
 import { appendProbeRunResults, finishProbeRun } from "@/lib/db/repos/probeRunsRepo.js";
 
-export const MAX_EVENT_BYTES = 64 * 1024; // 64 KB per SSE event
+export const MAX_EVENT_BYTES = 64 * 1024; // 64 KB for progress/error events
+export const MAX_COMPLETE_EVENT_BYTES = 2 * 1024 * 1024; // bounded full report + identity verdict
 export const MAX_ERROR_CHARS = 500; // 500 characters max error message
 export const MAX_STREAM_BYTES = 10 * 1024 * 1024; // 10 MB total
+
+function eventSizeLimit(eventText) {
+  return /^event:\s*complete\s*$/m.test(eventText)
+    ? MAX_COMPLETE_EVENT_BYTES
+    : MAX_EVENT_BYTES;
+}
 
 export function boundErrorMessage(msg) {
   if (!msg) return "Unknown error";
@@ -85,27 +92,38 @@ export function createBoundedSseStream(
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() || ""; // last piece might be incomplete
 
-      // Guard against an event growing unbounded across chunks
-      if (buffer.length > MAX_EVENT_BYTES) {
+      // Guard against an event growing unbounded across chunks. Complete events
+      // carry the full sanitized report and have a larger, still-bounded cap.
+      if (buffer.length > eventSizeLimit(buffer)) {
         terminated = true;
         const errEvent = `event: error\ndata: ${JSON.stringify({
-          error: "Single SSE event size exceeded 64KB limit",
+          error: "SSE event size limit exceeded",
         })}\n\n`;
         controller.enqueue(encoder.encode(errEvent));
         controller.terminate();
+        if (persist) {
+          persistQueue = persistQueue
+            .then(() => finishProbeRun(runId, "error"))
+            .catch(() => {});
+        }
         if (manageLifecycle) finishActiveRun(runId);
         return;
       }
 
       for (const part of parts) {
         if (!part.trim()) continue;
-        if (part.length > MAX_EVENT_BYTES) {
+        if (part.length > eventSizeLimit(part)) {
           terminated = true;
           const errEvent = `event: error\ndata: ${JSON.stringify({
-            error: "Single SSE event size exceeded 64KB limit",
+            error: "SSE event size limit exceeded",
           })}\n\n`;
           controller.enqueue(encoder.encode(errEvent));
           controller.terminate();
+          if (persist) {
+            persistQueue = persistQueue
+              .then(() => finishProbeRun(runId, "error"))
+              .catch(() => {});
+          }
           if (manageLifecycle) finishActiveRun(runId);
           return;
         }
@@ -129,8 +147,25 @@ export function createBoundedSseStream(
     },
     async flush(controller) {
       if (!terminated && buffer.trim()) {
-        if (buffer.length <= MAX_EVENT_BYTES) {
+        if (buffer.length <= eventSizeLimit(buffer)) {
+          if (persist) {
+            let eventName = "message";
+            const dataLines = [];
+            for (const line of buffer.split(/\r?\n/)) {
+              if (line.startsWith("event:")) eventName = line.slice(6).trim();
+              else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+            }
+            if (dataLines.length > 0) {
+              persistQueue = persistQueue
+                .then(() => persistSseEvent(runId, eventName, dataLines.join("\n")))
+                .catch(() => {});
+            }
+          }
           controller.enqueue(encoder.encode(`${buffer}\n\n`));
+        } else if (persist) {
+          persistQueue = persistQueue
+            .then(() => finishProbeRun(runId, "error"))
+            .catch(() => {});
         }
       }
       await persistQueue;

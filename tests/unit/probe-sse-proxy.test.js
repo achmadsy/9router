@@ -429,7 +429,43 @@ describe("Probe Bounded SSE Proxy & Errors", () => {
       output += decoder.decode(value);
     }
 
-    expect(output).toContain("Single SSE event size exceeded 64KB limit");
+    expect(output).toContain("SSE event size limit exceeded");
+  });
+
+  it("accepts and persists a complete report larger than 64KB", async () => {
+    const runId = "prun_large_complete";
+    const report = {
+      score: 75,
+      scoreMax: 100,
+      identityAssessment: { predictedFamily: "openai", evidence: ["X".repeat(70 * 1024)] },
+      results: [{ probeId: "p1", status: "done", passed: true }],
+    };
+    const complete = `event: complete\ndata: ${JSON.stringify({ runId, report })}\n\n`;
+    const chunks = [complete.slice(0, 40_000), complete.slice(40_000)];
+    const readable = new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      },
+    });
+    let output = "";
+    const decoder = new TextDecoder();
+    const writable = new WritableStream({
+      write(chunk) { output += decoder.decode(chunk); },
+    });
+
+    await readable
+      .pipeThrough(createBoundedSseStream(runId, { persist: true }))
+      .pipeTo(writable);
+
+    expect(output).toContain("event: complete");
+    expect(output).not.toContain("size limit exceeded");
+    expect(mocks.finishProbeRun).toHaveBeenCalledWith(
+      runId,
+      "complete",
+      report.results,
+      report,
+    );
   });
 
   it("persists sidecar progress and completion events in stream order", async () => {
