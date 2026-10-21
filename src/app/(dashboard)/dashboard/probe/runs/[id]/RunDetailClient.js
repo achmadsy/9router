@@ -49,6 +49,12 @@ function IdentityCard({ summary }) {
   const verdict = identity.verdict || {};
   const key = verdict.status || identity.status;
   const text = VERDICT_TEXT[key] || { headline: key, tone: "neutral" };
+  const confidencePct = typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
+  const candidates = Array.isArray(identity.predictedCandidates) ? identity.predictedCandidates.slice(0, 5) : [];
+  const engineVerdict = identity.verdict;
+  const effectiveHeadline = engineVerdict?.status === "clean_match_family_only" && text.tone === "bad"
+    ? { headline: "Same family — exact model unconfirmed", tone: "partial" }
+    : text;
   const toneClass = {
     good: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
     partial: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
@@ -56,13 +62,6 @@ function IdentityCard({ summary }) {
     bad: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
     neutral: "border-border bg-surface-2 text-text-muted",
   }[effectiveHeadline.tone] || "border-border bg-surface-2 text-text-muted";
-
-  const confidencePct = typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
-  const candidates = Array.isArray(identity.predictedCandidates) ? identity.predictedCandidates.slice(0, 5) : [];
-  const engineVerdict = identity.verdict;
-  const effectiveHeadline = engineVerdict?.status === "clean_match_family_only" && text.tone === "bad"
-    ? { headline: "Same family — exact model unconfirmed", tone: "partial" }
-    : text;
 
   return (
     <section className="rounded-[14px] bg-surface border border-border-subtle p-5 space-y-4">
