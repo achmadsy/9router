@@ -55,10 +55,14 @@ function IdentityCard({ summary }) {
     warn: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
     bad: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
     neutral: "border-border bg-surface-2 text-text-muted",
-  }[text.tone] || "border-border bg-surface-2 text-text-muted";
+  }[effectiveHeadline.tone] || "border-border bg-surface-2 text-text-muted";
 
   const confidencePct = typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
   const candidates = Array.isArray(identity.predictedCandidates) ? identity.predictedCandidates.slice(0, 5) : [];
+  const engineVerdict = identity.verdict;
+  const effectiveHeadline = engineVerdict?.status === "clean_match_family_only" && text.tone === "bad"
+    ? { headline: "Same family — exact model unconfirmed", tone: "partial" }
+    : text;
 
   return (
     <section className="rounded-[14px] bg-surface border border-border-subtle p-5 space-y-4">
@@ -78,8 +82,14 @@ function IdentityCard({ summary }) {
       </div>
 
       <div className={`rounded-[10px] border p-3 text-sm font-semibold ${toneClass}`}>
-        {text.headline}
+        {effectiveHeadline.headline}
       </div>
+
+      {Array.isArray(engineVerdict?.reasoning) && engineVerdict.reasoning.length > 0 && (
+        <ul className="text-xs text-text-muted space-y-1 list-disc pl-4">
+          {engineVerdict.reasoning.slice(0, 4).map((line, index) => <li key={index}>{line}</li>)}
+        </ul>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
         <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
@@ -101,8 +111,10 @@ function IdentityCard({ summary }) {
           <span className="font-semibold text-text-subtle text-[10px] uppercase font-mono block">Closest sub-models</span>
           <div className="space-y-1">
             {candidates.map((candidate) => (
-              <div key={candidate.modelId} className="flex items-center justify-between text-xs bg-surface-2 rounded-[8px] px-2.5 py-1.5">
-                <span className="font-medium text-text-main truncate">{candidate.displayName || candidate.modelId}</span>
+              <div key={candidate.modelId || candidate.family} className="flex items-center justify-between text-xs bg-surface-2 rounded-[8px] px-2.5 py-1.5">
+                <span className="font-medium text-text-main truncate">
+                  {candidate.displayName || candidate.model || candidate.modelId || candidate.family || "Unknown model"}
+                </span>
                 <span className="font-mono text-text-muted shrink-0">{Math.round((candidate.score || 0) * 100)}%</span>
               </div>
             ))}
