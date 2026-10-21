@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ORIGINAL_SUITE_CATEGORY_BY_ID,
+  ORIGINAL_SUITE_IDS,
+} from "../../src/lib/probe/originalSuite.js";
 
 const mocks = vi.hoisted(() => ({
   verifyProbeAdminAuth: vi.fn(),
@@ -18,15 +22,20 @@ function request() {
   return new Request("https://router.test/api/probe/suite");
 }
 
-function catalog(probes = [{
-  id: "quality_probe",
-  label: "Quality Probe",
-  group: "quality",
-  description: "Checks response quality.",
-  isNew: true,
-  prompt: "must not escape",
-  scoring: { mode: "secret" },
-}]) {
+function publicProbe(id) {
+  return {
+    id,
+    label: `Label ${id}`,
+    group: ORIGINAL_SUITE_CATEGORY_BY_ID.get(id),
+    description: `Description ${id}`,
+  };
+}
+
+function publicCatalog(extras = []) {
+  return [...ORIGINAL_SUITE_IDS.map(publicProbe), ...extras];
+}
+
+function catalog(probes = publicCatalog()) {
   return {
     ok: true,
     status: 200,
@@ -48,91 +57,47 @@ describe("Probe suite route", () => {
     expect(mocks.getProbeCatalogFromSidecar).not.toHaveBeenCalled();
   });
 
-  it("returns an ordered display-only catalog with no-store caching", async () => {
-    mocks.getProbeCatalogFromSidecar.mockResolvedValue(catalog([
-      {
-        id: "first",
-        label: "First",
-        group: "quality",
-        description: "First probe.",
-        optional: true,
-        prompt: "hidden prompt",
-        expected: "expected value",
-      },
-      {
-        id: "second",
-        label: "Second",
-        group: "identity",
-        description: "Second probe.",
-        neutral: true,
-        // Object scoring is a legacy shape; only bounded string metadata passes.
-        scoring: { mode: "hidden" },
-      },
-    ]));
+  it("projects the exact ordered 86-probe public catalog and excludes extras", async () => {
+    const input = publicCatalog([
+      { id: "quality_extra", label: "Extra", group: "quality", description: "Excluded." },
+    ]).reverse();
+    const drawerProbe = input.find((probe) => probe.id === ORIGINAL_SUITE_IDS[0]);
+    Object.assign(drawerProbe, {
+      optional: true,
+      prompt: "P".repeat(600),
+      expected: "E".repeat(400),
+      scoring: "feature_extract",
+    });
+    mocks.getProbeCatalogFromSidecar.mockResolvedValue(catalog(input));
 
     const response = await GET(request());
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual({
-      version: "0.11.0",
-      probes: [
-        {
-          id: "first",
-          label: "First",
-          group: "quality",
-          description: "First probe.",
-          optional: true,
-          prompt: "hidden prompt",
-          expected: "expected value",
-        },
-        {
-          id: "second",
-          label: "Second",
-          group: "identity",
-          description: "Second probe.",
-          neutral: true,
-        },
-      ],
-    });
+    const data = await response.json();
+    expect(data.version).toBe("0.11.0");
+    expect(data.probes.map((probe) => probe.id)).toEqual(ORIGINAL_SUITE_IDS);
+    expect(data.probes).toHaveLength(86);
+    expect(data.probes.some((probe) => probe.id === "quality_extra")).toBe(false);
+    expect(data.probes[0].prompt).toBe("P".repeat(500));
+    expect(data.probes[0].expected).toBe("E".repeat(300));
+    expect(data.probes[0].scoring).toBe("feature_extract");
+    expect(data.probes[0].optional).toBe(true);
     expect(mocks.getProbeCatalogFromSidecar).toHaveBeenCalledWith(expect.any(AbortSignal));
   });
 
-  it("bounds drawer metadata fields", async () => {
-    mocks.getProbeCatalogFromSidecar.mockResolvedValue(catalog([
-      {
-        id: "bounded",
-        label: "Bounded",
-        group: "integrity",
-        description: "Bounded metadata.",
-        prompt: "P".repeat(600),
-        expected: "E".repeat(400),
-        scoring: "S".repeat(100),
-      },
-    ]));
-
+  it("rejects a catalog missing any required public probe", async () => {
+    mocks.getProbeCatalogFromSidecar.mockResolvedValue(catalog(publicCatalog().slice(1)));
     const response = await GET(request());
-    expect(response.status).toBe(200);
-    const { probes } = await response.json();
-    expect(probes[0].prompt).toBe("P".repeat(500));
-    expect(probes[0].expected).toBe("E".repeat(300));
-    expect(probes[0].scoring).toBeUndefined();
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "Probe catalog invalid" });
   });
 
   it.each([
     ["an empty catalog", []],
-    ["duplicate IDs", [
-      { id: "same", label: "One", group: "quality", description: "One." },
-      { id: "same", label: "Two", group: "identity", description: "Two." },
-    ]],
-    ["an empty ID", [
-      { id: " ", label: "One", group: "quality", description: "One." },
-    ]],
-    ["a malformed record", [
-      { id: "one", label: "One", group: "quality" },
-    ]],
-    ["an oversized field", [
-      { id: "one", label: "x".repeat(257), group: "quality", description: "One." },
-    ]],
+    ["duplicate IDs", [...publicCatalog(), publicProbe(ORIGINAL_SUITE_IDS[0])]],
+    ["an empty ID", [...publicCatalog(), { id: " ", label: "One", group: "quality", description: "One." }]],
+    ["a malformed record", [...publicCatalog(), { id: "one", label: "One", group: "quality" }]],
+    ["an oversized field", [...publicCatalog(), { id: "one", label: "x".repeat(257), group: "quality", description: "One." }]],
   ])("rejects %s", async (_name, probes) => {
     mocks.getProbeCatalogFromSidecar.mockResolvedValue(catalog(probes));
     const response = await GET(request());

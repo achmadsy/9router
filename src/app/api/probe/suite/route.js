@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyProbeAdminAuth } from "@/lib/probe/auth.js";
 import { getProbeCatalogFromSidecar } from "@/lib/probe/sidecarClient.js";
+import { ORIGINAL_SUITE_IDS } from "@/lib/probe/originalSuite.js";
 
 const MAX_PROBES = 256;
 const MAX_ID_LENGTH = 128;
@@ -61,7 +62,12 @@ function normalizeCatalog(data) {
     });
   }
 
-  return { version, probes };
+  // Fail closed when a required public-suite probe is absent. Returning fewer
+  // while the UI claims the original 86-probe contract would be misleading.
+  const byId = new Map(probes.map((probe) => [probe.id, probe]));
+  if (ORIGINAL_SUITE_IDS.some((id) => !byId.has(id))) return null;
+
+  return { version, probes: ORIGINAL_SUITE_IDS.map((id) => byId.get(id)) };
 }
 
 function json(data, init = {}) {

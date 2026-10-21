@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Features
+- **Probe parity**: run and display the exact ordered 86-check BazaarLink suite (Identity 29, Sub-model ID 29, Security 16, Integrity 12), with server-authoritative membership and English catalog metadata.
 - **Probe Model Discovery**: add shared target/judge source controls, secure sidecar-backed custom endpoint catalogs, local key-filtered 9Router catalogs, explicit fetch/custom model controls, and primary sidebar navigation.
 - **Container CI**: publish native amd64/arm64 `ghcr.io/achmadsy/9router:latest` images from `master` without automatic deployment.
 - **Probe API & Sidecar**: add always-protected admin-JWT probe APIs (`/api/probe/health`, `/api/probe/profiles`, `/api/probe/run`, `/api/probe/cancel`) with one active run enforcement, cancel ownership, CSRF/origin checks, and bounded SSE proxy stream.

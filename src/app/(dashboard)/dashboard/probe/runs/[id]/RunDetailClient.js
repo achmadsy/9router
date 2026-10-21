@@ -6,7 +6,7 @@ import Drawer from "@/shared/components/Drawer";
 import ProbeRail from "../../components/ProbeRail";
 import ProbeResultPanel from "../../components/ProbeResultPanel";
 import ProbeReportSummary from "../../components/ProbeReportSummary";
-import { DEFAULT_PROBES } from "../../components/probeConstants";
+import { DEFAULT_PROBES, ORIGINAL_SUITE_IDS } from "../../components/probeConstants";
 
 function statusOf(result) {
   if (result.status === "error") return "error";
@@ -17,19 +17,18 @@ function statusOf(result) {
 }
 
 function mergeRunResults(templates, results) {
-  const byId = new Map((results || []).map((row) => [row.probeId || row.id, row]));
-  const merged = templates.map((probe) => {
-    const result = byId.get(probe.id);
+  const templateById = new Map(templates.map((probe) => [probe.id, probe]));
+  const resultById = new Map((results || []).map((row) => [row.probeId || row.id, row]));
+
+  // Exact public-suite projection keeps historical 97/100-probe rows from
+  // reappearing after the engine contract changed. Catalog templates provide
+  // canonical English labels; fallback templates cover catalog outages.
+  return ORIGINAL_SUITE_IDS.map((id) => {
+    const probe = templateById.get(id) || DEFAULT_PROBES.find((item) => item.id === id);
+    const result = resultById.get(id);
     if (!result) return { ...probe, status: "pending" };
-    byId.delete(probe.id);
-    // The catalog template is the English-canonical label/description; older
-    // persisted rows may carry pre-translation Chinese labels.
     return { ...result, ...probe, status: statusOf(result) };
   });
-  for (const result of byId.values()) {
-    merged.push({ ...result, id: result.probeId || result.id, status: statusOf(result) });
-  }
-  return merged;
 }
 
 /** Human wording for the engine verdict statuses. */

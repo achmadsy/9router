@@ -10,6 +10,7 @@ import { redactSensitiveText } from "@/lib/sentry.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
 import { getCurrentGatewayBaseUrl, normalizeProbeSource, PROBE_SOURCE_SELF } from "@/lib/probe/endpoints.js";
 import { normalizeProbeCustomHeaders } from "@/lib/probe/customHeaders.js";
+import { ORIGINAL_SUITE_IDS } from "@/lib/probe/originalSuite.js";
 
 export async function GET(request) {
   const auth = await verifyProbeAdminAuth(request);
@@ -143,7 +144,7 @@ export async function POST(request) {
       targetModel: resolvedTarget.model,
       targetSource: resolvedTarget.source,
       claimedModel: resolvedTarget.claimedModel,
-      totalProbes: null,
+      totalProbes: ORIGINAL_SUITE_IDS.length,
       ownerId: auth.ownerId,
     });
   } catch {
