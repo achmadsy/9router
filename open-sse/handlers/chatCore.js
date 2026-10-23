@@ -24,6 +24,7 @@ import { dedupeTools } from "../utils/toolDeduper.js";
 import { takeRenamedToolNames } from "../utils/opencodeFingerprint.js";
 import { injectCaveman, formatCavemanTag } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
+import { injectCustomPrompt } from "../rtk/customPrompt.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
 import { compressWithPxpipe } from "../rtk/pxpipe.js";
@@ -62,7 +63,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onEmptyUsage, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomToken, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onEmptyUsage, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, apiKeyId, apiKeyNameSnapshot, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomToken, headroomCompressUserMessages, headroomTimeoutMs, headroomMode, headroomProtectRecent, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, customPromptEnabled, customPrompt, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
   const { provider, model } = modelInfo;
   // Clones (codex-clone-…) keep credentials under the clone id but use the
   // base provider for transport, models, capabilities, and special-cases.
@@ -131,7 +132,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     credentials.runtimeTransport = glmStartPlan ? null : useTransport;
   }
   const stripList = getModelStrip(alias, model);
-  const upstreamModel = getModelUpstreamId(alias, model);
 
   // Inject provider-level thinking config override (only if client hasn't set)
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
@@ -147,8 +147,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
   }
 
-  const clientRequestedStreaming = body.stream === true;
+  const upstreamModel = getModelUpstreamId(alias, model, body);
+
+  const clientRequestedStreaming = body.stream === true
+    || sourceFormat === FORMATS.ANTIGRAVITY
+    || sourceFormat === FORMATS.GEMINI
+    || sourceFormat === FORMATS.GEMINI_CLI;
   const providerRequiresStreaming = PROVIDERS[runtimeProvider]?.forceStream === true;
+  // Preserve the client's explicit JSON contract. Providers that require SSE are
+  // aggregated back to JSON later when the client did not request streaming.
   let stream = providerRequiresStreaming || clientRequestedStreaming;
 
   // Image generation models require non-streaming (Google v1internal:generateContent)
@@ -194,10 +201,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Per-request opt-out: client can bypass all token savers via header
   const tokenSaverEnabled = clientRawRequest?.headers?.[TOKEN_SAVER_HEADER]?.toLowerCase() !== "off";
 
-  // RTK: compress tool_result content in-place before format translation
-  const rtkStats = compressMessages(body, tokenSaverEnabled && rtkEnabled);
-  const rtkLine = formatRtkLog(rtkStats);
-  if (rtkLine) console.log(rtkLine);
+  // Cursor's translator rewrites tool_result into user text, so RTK must run on
+  // the source body before translation. Other formats stay post-translate.
+  const preTranslateRtk = runtimeProvider === "cursor"
+    ? compressMessages(body, tokenSaverEnabled && rtkEnabled)
+    : null;
+  const preTranslateRtkLine = formatRtkLog(preTranslateRtk);
+  if (preTranslateRtkLine) console.log(preTranslateRtkLine);
 
   // Auto-strip media blocks the model can't read (vision/audio/pdf) before translation.
   if (!passthrough) {
@@ -297,6 +307,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     translatedBody.tools = defaultClaudeToolType(translatedBody.tools);
   }
 
+  // RTK: compress tool_result content after translation unless Cursor already
+  // required the source-shape pass above.
+  const rtkStats = preTranslateRtk || compressMessages(translatedBody, tokenSaverEnabled && rtkEnabled);
+
   // Headroom: optional external proxy compression; fail open if proxy is absent.
   const headroomDiagnostics = {};
   const headroomStats = await compressWithHeadroom(translatedBody, {
@@ -328,6 +342,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Token-saver flags accumulator for the single "⚙" log line below.
   const xf = [];
+  if (rtkStats?.hits?.length) xf.push(`RTK:${rtkStats.hits.length}`);
 
   // Caveman: inject terse-style system prompt
   if (tokenSaverEnabled && cavemanEnabled && cavemanLevel) {
@@ -339,6 +354,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   if (tokenSaverEnabled && ponytailEnabled && ponytailLevel) {
     injectPonytail(translatedBody, finalFormat, ponytailLevel);
     xf.push(`PONYTAIL:${ponytailLevel}`);
+  }
+
+  // Custom prompt: user-authored instruction, independent of the savers above
+  if (customPromptEnabled && injectCustomPrompt(translatedBody, finalFormat, customPrompt)) {
+    xf.push(`CUSTOMPROMPT:${customPrompt.trim().length}c`);
   }
 
   // PXPIPE: image bulky context (Claude-format bodies only), last saver before dispatch

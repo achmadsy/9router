@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
-ARG NODE_IMAGE=node:22-bookworm
+ARG NODE_IMAGE=node:22.23.4-bookworm
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG APP_VERSION=unknown
+
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
 
@@ -11,6 +14,7 @@ RUN sed -i \
     /etc/apt/sources.list.d/debian.sources
 
 FROM base AS builder
+ARG NPM_REGISTRY
 
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -19,13 +23,21 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-RUN npm install --registry=https://registry.npmmirror.com
+RUN --mount=type=cache,target=/root/.npm \
+    npm install \
+      --registry="${NPM_REGISTRY}" \
+      --fetch-retries=5 \
+      --fetch-retry-factor=2 \
+      --fetch-retry-mintimeout=10000 \
+      --fetch-retry-maxtimeout=120000 \
+      --fetch-timeout=300000
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runner
+ARG APP_VERSION
 WORKDIR /app
 
 # Use Aliyun Debian mirrors again on the runner stage
@@ -34,7 +46,8 @@ RUN sed -i \
     -e 's|security.debian.org|mirrors.aliyun.com|g' \
     /etc/apt/sources.list.d/debian.sources
 
-LABEL org.opencontainers.image.title="9router"
+LABEL org.opencontainers.image.title="9router" \
+      org.opencontainers.image.version="${APP_VERSION}"
 
 ENV NODE_ENV=production
 ENV PORT=20128
@@ -77,8 +90,10 @@ RUN mkdir -p /app/data /app/data-home && \
 
 # gosu: drop to node user after fixing volume perms (handles mounted volumes)
 # Chromium runtime deps for cloakbrowser (captcha). Covers headless + headed fallback.
+# ffmpeg is also used by the Codex OAuth transcription lane.
 RUN apt-get update && apt-get install -y \
     gosu \
+    ffmpeg \
     ca-certificates \
     dbus \
     fonts-liberation \

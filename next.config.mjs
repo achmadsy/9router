@@ -33,6 +33,8 @@ const nextConfig = {
     "playwright-core",
     "socks-proxy-agent",
     "@aws-sdk/credential-providers",
+    // wreq-js loads its Rust binding by relative path from its package directory.
+    "wreq-js",
   ],
   turbopack: {
     root: tracingRoot
