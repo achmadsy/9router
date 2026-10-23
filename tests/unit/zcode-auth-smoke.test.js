@@ -76,8 +76,8 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
       Authorization: `Bearer ${pollToken}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://zcode.z.ai",
-      "User-Agent": "ZCode/3.11.2",
-      "X-ZCode-App-Version": "3.11.2",
+      "User-Agent": "ZCode/3.16.3",
+      "X-ZCode-App-Version": "3.16.3",
       "X-Title": "Z Code@electron",
       "X-Release-Channel": "production",
     });
@@ -90,13 +90,13 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "GET" });
     expect(fetchMock.mock.calls[1][1].headers).toMatchObject({
       Authorization: `Bearer ${pollToken}`,
-      "User-Agent": "ZCode/3.11.2",
+      "User-Agent": "ZCode/3.16.3",
       "X-Title": "Z Code@electron",
     });
     const authorizeUrl = new URL(init.authorizeUrl);
     expect(authorizeUrl.searchParams.get("state")).toBe("oauth-state");
     expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
-      "https://zcode.z.ai/app/oauth/login?redirect=zcode%3A%2F%2Foauth%2Fcallback&app_version=3.11.2"
+      "https://zcode.z.ai/app/oauth/login?redirect=zcode%3A%2F%2Foauth%2Fcallback&app_version=3.16.3"
     );
     expect(ready).toMatchObject({
       status: "ready",
@@ -106,6 +106,47 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     });
     expect(ready.zai.refresh_token).toBeUndefined();
     expect(flow.nextPollDelayMs).toBe(1000);
+  });
+
+  it("uses the configured endpoint origin in native request headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        code: 0,
+        data: {
+          flow_id: "flow-custom",
+          authorize_url: "https://login.example.test?state=oauth-state",
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+          poll_interval_sec: 1,
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new ZaiAuthFlow("https://custom-zcode.example/api/v1").start();
+
+    expect(fetchMock.mock.calls[0][1].headers["HTTP-Referer"]).toBe(
+      "https://custom-zcode.example"
+    );
+  });
+
+  it("rejects invalid native polling timing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        code: 0,
+        data: {
+          flow_id: "flow-1",
+          authorize_url: "https://zcode.z.ai/login?state=oauth-state",
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+          poll_interval_sec: 0.5,
+        },
+      }),
+    }));
+
+    await expect(new ZaiAuthFlow().start()).rejects.toThrow("invalid response data");
   });
 
   it("rejects an incomplete native init envelope", async () => {

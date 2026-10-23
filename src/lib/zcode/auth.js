@@ -135,10 +135,13 @@ export class ZaiAuthFlow {
   async start() {
     const res = await fetch(`${this.apiBaseUrl}/oauth/cli/init`, {
       method: "POST",
-      headers: buildZcodeGuiRequestHeaders({
-        Authorization: `Bearer ${this.pollToken}`,
-        "Content-Type": "application/json",
-      }),
+      headers: buildZcodeGuiRequestHeaders(
+        {
+          Authorization: `Bearer ${this.pollToken}`,
+          "Content-Type": "application/json",
+        },
+        this.apiBaseUrl
+      ),
       body: JSON.stringify({ provider: this.provider }),
     });
 
@@ -216,9 +219,10 @@ export class ZaiAuthFlow {
         `${this.apiBaseUrl}/oauth/cli/poll/${encodeURIComponent(this.flowId)}`,
         {
           method: "GET",
-          headers: buildZcodeGuiRequestHeaders({
-            Authorization: `Bearer ${this.pollToken}`,
-          }),
+          headers: buildZcodeGuiRequestHeaders(
+            { Authorization: `Bearer ${this.pollToken}` },
+            this.apiBaseUrl
+          ),
         }
       );
     } catch {

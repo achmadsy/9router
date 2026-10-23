@@ -8,6 +8,10 @@ import {
   buildZcodeCodingPlanHeaders,
   applyZcodeCodingPlanHeaders,
 } from "../../src/lib/zcode/headers.js";
+import {
+  buildZcodeClientConfigUrl,
+  resolveZcodeClientConfigPlatform,
+} from "../../src/lib/zcode/config.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
 
 describe("GLM Coding captcha integration (lazy)", () => {
@@ -161,6 +165,60 @@ describe("GLM Coding captcha integration (lazy)", () => {
 
     // initial + MAX_CAPTCHA_RETRIES retries
     expect(callCount).toBe(4);
+  });
+
+  it("matches the 3.16.3 client config URL and platform key", () => {
+    expect(resolveZcodeClientConfigPlatform("linux", "x64")).toBe("linux-x86_64");
+    expect(resolveZcodeClientConfigPlatform("darwin", "arm64")).toBe("darwin-aarch64");
+    expect(resolveZcodeClientConfigPlatform("win32", "x64")).toBe("windows-x86_64");
+
+    const url = new URL(buildZcodeClientConfigUrl());
+    expect(url.origin).toBe("https://zcode.z.ai");
+    expect(url.pathname).toBe("/api/v1/client/configs");
+    expect(url.searchParams.get("app_version")).toBe("3.16.3");
+    expect(url.searchParams.get("platform")).toBe(
+      resolveZcodeClientConfigPlatform()
+    );
+  });
+
+  it("fetches captcha config from the configured 3.16.3 client URL", async () => {
+    const manager = getCaptchaManager();
+    manager.captchaConfigCache = null;
+    manager.captchaConfigCacheTime = 0;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          configs: {
+            captcha: {
+              enabled: true,
+              prefix: "remote-prefix",
+              region: "sgp",
+              sceneId: "remote-scene",
+            },
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await manager.fetchCaptchaConfig();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      buildZcodeClientConfigUrl(),
+      expect.objectContaining({
+        method: "GET",
+        credentials: "omit",
+        redirect: "error",
+        headers: expect.objectContaining({
+          "HTTP-Referer": "https://zcode.z.ai",
+          "User-Agent": "ZCode/3.16.3",
+          "X-ZCode-App-Version": "3.16.3",
+        }),
+      })
+    );
+    expect(fetchMock.mock.calls[0][1].headers["x-request-id"]).toBeTruthy();
+    expect(result.sceneId).toBe("remote-scene");
   });
 
   it("handles captcha config route correctly", async () => {

@@ -1,5 +1,6 @@
 import { launch as launchBrowser, close as closeBrowser } from "./browser.js";
-import config from "./config.js";
+import config, { buildZcodeClientConfigUrl } from "./config.js";
+import { buildZcodeGuiRequestHeaders } from "./headers.js";
 
 export class CaptchaManager {
   constructor() {
@@ -39,9 +40,13 @@ export class CaptchaManager {
     }
 
     try {
-      const res = await fetch(
-        `https://zcode.z.ai/api/v1/client/configs?app_version=${config.appVersion}&platform=win32`
-      );
+      const url = buildZcodeClientConfigUrl();
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "omit",
+        redirect: "error",
+        headers: buildZcodeGuiRequestHeaders({}, url),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const captchaConfig = json.data?.configs?.captcha;

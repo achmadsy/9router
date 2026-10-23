@@ -132,8 +132,13 @@ export function buildZcodeAnthropicMetadataUserId(credentials) {
   });
 }
 
-function osCategory() {
-  switch (process.platform) {
+function normalizePrintableHeaderValue(value) {
+  const normalized = value?.trim();
+  return normalized && /^[\x20-\x7e]+$/.test(normalized) ? normalized : undefined;
+}
+
+function osCategory(platform = process.platform) {
+  switch (platform) {
     case "darwin":
       return "macos";
     case "win32":
@@ -144,40 +149,99 @@ function osCategory() {
 }
 
 function osLocale() {
-  const loc = Intl.DateTimeFormat().resolvedOptions().locale;
-  return loc && loc.trim() ? loc : "unknown";
+  return normalizePrintableHeaderValue(
+    Intl.DateTimeFormat().resolvedOptions().locale
+  ) || "unknown";
 }
 
 function osTimezone() {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return tz && tz.trim() ? tz : "unknown";
+  return normalizePrintableHeaderValue(
+    Intl.DateTimeFormat().resolvedOptions().timeZone
+  ) || "unknown";
 }
 
-/** GUI NodeApiClient headers applied to every zcode.z.ai request, including OAuth. */
-export function buildZcodeGuiRequestHeaders(extraHeaders = {}) {
-  const deviceMid = ensureZcodeDeviceMid();
+function endpointOrigin(endpoint = zcodeConfig.apiBaseUrl) {
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return "https://zcode.z.ai";
+  }
+}
+
+function setHeaders(target, source = {}) {
+  for (const [key, value] of Object.entries(source)) {
+    const existing = Object.keys(target).find(
+      (candidate) => candidate.toLowerCase() === key.toLowerCase()
+    );
+    if (existing && existing !== key) delete target[existing];
+    target[key] = value;
+  }
+  return target;
+}
+
+export function buildZcodeSourceHeadersFromContext(context = {}) {
+  const appVersion = normalizePrintableHeaderValue(context.appVersion);
+  const arch = normalizePrintableHeaderValue(context.arch);
+  const language = normalizePrintableHeaderValue(context.clientLanguage) || "unknown";
+  const timezone = normalizePrintableHeaderValue(context.clientTimezone) || "unknown";
+  const deviceMid = normalizePrintableHeaderValue(context.deviceMid);
+  const referer = normalizePrintableHeaderValue(context.endpointOrigin) || "https://zcode.z.ai";
+  const osVersion = normalizePrintableHeaderValue(context.osVersion);
+  const platform = normalizePrintableHeaderValue(context.platform);
+  const releaseChannel = normalizePrintableHeaderValue(context.releaseChannel);
+  const sourceTitle = normalizePrintableHeaderValue(context.sourceTitle) || "electron";
+
   return {
-    "HTTP-Referer": "https://zcode.z.ai",
-    "User-Agent": zcodeConfig.userAgent,
-    "X-ZCode-App-Version": zcodeConfig.appVersion,
-    "X-Title": "Z Code@electron",
-    "X-Release-Channel": "production",
-    "X-Client-Language": osLocale(),
-    "X-Client-Timezone": osTimezone(),
-    "X-Platform": `${process.platform}-${process.arch}`,
-    "X-Os-Category": osCategory(),
-    "X-Os-Version": os.release(),
+    "HTTP-Referer": referer,
+    "User-Agent": `ZCode/${appVersion || "unknown"}`,
+    ...(appVersion ? { "X-ZCode-App-Version": appVersion } : {}),
+    "X-Title": `Z Code@${sourceTitle}`,
+    ...(platform && arch ? { "X-Platform": `${platform}-${arch}` } : {}),
+    ...(releaseChannel ? { "X-Release-Channel": releaseChannel } : {}),
+    "X-Client-Language": language,
+    "X-Client-Timezone": timezone,
+    ...(platform ? { "X-Os-Category": osCategory(platform) } : {}),
+    ...(osVersion ? { "X-Os-Version": osVersion } : {}),
     ...(deviceMid ? { "X-Device-Mid": deviceMid } : {}),
-    "x-request-id": randomUuid(),
-    ...extraHeaders,
   };
+}
+
+function buildZcodeAppSourceHeaders(endpoint, { includeDeviceMid = false } = {}) {
+  const headers = buildZcodeSourceHeadersFromContext({
+    appVersion: zcodeConfig.appVersion,
+    arch: process.arch,
+    clientLanguage: osLocale(),
+    clientTimezone: osTimezone(),
+    ...(includeDeviceMid ? { deviceMid: ensureZcodeDeviceMid() } : {}),
+    endpointOrigin: endpointOrigin(endpoint),
+    osVersion: os.release(),
+    platform: process.platform,
+    releaseChannel: "production",
+    sourceTitle: "electron",
+  });
+  const userAgent = normalizePrintableHeaderValue(zcodeConfig.userAgent);
+  if (userAgent) headers["User-Agent"] = userAgent;
+  return headers;
+}
+
+/** GUI NodeApiClient headers applied to every configured ZCode-origin request. */
+export function buildZcodeGuiRequestHeaders(extraHeaders = {}, endpoint) {
+  const headers = setHeaders(
+    buildZcodeAppSourceHeaders(endpoint, { includeDeviceMid: true }),
+    extraHeaders
+  );
+  if (!Object.keys(headers).some((key) => key.toLowerCase() === "x-request-id")) {
+    headers["x-request-id"] = randomUuid();
+  }
+  return headers;
 }
 
 /** Native billing/balance request: NodeApiClient GUI headers + Authorization only. */
 export function buildZcodeBalanceHeaders(jwt) {
-  return buildZcodeGuiRequestHeaders({
-    Authorization: `Bearer ${jwt}`,
-  });
+  return buildZcodeGuiRequestHeaders(
+    { Authorization: `Bearer ${jwt}` },
+    zcodeConfig.startPlanBalanceUrl
+  );
 }
 
 const ANTHROPIC_HEADER_KEYS = [
@@ -240,27 +304,17 @@ export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
   const verifyParam =
     options.verifyParam ?? credentials?.providerSpecificData?._captchaVerifyParam;
   const sessionType = options.sessionType || "main";
-  const appVersion = zcodeConfig.appVersion;
-  const userAgent = zcodeConfig.userAgent;
+  const queryId = normalizeZcodeAttributionId(options.queryId, ["query_"]);
 
   const headers = {
+    ...buildZcodeAppSourceHeaders(zcodeConfig.codingPlanUrl),
     Authorization: `Bearer ${jwt}`,
     "anthropic-version": "2023-06-01",
-    "User-Agent": userAgent,
-    "X-ZCode-App-Version": appVersion,
     "X-ZCode-Agent": "glm",
-    "X-Title": "Z Code@electron",
-    "HTTP-Referer": "https://zcode.z.ai",
-    "X-Release-Channel": "production",
-    "X-Client-Language": osLocale(),
-    "X-Client-Timezone": osTimezone(),
-    "X-Platform": `${process.platform}-${process.arch}`,
-    "X-Os-Category": osCategory(),
-    "X-Os-Version": os.release(),
     "x-zcode-session-type": sessionType,
-    "x-request-id": randomUuid(),
-    "x-zcode-trace-id": randomUuid(),
-    "x-query-id": randomUuid(),
+    "x-request-id": options.requestId || randomUuid(),
+    "x-zcode-trace-id": options.traceId || randomUuid(),
+    ...(queryId ? { "x-query-id": queryId } : {}),
     "x-session-id": getZcodeSessionId(credentials),
   };
 
@@ -291,10 +345,8 @@ export function buildZcodeApiKeyHeaders(credentials, options = {}) {
 
   const headers = {
     "anthropic-version": "2023-06-01",
-    "User-Agent": zcodeConfig.userAgent,
-    "X-ZCode-App-Version": zcodeConfig.appVersion,
+    ...buildZcodeAppSourceHeaders(),
     "X-ZCode-Agent": "glm",
-    "HTTP-Referer": "https://zcode.z.ai",
   };
 
   if (credentials?.apiKey) {
