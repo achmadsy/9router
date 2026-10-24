@@ -235,20 +235,33 @@ export function injectZcodeSystemPrompt(body, options = {}) {
     return next;
   }
 
-  const preserved = existing.filter((block) => !isClaudeCodeSystemBlock(block));
+  const preservedText = existing
+    .filter((block) => !isClaudeCodeSystemBlock(block))
+    .map(textFromSystemBlock)
+    .filter((text) => text.length > 0)
+    .join("\n\n");
   const modelName =
     typeof next.model === "string" && next.model.length > 0 ? next.model : "GLM-5.2";
   const modelRef = options.modelRef || `builtin:zai-start-plan/${modelName}`;
+  const system = zcodeSystemBlocks({
+    modelRef,
+    workingDirectory: options.workingDirectory,
+    outputStyle: options.outputStyle,
+    agentKind: options.agentKind,
+  });
 
-  next.system = [
-    ...zcodeSystemBlocks({
-      modelRef,
-      workingDirectory: options.workingDirectory,
-      outputStyle: options.outputStyle,
-      agentKind: options.agentKind,
-    }),
-    ...preserved,
-  ];
+  // Native ZCode 3.16.3 sends exactly three system blocks for the main agent.
+  // A fourth block is rejected by upstream risk control (code 3012), even when
+  // empty. Preserve caller instructions by folding them into the final native
+  // dynamic block instead of appending another block.
+  if (preservedText && system.length > 0) {
+    const index = system.length - 1;
+    system[index] = {
+      ...system[index],
+      text: `${system[index].text}\n\n# Additional caller instructions\n${preservedText}`,
+    };
+  }
 
+  next.system = system;
   return next;
 }

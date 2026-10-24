@@ -40,17 +40,29 @@ describe("injectZcodeSystemPrompt", () => {
     expect(again.system).toEqual(body.system);
   });
 
-  it("preserves non-Claude caller system blocks after ZCode blocks", () => {
+  it("folds non-Claude caller instructions into the final native block", () => {
     const out = injectZcodeSystemPrompt({
       model: "GLM-5.2",
       system: [
         { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
         { type: "text", text: "Custom project rules" },
+        { type: "text", text: "Second instruction" },
       ],
     });
 
-    expect(out.system).toHaveLength(4);
-    expect(out.system[3].text).toBe("Custom project rules");
+    expect(out.system).toHaveLength(3);
+    expect(out.system[2].text).toContain("# Additional caller instructions");
+    expect(out.system[2].text).toContain("Custom project rules\n\nSecond instruction");
+  });
+
+  it("does not append an empty fourth system block", () => {
+    const out = injectZcodeSystemPrompt({
+      model: "GLM-5.2",
+      system: [{ type: "text", text: "" }],
+    });
+
+    expect(out.system).toHaveLength(3);
+    expect(out.system[2].text).not.toContain("# Additional caller instructions");
   });
 
   it("includes model ref in environment block", () => {
