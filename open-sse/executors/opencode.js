@@ -26,6 +26,13 @@ const MAX_TOOL_NAME_LEN = 128;
 const SESSION_HEADER = "x-opencode-session";
 const SESSION_FIELD = "_opencodeSession";
 const FREE_USAGE_LIMIT_RE = /FreeUsageLimitError/i;
+// Upstream reports the pool reset in Retry-After (seconds). A short window
+// means the session's own bucket drained while the shared pool still has
+// capacity — a fresh session fixes that. A window of hours means the free
+// pool itself is drained until the daily 00:00 UTC reset, which no request
+// change can fix (verified live: fresh sessions on fresh proxy IPs all 429
+// with retry-after pointing at the next UTC midnight).
+const ROTATION_MAX_RESET_S = 300;
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -424,6 +431,11 @@ export class OpenCodeExecutor extends BaseExecutor {
       return false;
     }
     if (!FREE_USAGE_LIMIT_RE.test(text)) return false;
+    const retryAfterS = Number(response.headers?.get?.("retry-after"));
+    if (Number.isFinite(retryAfterS) && retryAfterS > ROTATION_MAX_RESET_S) {
+      ctx?.log?.info?.("RETRY", `OPENCODE | 429 FreeUsageLimitError — pool reset in ${Math.round(retryAfterS / 60)}m, skipping rotation`);
+      return false;
+    }
     const credentials = ctx?.credentials;
     if (credentials) {
       credentials[SESSION_FIELD] = generateSessionId();

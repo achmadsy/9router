@@ -413,6 +413,20 @@ describe("OpenCode 429 FreeUsageLimitError session rotation", () => {
     const sessions = fetchMock.mock.calls.map(sessionOf);
     expect(new Set(sessions).size).toBe(3);
   });
+
+  // Live-verified: when the shared free pool is drained until the daily 00:00 UTC
+  // reset, upstream answers fresh sessions with retry-after of hours. Rotation
+  // cannot fix that — veto it so each attempt costs one round trip.
+  it("skips rotation when Retry-After points at a pool reset hours away", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(freeLimitBody, {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "41138" },
+    }));
+
+    const result = await runExecutor();
+    expect(result.response.status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 describe("translateSessionId produces a canonical inverted-timestamp session", () => {
