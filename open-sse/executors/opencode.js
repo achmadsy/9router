@@ -427,7 +427,10 @@ export class OpenCodeExecutor extends BaseExecutor {
     const credentials = ctx?.credentials;
     if (credentials) {
       credentials[SESSION_FIELD] = generateSessionId();
-      ctx?.log?.debug?.("RETRY", `OPENCODE | rotated session for 429 FreeUsageLimitError (attempt ${attempt})`);
+      // Drop the exhausted stable entry so the next request also mints a
+      // fresh session instead of reusing the one that just burned out.
+      stableOpencodeSessions.delete(identityKey(credentials));
+      ctx?.log?.info?.("RETRY", `OPENCODE | 429 FreeUsageLimitError — rotated session (attempt ${attempt}/${attempt + 1})`);
     }
     return Math.max(200, delayMs || 0);
   }
