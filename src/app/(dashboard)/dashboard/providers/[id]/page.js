@@ -70,6 +70,11 @@ export default function ProviderDetailPage() {
   const [testingModelIds, setTestingModelIds] = useState(() => new Set());
   const [showAddCustomModel, setShowAddCustomModel] = useState(false);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
+  const [connectionsPage, setConnectionsPage] = useState(0);
+  const [connectionPicker, setConnectionPicker] = useState(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerSelectedIds, setPickerSelectedIds] = useState([]);
+  const [bulkProxyTargets, setBulkProxyTargets] = useState([]);
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState("__none__");
   const [bulkRotatePoolIds, setBulkRotatePoolIds] = useState([]);
   const [bulkUpdatingProxy, setBulkUpdatingProxy] = useState(false);
@@ -738,11 +743,13 @@ export default function ProviderDetailPage() {
     }
   };
 
-  const handleRunOneByOneTest = async () => {
-    if (oneByOneRunning || connections.length === 0) return;
+  const handleRunOneByOneTest = async (targetList = null) => {
+    if (oneByOneRunning) return;
+    const testTargets = Array.isArray(targetList) && targetList.length > 0 ? targetList : connections;
+    if (testTargets.length === 0) return;
 
     const queuedState = Object.fromEntries(
-      connections.map((connection) => [connection.id, { state: "queued", error: null }]),
+      testTargets.map((connection) => [connection.id, { state: "queued", error: null }]),
     );
 
     stopOneByOneRef.current = false;
@@ -750,16 +757,16 @@ export default function ProviderDetailPage() {
     setOneByOneStopping(false);
     setOneByOneCurrentConnectionId(null);
     setOneByOneResults(queuedState);
-    setOneByOneSummary({ total: connections.length, completed: 0, passed: 0, failed: 0, stopped: false });
+    setOneByOneSummary({ total: testTargets.length, completed: 0, passed: 0, failed: 0, stopped: false });
 
     let passed = 0;
     let failed = 0;
 
     try {
-      for (let index = 0; index < connections.length; index += 1) {
+      for (let index = 0; index < testTargets.length; index += 1) {
         if (stopOneByOneRef.current) {
           setOneByOneSummary({
-            total: connections.length,
+            total: testTargets.length,
             completed: index,
             passed,
             failed,
@@ -768,7 +775,7 @@ export default function ProviderDetailPage() {
           break;
         }
 
-        const connection = connections[index];
+        const connection = testTargets[index];
         setOneByOneCurrentConnectionId(connection.id);
         setOneByOneResults((prev) => ({
           ...prev,
@@ -805,14 +812,14 @@ export default function ProviderDetailPage() {
         }
 
         setOneByOneSummary({
-          total: connections.length,
+          total: testTargets.length,
           completed: index + 1,
           passed,
           failed,
           stopped: false,
         });
 
-        if (index < connections.length - 1) {
+        if (index < testTargets.length - 1) {
           await sleep(ONE_BY_ONE_DELAY_MS);
         }
       }
@@ -848,8 +855,11 @@ export default function ProviderDetailPage() {
     });
   };
 
-  const handleBulkDelete = () => {
-    const count = selectedConnectionIds.length;
+  const handleBulkDelete = (idsArg = null) => {
+    const idsToDelete = Array.isArray(idsArg) && idsArg.length > 0
+      ? idsArg
+      : [...selectedConnectionIds];
+    const count = idsToDelete.length;
     if (count === 0) return;
     setConfirmState({
       title: `Delete ${count} Connection${count > 1 ? "s" : ""}`,
@@ -857,7 +867,6 @@ export default function ProviderDetailPage() {
       onConfirm: async () => {
         setConfirmState(null);
         let failed = 0;
-        const idsToDelete = [...selectedConnectionIds];
         for (const id of idsToDelete) {
           try {
             const res = await fetch(`/api/providers/${id}`, { method: "DELETE" });
@@ -972,6 +981,82 @@ export default function ProviderDetailPage() {
   const selectedConnections = connections.filter((conn) => selectedConnectionIds.includes(conn.id));
   const allSelected = connections.length > 0 && selectedConnectionIds.length === connections.length;
 
+  const CONNECTIONS_PAGE_SIZE = 20;
+  const connectionsTotalPages = Math.max(1, Math.ceil(connections.length / CONNECTIONS_PAGE_SIZE));
+  const connectionsSafePage = Math.min(connectionsPage, connectionsTotalPages - 1);
+  const pagedConnections = connections.slice(
+    connectionsSafePage * CONNECTIONS_PAGE_SIZE,
+    connectionsSafePage * CONNECTIONS_PAGE_SIZE + CONNECTIONS_PAGE_SIZE,
+  );
+
+  const pickerLabelOf = (conn) => {
+    const displayName = conn.name?.trim() || conn.email?.trim() || conn.id;
+    const secondary = conn.email?.trim() && conn.email.trim() !== displayName ? conn.email.trim() : "";
+    return { displayName, secondary };
+  };
+
+  const pickerMatchesSearch = (conn, search) => {
+    if (!search) return true;
+    const needle = search.toLowerCase();
+    return (conn.name || "").toLowerCase().includes(needle)
+      || (conn.email || "").toLowerCase().includes(needle)
+      || conn.id.toLowerCase().includes(needle);
+  };
+
+  const openConnectionPicker = (mode) => {
+    if (connections.length === 0) return;
+    setPickerSearch("");
+    setPickerSelectedIds(mode === "delete" ? [] : [...selectedConnectionIds]);
+    setConnectionPicker({ mode });
+  };
+
+  const closeConnectionPicker = () => setConnectionPicker(null);
+
+  const pickerFiltered = connectionPicker
+    ? connections.filter((conn) => pickerMatchesSearch(conn, pickerSearch))
+    : [];
+  const pickerShownSelected = pickerFiltered.filter((conn) => pickerSelectedIds.includes(conn.id)).length;
+
+  const togglePickerConnection = (connectionId) => {
+    setPickerSelectedIds((prev) => (
+      prev.includes(connectionId)
+        ? prev.filter((id) => id !== connectionId)
+        : [...prev, connectionId]
+    ));
+  };
+
+  const togglePickerShown = () => {
+    const shownIds = pickerFiltered.map((conn) => conn.id);
+    const allShownSelected = shownIds.length > 0 && shownIds.every((id) => pickerSelectedIds.includes(id));
+    setPickerSelectedIds((prev) => (
+      allShownSelected
+        ? prev.filter((id) => !shownIds.includes(id))
+        : [...new Set([...prev, ...shownIds])]
+    ));
+  };
+
+  const confirmConnectionPicker = () => {
+    const picked = connections.filter((conn) => pickerSelectedIds.includes(conn.id));
+    const mode = connectionPicker?.mode;
+    setSelectedConnectionIds(pickerSelectedIds);
+    if (mode === "delete") {
+      setConnectionPicker(null);
+      if (picked.length === 0) return;
+      handleBulkDelete(pickerSelectedIds);
+      return;
+    }
+    if (mode === "proxy") {
+      setBulkProxyTargets(picked);
+      setConnectionPicker(null);
+      openBulkProxyModal(picked);
+      return;
+    }
+    if (mode === "test") {
+      setConnectionPicker(null);
+      handleRunOneByOneTest(picked);
+    }
+  };
+
   const toggleSelectConnection = (connectionId) => {
     setSelectedConnectionIds((prev) => (
       prev.includes(connectionId)
@@ -1011,9 +1096,10 @@ export default function ProviderDetailPage() {
 
   const activePools = selectableProxyPools.filter((p) => p.isActive === true);
 
-  const openBulkProxyModal = () => {
-    if (selectedConnections.length === 0) return;
-    const uniquePoolIds = [...new Set(selectedConnections.map((conn) => conn.providerSpecificData?.proxyPoolId || "__none__"))];
+  const openBulkProxyModal = (targets) => {
+    const targetList = Array.isArray(targets) && targets.length > 0 ? targets : bulkProxyTargets;
+    if (targetList.length === 0) return;
+    const uniquePoolIds = [...new Set(targetList.map((conn) => conn.providerSpecificData?.proxyPoolId || "__none__"))];
     setBulkProxyPoolId(uniquePoolIds.length === 1 ? uniquePoolIds[0] : "__none__");
     // Default to saved rotation subset when present (align with OpenCode Free card), else all active
     const activeIds = new Set(activePools.map((p) => p.id));
@@ -1053,7 +1139,7 @@ export default function ProviderDetailPage() {
   };
 
   const handleApplySinglePool = (proxyPoolId) => {
-    const targets = connections.map((c) => ({ connectionId: c.id, proxyPoolId }));
+    const targets = (bulkProxyTargets.length > 0 ? bulkProxyTargets : connections).map((c) => ({ connectionId: c.id, proxyPoolId }));
     return applyProxyAssignments(targets);
   };
 
@@ -1074,7 +1160,8 @@ export default function ProviderDetailPage() {
       alert("Select at least one active proxy pool for one-to-one rotation.");
       return;
     }
-    const targets = connections.map((c, i) => ({
+    const targetList = bulkProxyTargets.length > 0 ? bulkProxyTargets : connections;
+    const targets = targetList.map((c, i) => ({
       connectionId: c.id,
       proxyPoolId: rotatePools[i % rotatePools.length].id,
     }));
@@ -1085,64 +1172,94 @@ export default function ProviderDetailPage() {
   const isSelected = (connectionId) => selectedConnectionIds.includes(connectionId);
 
   const connectionsList = (
-    <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
-      {connections
-        .map((conn, index) => (
-          <div key={conn.id} className="flex min-w-0 items-stretch">
-            <div className="flex shrink-0 items-center pl-1 sm:pl-2">
-              <input
-                type="checkbox"
-                checked={isSelected(conn.id)}
-                onChange={() => toggleSelectConnection(conn.id)}
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              <ConnectionRow
-                connection={conn}
-                proxyPools={selectableProxyPools}
-                isOAuth={isOAuth}
-                isFirst={index === 0}
-                isLast={index === connections.length - 1}
-                onMoveUp={() => handleSwapPriority(index, index - 1)}
-                onMoveDown={() => handleSwapPriority(index, index + 1)}
-                onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
-                autoPing={AUTO_PING_SETTINGS_KEYS[cloneBaseId] && conn.authType === "oauth" ? {
-                  isActive: autoPing.connections[conn.id] === true || autoPing.schedules?.[conn.id]?.enabled === true,
-                  reactiveOn: autoPing.connections[conn.id] === true,
-                  provider: cloneBaseId,
-                  scheduleOn: autoPing.schedules?.[conn.id]?.enabled === true,
-                  scheduleSummary: getScheduleSlotLabels(autoPing.schedules?.[conn.id]).join(" / "),
-                  onConfigure: () => setScheduleConnection(conn),
-                } : null}
-                onUpdateProxy={async (proxyPoolId) => {
-                  try {
-                    const res = await fetch(`/api/providers/${conn.id}`, {
-                      method: "PUT",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ proxyPoolId: proxyPoolId || null }),
-                    });
-                    if (res.ok) {
-                      setConnections(prev => prev.map(c =>
-                        c.id === conn.id
-                          ? { ...c, providerSpecificData: { ...c.providerSpecificData, proxyPoolId: proxyPoolId || null } }
-                          : c
-                      ));
+    <div className="flex flex-col">
+      <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
+        {pagedConnections.map((conn, i) => {
+          const index = connectionsSafePage * CONNECTIONS_PAGE_SIZE + i;
+          return (
+            <div key={conn.id} className="flex min-w-0 items-stretch">
+              <div className="flex shrink-0 items-center pl-1 sm:pl-2">
+                <input
+                  type="checkbox"
+                  checked={isSelected(conn.id)}
+                  onChange={() => toggleSelectConnection(conn.id)}
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <ConnectionRow
+                  connection={conn}
+                  proxyPools={selectableProxyPools}
+                  isOAuth={isOAuth}
+                  isFirst={index === 0}
+                  isLast={index === connections.length - 1}
+                  onMoveUp={() => handleSwapPriority(index, index - 1)}
+                  onMoveDown={() => handleSwapPriority(index, index + 1)}
+                  onToggleActive={(isActive) => handleUpdateConnectionStatus(conn.id, isActive)}
+                  autoPing={AUTO_PING_SETTINGS_KEYS[cloneBaseId] && conn.authType === "oauth" ? {
+                    isActive: autoPing.connections[conn.id] === true || autoPing.schedules?.[conn.id]?.enabled === true,
+                    reactiveOn: autoPing.connections[conn.id] === true,
+                    provider: cloneBaseId,
+                    scheduleOn: autoPing.schedules?.[conn.id]?.enabled === true,
+                    scheduleSummary: getScheduleSlotLabels(autoPing.schedules?.[conn.id]).join(" / "),
+                    onConfigure: () => setScheduleConnection(conn),
+                  } : null}
+                  onUpdateProxy={async (proxyPoolId) => {
+                    try {
+                      const res = await fetch(`/api/providers/${conn.id}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ proxyPoolId: proxyPoolId || null }),
+                      });
+                      if (res.ok) {
+                        setConnections(prev => prev.map(c =>
+                          c.id === conn.id
+                            ? { ...c, providerSpecificData: { ...c.providerSpecificData, proxyPoolId: proxyPoolId || null } }
+                            : c
+                        ));
+                      }
+                    } catch (error) {
+                      console.log("Error updating proxy:", error);
                     }
-                  } catch (error) {
-                    console.log("Error updating proxy:", error);
-                  }
-                }}
-                onEdit={() => {
-                  setSelectedConnection(conn);
-                  setShowEditModal(true);
-                }}
-                onDelete={() => handleDelete(conn.id)}
-                oneByOneStatus={oneByOneResults[conn.id] || null}
-              />
+                  }}
+                  onEdit={() => {
+                    setSelectedConnection(conn);
+                    setShowEditModal(true);
+                  }}
+                  onDelete={() => handleDelete(conn.id)}
+                  oneByOneStatus={oneByOneResults[conn.id] || null}
+                />
+              </div>
             </div>
+          );
+        })}
+      </div>
+      {connectionsTotalPages > 1 && (
+        <div className="flex items-center justify-between gap-3 border-t border-black/[0.04] dark:border-white/[0.04] px-2 py-2">
+          <span className="text-xs text-text-muted">
+            {connections.length} connections
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setConnectionsPage(connectionsSafePage - 1)}
+              disabled={connectionsSafePage === 0}
+              className="rounded px-2 py-1 text-xs text-text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span className="text-xs text-text-muted">
+              Page {connectionsSafePage + 1} / {connectionsTotalPages}
+            </span>
+            <button
+              onClick={() => setConnectionsPage(connectionsSafePage + 1)}
+              disabled={connectionsSafePage >= connectionsTotalPages - 1}
+              className="rounded px-2 py-1 text-xs text-text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
           </div>
-        ))}
+        </div>
+      )}
     </div>
   );
 
@@ -1150,7 +1267,7 @@ export default function ProviderDetailPage() {
     <Modal
       isOpen={showBulkProxyModal}
       onClose={closeBulkProxyModal}
-      title={`Apply Proxy (${connections.length} connections)`}
+      title={`Apply Proxy (${(bulkProxyTargets.length > 0 ? bulkProxyTargets : connections).length} connections)`}
     >
       <div className="flex flex-col gap-3">
         {activePools.length > 0 && (
@@ -1221,6 +1338,81 @@ export default function ProviderDetailPage() {
         <Button onClick={closeBulkProxyModal} variant="ghost" fullWidth disabled={bulkUpdatingProxy}>
           Cancel
         </Button>
+      </div>
+    </Modal>
+  );
+
+  const pickerModeMeta = {
+    delete: { title: "Select Connections to Delete", confirm: (n) => `Delete ${n}`, variant: "danger" },
+    proxy: { title: "Select Connections for Proxy", confirm: (n) => `Apply Proxy to ${n}`, variant: "primary" },
+    test: { title: "Select Connections to Test", confirm: (n) => `Test ${n}`, variant: "primary" },
+  };
+  const pickerMeta = pickerModeMeta[connectionPicker?.mode] || pickerModeMeta.test;
+
+  const connectionPickerModal = (
+    <Modal
+      isOpen={connectionPicker !== null}
+      onClose={closeConnectionPicker}
+      title={pickerMeta.title}
+    >
+      <div className="flex flex-col gap-3">
+        <input
+          type="text"
+          value={pickerSearch}
+          onChange={(e) => setPickerSearch(e.target.value)}
+          placeholder="Search name / email..."
+          className="w-full rounded-lg border border-black/[0.08] dark:border-white/[0.08] bg-transparent px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-muted">{pickerSelectedIds.length} selected</span>
+          <button
+            onClick={togglePickerShown}
+            disabled={pickerFiltered.length === 0}
+            className="text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {pickerFiltered.length > 0 && pickerFiltered.every((conn) => pickerSelectedIds.includes(conn.id))
+              ? "Clear shown"
+              : "Select shown"}
+          </button>
+        </div>
+        <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[360px] overflow-y-auto pr-1">
+          {pickerFiltered.map((conn) => {
+            const { displayName, secondary } = pickerLabelOf(conn);
+            return (
+              <label
+                key={conn.id}
+                className="flex min-w-0 cursor-pointer items-center gap-2 px-1.5 py-1.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
+              >
+                <input
+                  type="checkbox"
+                  checked={pickerSelectedIds.includes(conn.id)}
+                  onChange={() => togglePickerConnection(conn.id)}
+                  className="h-4 w-4 shrink-0 rounded border-gray-300 text-primary focus:ring-primary"
+                />
+                <span className="min-w-0 truncate text-sm text-text-main">{displayName}</span>
+                {secondary && (
+                  <span className="min-w-0 truncate text-[11px] text-text-muted">{secondary}</span>
+                )}
+              </label>
+            );
+          })}
+          {pickerFiltered.length === 0 && (
+            <p className="px-1.5 py-3 text-center text-xs text-text-muted">No connections match.</p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={closeConnectionPicker} variant="ghost" fullWidth>
+            Cancel
+          </Button>
+          <Button
+            onClick={confirmConnectionPicker}
+            variant={pickerMeta.variant}
+            fullWidth
+            disabled={pickerSelectedIds.length === 0}
+          >
+            {pickerMeta.confirm(pickerSelectedIds.length)}
+          </Button>
+        </div>
       </div>
     </Modal>
   );
@@ -1663,19 +1855,27 @@ export default function ProviderDetailPage() {
                   size="sm"
                   variant="secondary"
                   icon="lan"
-                  onClick={() => setShowBulkProxyModal(true)}
+                  onClick={() => openConnectionPicker("proxy")}
                 >
                   Apply Proxy
                 </Button>
               )}
               {connections.length > 0 && (
                 <>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="delete"
+                    onClick={() => openConnectionPicker("delete")}
+                  >
+                    Delete Connections
+                  </Button>
                   {selectedConnectionIds.length > 0 && (
                     <Button
                       size="sm"
                       variant="danger"
                       icon="delete"
-                      onClick={handleBulkDelete}
+                      onClick={() => handleBulkDelete()}
                     >
                       Delete Selected ({selectedConnectionIds.length})
                     </Button>
@@ -1684,7 +1884,7 @@ export default function ProviderDetailPage() {
                     size="sm"
                     variant="secondary"
                     icon="sync"
-                    onClick={handleRunOneByOneTest}
+                    onClick={() => openConnectionPicker("test")}
                     disabled={oneByOneRunning}
                   >
                     {oneByOneRunning ? "Testing Connection One-by-One..." : "Test Connection One-by-One"}
@@ -1973,6 +2173,7 @@ export default function ProviderDetailPage() {
       </Card>
 
       {bulkActionModal}
+      {connectionPickerModal}
 
       {/* Modals */}
       {cloneBaseId === "kiro" ? (
