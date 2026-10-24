@@ -362,6 +362,59 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
   });
 });
 
+describe("OpenCode 429 FreeUsageLimitError session rotation", () => {
+  const freeLimitBody = JSON.stringify({
+    error: { message: "Free Usage Limit Reached", code: "FreeUsageLimitError" },
+  });
+  const okBody = JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }] });
+
+  function runExecutor() {
+    const executor = getExecutor("opencode");
+    return executor.execute({
+      model: "nemotron-3-ultra-free",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      stream: false,
+      credentials: makeCredentials(),
+      providerSessionId: null,
+      clientTool: "claude",
+    });
+  }
+
+  const sessionOf = (call) => call[1].headers["x-opencode-session"];
+
+  it("rotates to a fresh session and retries when the free-limit 429 hits", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(freeLimitBody, { status: 429, headers: { "content-type": "application/json" } }));
+    fetchMock.mockResolvedValueOnce(new Response(okBody, { status: 200, headers: { "content-type": "application/json" } }));
+
+    const result = await runExecutor();
+    expect(result.response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sessionOf(fetchMock.mock.calls[0])).toMatch(OPENCODE_SESSION_RE);
+    expect(sessionOf(fetchMock.mock.calls[1])).toMatch(OPENCODE_SESSION_RE);
+    expect(sessionOf(fetchMock.mock.calls[1])).not.toBe(sessionOf(fetchMock.mock.calls[0]));
+  });
+
+  it("does not retry a 429 that is not a FreeUsageLimitError", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 }));
+
+    const result = await runExecutor();
+    expect(result.response.status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("stops after the configured two rotations and returns the 429", async () => {
+    for (let i = 0; i < 3; i++) {
+      fetchMock.mockResolvedValueOnce(new Response(freeLimitBody, { status: 429, headers: { "content-type": "application/json" } }));
+    }
+
+    const result = await runExecutor();
+    expect(result.response.status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const sessions = fetchMock.mock.calls.map(sessionOf);
+    expect(new Set(sessions).size).toBe(3);
+  });
+});
+
 describe("translateSessionId produces a canonical inverted-timestamp session", () => {
   // Zen rejects a ses_ whose 12 hex prefix is not ~(Date.now()*4096+n) with 403 FreeTierError.
   const MASK = 0xffffffffffffn;

@@ -112,9 +112,11 @@ export class BaseExecutor {
       const { attempts, delayMs } = resolveRetryEntry(retryConfig[statusKey]);
       if (attempts <= 0 || retryAttemptsByUrl[urlIndex] >= attempts) return false;
       // Hook: subclass may derive delay from the response (headers/body). null → skip retry, use fallback.
+      // ctx carries the execute-scope request inputs (loop vars are not visible here) so a
+      // subclass can mutate per-request state (e.g. rotate a session) before the retry.
       let waitMs = delayMs;
       if (response && this.computeRetryDelay) {
-        const dynamic = await this.computeRetryDelay(response, retryAttemptsByUrl[urlIndex] + 1, delayMs);
+        const dynamic = await this.computeRetryDelay(response, retryAttemptsByUrl[urlIndex] + 1, delayMs, { credentials, log });
         if (dynamic === false) return false; // hook vetoes retry (e.g. Retry-After too long)
         if (dynamic != null) waitMs = dynamic;
       }

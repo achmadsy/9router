@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
-import { MEMORY_CONFIG } from "../config/runtimeConfig.js";
+import { MEMORY_CONFIG, HTTP_STATUS } from "../config/runtimeConfig.js";
 import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
@@ -25,6 +25,7 @@ const MAX_SESSION_LENGTH = 256;
 const MAX_TOOL_NAME_LEN = 128;
 const SESSION_HEADER = "x-opencode-session";
 const SESSION_FIELD = "_opencodeSession";
+const FREE_USAGE_LIMIT_RE = /FreeUsageLimitError/i;
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -406,6 +407,29 @@ export class OpenCodeExecutor extends BaseExecutor {
     }
 
     return injectReasoningContent({ provider: this.provider, model, body });
+  }
+
+  // Free-tier quota is accounted per x-opencode-session, so a 429 carrying
+  // FreeUsageLimitError means this session's bucket is spent — not the account
+  // and not the model. Mint a fresh session for the retry attempt; the retry
+  // loop re-runs transformRequest/buildHeaders with the rotated id. Any other
+  // 429 (or an unreadable body) vetoes the retry and keeps the legacy
+  // fall-through-to-error behavior.
+  async computeRetryDelay(response, attempt, delayMs, ctx) {
+    if (response.status !== HTTP_STATUS.RATE_LIMITED) return null;
+    let text = "";
+    try {
+      text = await response.clone().text();
+    } catch {
+      return false;
+    }
+    if (!FREE_USAGE_LIMIT_RE.test(text)) return false;
+    const credentials = ctx?.credentials;
+    if (credentials) {
+      credentials[SESSION_FIELD] = generateSessionId();
+      ctx?.log?.debug?.("RETRY", `OPENCODE | rotated session for 429 FreeUsageLimitError (attempt ${attempt})`);
+    }
+    return Math.max(200, delayMs || 0);
   }
 
   async execute(args) {

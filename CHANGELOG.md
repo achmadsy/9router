@@ -8,6 +8,7 @@
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 
 ## Fixes
+- **OpenCode Free**: rotate the `x-opencode-session` and retry in-request on 429 `FreeUsageLimitError` (quota is accounted per session, so a spent session id no longer terminates the request); non-free-limit 429s keep the previous no-retry behavior.
 - **OpenCode Free**: back required native `read`/`shell` declarations with compatible caller tools using schema-driven name and argument adapters across Chat Completions, Responses, streaming, and JSON paths instead of advertising unusable placeholders; align the v2.1.2 wire fingerprint (User-Agent, per-request W3C `traceparent`/`b3`, `Accept: */*`, chat-lane `stream_options.include_usage`).
 - **ZCode**: align Start Plan, OAuth, CAPTCHA client-config, source headers, and model attribution with the installed ZCode 3.16.3 desktop/native-agent request flow.
 - **Models**: restore root `/v1/models` API key context resolution and per-key policy filtering (`resolveApiKeyContext` + `filterCatalogByPolicy`).

@@ -14,6 +14,10 @@ export default {
   noAuth: true,
   transport: {
     baseUrl: "https://opencode.ai",
+    // 429 FreeUsageLimitError is session-scoped (quota is accounted per
+    // x-opencode-session): the executor's computeRetryDelay rotates the
+    // session and vetoes every other 429, so only free-limit errors retry.
+    retry: { 429: { attempts: 2, delayMs: 300 } },
     // Upstream free-tier gate rejects stream:false with 403 FreeTierError
     // (verified live). Force SSE upstream; chatCore converts back to JSON
     // for non-streaming clients via the existing forced-SSE path.
