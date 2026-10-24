@@ -74,6 +74,7 @@ export default function ProviderDetailPage() {
   const [connectionPicker, setConnectionPicker] = useState(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const [pickerSelectedIds, setPickerSelectedIds] = useState([]);
+  const [pickerPage, setPickerPage] = useState(0);
   const [bulkProxyTargets, setBulkProxyTargets] = useState([]);
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState("__none__");
   const [bulkRotatePoolIds, setBulkRotatePoolIds] = useState([]);
@@ -1006,15 +1007,29 @@ export default function ProviderDetailPage() {
   const openConnectionPicker = (mode) => {
     if (connections.length === 0) return;
     setPickerSearch("");
+    setPickerPage(0);
     setPickerSelectedIds(mode === "delete" ? [] : [...selectedConnectionIds]);
     setConnectionPicker({ mode });
   };
 
   const closeConnectionPicker = () => setConnectionPicker(null);
 
+  const PICKER_PAGE_SIZE = 50;
+  const pickerTimestampOf = (conn) => {
+    const t = Date.parse(conn.createdAt || "");
+    return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+  };
   const pickerFiltered = connectionPicker
-    ? connections.filter((conn) => pickerMatchesSearch(conn, pickerSearch))
+    ? connections
+        .filter((conn) => pickerMatchesSearch(conn, pickerSearch))
+        .sort((a, b) => pickerTimestampOf(a) - pickerTimestampOf(b))
     : [];
+  const pickerTotalPages = Math.max(1, Math.ceil(pickerFiltered.length / PICKER_PAGE_SIZE));
+  const pickerSafePage = Math.min(pickerPage, pickerTotalPages - 1);
+  const pagedPickerConnections = pickerFiltered.slice(
+    pickerSafePage * PICKER_PAGE_SIZE,
+    pickerSafePage * PICKER_PAGE_SIZE + PICKER_PAGE_SIZE,
+  );
   const pickerShownSelected = pickerFiltered.filter((conn) => pickerSelectedIds.includes(conn.id)).length;
 
   const togglePickerConnection = (connectionId) => {
@@ -1026,7 +1041,7 @@ export default function ProviderDetailPage() {
   };
 
   const togglePickerShown = () => {
-    const shownIds = pickerFiltered.map((conn) => conn.id);
+    const shownIds = pagedPickerConnections.map((conn) => conn.id);
     const allShownSelected = shownIds.length > 0 && shownIds.every((id) => pickerSelectedIds.includes(id));
     setPickerSelectedIds((prev) => (
       allShownSelected
@@ -1359,7 +1374,10 @@ export default function ProviderDetailPage() {
         <input
           type="text"
           value={pickerSearch}
-          onChange={(e) => setPickerSearch(e.target.value)}
+          onChange={(e) => {
+            setPickerSearch(e.target.value);
+            setPickerPage(0);
+          }}
           placeholder="Search name / email..."
           className="w-full rounded-lg border border-black/[0.08] dark:border-white/[0.08] bg-transparent px-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary"
         />
@@ -1367,16 +1385,16 @@ export default function ProviderDetailPage() {
           <span className="text-xs text-text-muted">{pickerSelectedIds.length} selected</span>
           <button
             onClick={togglePickerShown}
-            disabled={pickerFiltered.length === 0}
+            disabled={pagedPickerConnections.length === 0}
             className="text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {pickerFiltered.length > 0 && pickerFiltered.every((conn) => pickerSelectedIds.includes(conn.id))
+            {pagedPickerConnections.length > 0 && pagedPickerConnections.every((conn) => pickerSelectedIds.includes(conn.id))
               ? "Clear shown"
               : "Select shown"}
           </button>
         </div>
         <div className="flex flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[360px] overflow-y-auto pr-1">
-          {pickerFiltered.map((conn) => {
+          {pagedPickerConnections.map((conn) => {
             const { displayName, secondary } = pickerLabelOf(conn);
             return (
               <label
@@ -1400,6 +1418,30 @@ export default function ProviderDetailPage() {
             <p className="px-1.5 py-3 text-center text-xs text-text-muted">No connections match.</p>
           )}
         </div>
+        {pickerFiltered.length > PICKER_PAGE_SIZE && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-text-muted">{pickerFiltered.length} shown</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPickerPage(pickerSafePage - 1)}
+                disabled={pickerSafePage === 0}
+                className="rounded px-2 py-1 text-xs text-text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Prev
+              </button>
+              <span className="text-xs text-text-muted">
+                Page {pickerSafePage + 1} / {pickerTotalPages}
+              </span>
+              <button
+                onClick={() => setPickerPage(pickerSafePage + 1)}
+                disabled={pickerSafePage >= pickerTotalPages - 1}
+                className="rounded px-2 py-1 text-xs text-text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex gap-2">
           <Button onClick={closeConnectionPicker} variant="ghost" fullWidth>
             Cancel
