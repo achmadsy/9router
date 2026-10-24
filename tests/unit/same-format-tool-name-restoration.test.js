@@ -71,6 +71,38 @@ describe("same-format streaming tool-name restoration", () => {
     expect(output).not.toContain("shell_client");
   });
 
+  it("buffers and translates adapted arguments before same-format delivery", async () => {
+    const chunks = [{
+      id: "chatcmpl-args",
+      object: "chat.completion.chunk",
+      created: 1,
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "read", arguments: '{"pa' } }] }, finish_reason: null }],
+    }, {
+      id: "chatcmpl-args",
+      object: "chat.completion.chunk",
+      created: 1,
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"/tmp/a"}' } }] }, finish_reason: null }],
+    }, {
+      id: "chatcmpl-args",
+      object: "chat.completion.chunk",
+      created: 1,
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    }];
+    const map = new Map([["read", {
+      nativeName: "read",
+      callerName: "Read",
+      arguments: { path: "file_path", offset: "offset", limit: "limit" },
+      required: ["file_path"],
+      properties: { file_path: { type: "string" } },
+    }]]);
+    const input = chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
+    const output = await runStream(build({ toolNameMap: map }), input);
+
+    expect(output).toContain('"name":"Read"');
+    expect(output).toContain('\\"file_path\\":\\"/tmp/a\\"');
+    expect(output).not.toContain('\\"path\\":\\"/tmp/a\\"');
+  });
+
   it("keeps the normal same-format passthrough behavior without aliases", async () => {
     const chunk = {
       id: "chatcmpl-2",

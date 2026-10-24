@@ -18,7 +18,8 @@ import {
 
 // OpenCode v2 UA shape: opencode/<channel>/<version>/<client>. Upstream rejects
 // the v1 "opencode/1.18.x" form with 403 FreeTierError since 2026-10-14.
-const OPENCODE_UA = "opencode/latest/2.0.26/cli";
+const OPENCODE_UA = "opencode/latest/2.1.2/cli";
+
 const OPENCODE_CLIENT = "cli";
 const MAX_SESSION_LENGTH = 256;
 const MAX_TOOL_NAME_LEN = 128;
@@ -398,8 +399,12 @@ export class OpenCodeExecutor extends BaseExecutor {
       applyFingerprintTools(body, true);
     } else if (body && typeof body === "object") {
       dropAdaptiveReasoningEffort(body);
+      // Native CLI chat lane always carries stream_options (captured 2.1.2:
+      // messages, model, stream, stream_options [, tools, max_completion_tokens]).
+      if (body.stream_options === undefined) body.stream_options = { include_usage: true };
       applyFingerprintTools(body, false);
     }
+
     return injectReasoningContent({ provider: this.provider, model, body });
   }
 
@@ -427,6 +432,13 @@ export class OpenCodeExecutor extends BaseExecutor {
 
     const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
 
+    // Native 2.1.2 mints a W3C trace per request: traceparent (55 chars) and
+    // b3 (TraceId-SpanId-Sampled-ParentSpanId, 68 chars). Both were present on
+    // every captured native call and absent from ours.
+    const traceId = crypto.randomBytes(16).toString("hex");
+    const spanId = crypto.randomBytes(8).toString("hex");
+    const parentSpanId = crypto.randomBytes(8).toString("hex");
+
     // Mirrors the v2 CLI. Upstream needs x-opencode-session-id next to
     // x-opencode-session, and rejects any x-opencode-request (v1 only) with 403.
     const headers = {
@@ -439,8 +451,12 @@ export class OpenCodeExecutor extends BaseExecutor {
       "x-session-affinity": session,
       "x-session-id": session,
       "x-opencode-project": lower["x-opencode-project"] || "global",
-      "Accept": stream ? "text/event-stream" : "*/*",
+      "traceparent": `00-${traceId}-${spanId}-01`,
+      "b3": `${traceId}-${spanId}-1-${parentSpanId}`,
+      // Native CLI sends Accept: */* even on the SSE chat lane.
+      "Accept": "*/*",
     };
+
     if (url.endsWith("/messages")) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
     return headers;
   }

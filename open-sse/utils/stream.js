@@ -5,7 +5,7 @@ import { liftReasoningAliases } from "../translator/concerns/reasoning.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, ensureStreamToolCallIds } from "./streamHelpers.js";
-import { restoreToolNames } from "./opencodeFingerprint.js";
+import { adaptOpenAIStreamToolCalls, adaptResponsesStreamToolCalls, restoreToolNames } from "./opencodeFingerprint.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
@@ -69,6 +69,8 @@ export function createSSEStream(options = {}) {
   // client as-is: strict OpenAI-compatible SDKs abort the turn on a
   // tool_call without a string id (#4992).
   const seenToolCallIds = new Map();
+  const adaptedToolCalls = {};
+  const adaptedResponsesToolCalls = {};
 
   // Per-stream decoder with stream:true to correctly handle multi-byte chars split across chunks
   const decoder = new TextDecoder("utf-8", { fatal: false });
@@ -196,7 +198,8 @@ export function createSSEStream(options = {}) {
               // "Model tried to call unavailable tool 'read_client'" (#4986).
               let toolNameRestored = false;
               if (toolNameMap?.size) {
-                const restored = restoreToolNames(parsed, toolNameMap);
+                const adapted = adaptOpenAIStreamToolCalls(parsed, toolNameMap, adaptedToolCalls);
+                const restored = restoreToolNames(adapted, toolNameMap);
                 if (restored !== parsed) {
                   parsed = restored;
                   toolNameRestored = true;
@@ -317,8 +320,13 @@ export function createSSEStream(options = {}) {
         // Translate mode
         if (!trimmed) continue;
 
-        const parsed = parseSSELine(trimmed, targetFormat);
+        let parsed = parseSSELine(trimmed, targetFormat);
         if (!parsed) continue;
+        if (targetFormat === FORMATS.OPENAI && toolNameMap?.size) {
+          parsed = adaptOpenAIStreamToolCalls(parsed, toolNameMap, adaptedToolCalls);
+        } else if (targetFormat === FORMATS.OPENAI_RESPONSES && toolNameMap?.size) {
+          parsed = adaptResponsesStreamToolCalls(parsed, toolNameMap, adaptedResponsesToolCalls);
+        }
 
         // Responses API same-format passthrough: preserve event framing + track terminal state
         const isOpenAIResponsesStream = targetFormat === FORMATS.OPENAI_RESPONSES;
@@ -506,7 +514,12 @@ export function createSSEStream(options = {}) {
           // Same parse as the transform loop: without targetFormat this only
           // accepts "data: " lines, so an NDJSON provider (Ollama) lost whatever
           // arrived without its closing newline.
-          const parsed = parseSSELine(buffer.trim(), targetFormat);
+          let parsed = parseSSELine(buffer.trim(), targetFormat);
+          if (parsed && targetFormat === FORMATS.OPENAI && toolNameMap?.size) {
+            parsed = adaptOpenAIStreamToolCalls(parsed, toolNameMap, adaptedToolCalls);
+          } else if (parsed && targetFormat === FORMATS.OPENAI_RESPONSES && toolNameMap?.size) {
+            parsed = adaptResponsesStreamToolCalls(parsed, toolNameMap, adaptedResponsesToolCalls);
+          }
           // parseSSELine turns the SSE sentinel "data: [DONE]" into { done: true },
           // which must not be translated. An Ollama chunk also carries done:true,
           // but it is the real final chunk — it holds finish_reason and the token

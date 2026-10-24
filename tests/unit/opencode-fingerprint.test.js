@@ -4,6 +4,8 @@ import {
   concealFingerprintToolNames,
   appendMissingFingerprintTools,
   fingerprintToolKey,
+  adaptOpenAIStreamToolCalls,
+  adaptResponsesStreamToolCalls,
   restoreToolNames,
   takeRenamedToolNames,
   OPENCODE_FINGERPRINT_TOOLS,
@@ -15,7 +17,7 @@ const chat = (names) => names.map((name) => ({ type: "function", function: { nam
 const namesOf = (tools) => tools.map((tool) => tool.name ?? tool.function?.name);
 
 describe("opencodeFingerprint — request side", () => {
-  it("appends exact read/shell definitions and leaves case variants untouched", () => {
+  it("appends exact read/shell definitions when caller tools have no usable schema", () => {
     const body = { tools: flat(CC_TOOLS) };
     const map = applyFingerprintTools(body, true);
 
@@ -148,14 +150,14 @@ describe("opencodeFingerprint — in-place normalization", () => {
   });
   const windowsShell = () => shellTool("Windows", "pwsh");
 
-  it("keeps the caller's name and adopts OpenCode's definition when arguments line up", () => {
+  it("adopts OpenCode's definition when the native name and arguments line up", () => {
     const body = { tools: [windowsShell(), { type: "function", name: "Edit" }] };
     const map = applyFingerprintTools(body, true);
 
     expect(namesOf(body.tools)).toEqual(["shell", "Edit", "read"]);
     expect(map.size).toBe(0);
     expect(takeRenamedToolNames(body)).toBeNull();
-    expect(body.tools[0].description).toContain("Commands run on Linux using bash.");
+    expect(body.tools[0].description).toContain("Commands run on Linux using zsh.");
     expect(body.tools[0].parameters.required).toEqual(["command"]);
     // Only the genuinely absent `read` is still advertised as a placeholder.
     expect(body.instructions).toBe("Do not call the `read` tool; it is a placeholder that does nothing. Use the other tools you have been given instead.");
@@ -168,7 +170,7 @@ describe("opencodeFingerprint — in-place normalization", () => {
     expect(namesOf(body.tools)).toEqual(["shell", "read"]);
     expect(map.size).toBe(0);
     expect(body.messages).toBeUndefined();
-    expect(body.tools[0].function.description).toContain("Commands run on Linux using bash.");
+    expect(body.tools[0].function.description).toContain("Commands run on Linux using zsh.");
   });
 
   it("wires a real OpenCode client down to exactly read + shell", () => {
@@ -198,7 +200,7 @@ describe("opencodeFingerprint — in-place normalization", () => {
     expect(map.size).toBe(0);
   });
 
-  it("still conceals a fingerprint name whose arguments do not line up", () => {
+  it("adapts a reserved shell name when its core command contract is usable", () => {
     const body = {
       tools: [{
         type: "function",
@@ -209,12 +211,13 @@ describe("opencodeFingerprint — in-place normalization", () => {
     };
     const map = applyFingerprintTools(body, true);
 
-    expect(namesOf(body.tools)).toEqual(["shell_client", "read", "shell"]);
-    expect(map.get("shell_client")).toBe("shell");
-    expect(body.instructions).toContain("Do not call the");
+    expect(namesOf(body.tools)).toEqual(["shell", "read"]);
+    expect(map.get("shell").callerName).toBe("shell");
+    expect(map.get("shell").arguments.command).toBe("cmd");
+    expect(body.instructions).toContain("`read` tool");
   });
 
-  it("does not normalize a different harness that exposes only a command argument", () => {
+  it("adapts a different harness that exposes only a command argument", () => {
     const body = {
       tools: [{
         type: "function",
@@ -230,9 +233,9 @@ describe("opencodeFingerprint — in-place normalization", () => {
     };
     const map = applyFingerprintTools(body, true);
 
-    expect(namesOf(body.tools)).toEqual(["shell_client", "read", "shell"]);
-    expect(map.get("shell_client")).toBe("shell");
-    expect(body.tools[0].parameters.properties).not.toHaveProperty("workdir");
+    expect(namesOf(body.tools)).toEqual(["shell", "read"]);
+    expect(map.get("shell").callerName).toBe("shell");
+    expect(body.tools[0].parameters.properties).toHaveProperty("workdir");
   });
 
   it("does not normalize a different harness with altered parameter semantics", () => {
@@ -241,12 +244,12 @@ describe("opencodeFingerprint — in-place normalization", () => {
     const body = { tools: [tool] };
     const map = applyFingerprintTools(body, true);
 
-    expect(namesOf(body.tools)).toEqual(["shell_client", "read", "shell"]);
-    expect(map.get("shell_client")).toBe("shell");
-    expect(body.tools[0].parameters.properties.timeout.description).toBe("Timeout in seconds");
+    expect(namesOf(body.tools)).toEqual(["shell", "read"]);
+    expect(map.get("shell").arguments).not.toHaveProperty("timeout");
+    expect(body.tools[0].parameters.properties.timeout.description).toContain("milliseconds");
   });
 
-  it("conceals when the caller declares an argument the fingerprint does not", () => {
+  it("adapts read while dropping caller-only optional arguments from native history", () => {
     const body = {
       tools: [{
         type: "function",
@@ -257,8 +260,9 @@ describe("opencodeFingerprint — in-place normalization", () => {
     };
     const map = applyFingerprintTools(body, true);
 
-    expect(namesOf(body.tools)).toEqual(["read_client", "read", "shell"]);
-    expect(map.get("read_client")).toBe("read");
+    expect(namesOf(body.tools)).toEqual(["read", "shell"]);
+    expect(map.get("read").callerName).toBe("read");
+    expect(map.get("read").arguments).toEqual({ path: "path" });
   });
 
   it("conceals when the caller is missing a required fingerprint argument", () => {
@@ -274,6 +278,243 @@ describe("opencodeFingerprint — in-place normalization", () => {
 
     expect(namesOf(body.tools)).toEqual(["read_client", "read", "shell"]);
     expect(map.get("read_client")).toBe("read");
+  });
+});
+
+describe("opencodeFingerprint — generic harness adapters", () => {
+  const claudeRead = {
+    type: "function",
+    name: "Read",
+    description: "Read a file",
+    parameters: {
+      type: "object",
+      properties: {
+        file_path: { type: "string" },
+        offset: { type: "integer" },
+        limit: { type: "integer" },
+        pages: { type: "string" },
+      },
+      required: ["file_path"],
+      additionalProperties: false,
+    },
+  };
+  const claudeBash = {
+    type: "function",
+    name: "Bash",
+    description: "Run a command",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        timeout: { type: "integer" },
+        description: { type: "string" },
+        run_in_background: { type: "boolean" },
+        dangerouslyDisableSandbox: { type: "boolean" },
+      },
+      required: ["command", "description", "run_in_background", "dangerouslyDisableSandbox"],
+      additionalProperties: false,
+    },
+  };
+
+  it("backs native read and shell with Claude-style caller tools", () => {
+    const body = { tools: [claudeRead, claudeBash, { type: "function", name: "Edit" }] };
+    const map = applyFingerprintTools(body, true);
+
+    expect(namesOf(body.tools)).toEqual(["read", "shell", "Edit"]);
+    expect(map.get("read").callerName).toBe("Read");
+    expect(map.get("shell").callerName).toBe("Bash");
+    expect(body.instructions).toContain("`read` (the caller's `Read` tool)");
+    expect(body.instructions).toContain("`shell` (the caller's `Bash` tool)");
+  });
+
+  it("restores Claude-style names and argument contracts", () => {
+    const body = { tools: [claudeRead, claudeBash] };
+    const map = applyFingerprintTools(body, true);
+    const response = {
+      choices: [{ message: { tool_calls: [
+        { function: { name: "read", arguments: '{"path":"/tmp/a","offset":2}' } },
+        { function: { name: "shell", arguments: '{"command":"pwd","background":true}' } },
+      ] } }],
+    };
+
+    const out = restoreToolNames(response, map);
+    expect(out.choices[0].message.tool_calls[0].function).toEqual({
+      name: "Read",
+      arguments: '{"file_path":"/tmp/a","offset":2}',
+    });
+    expect(JSON.parse(out.choices[0].message.tool_calls[1].function.arguments)).toEqual({
+      command: "pwd",
+      run_in_background: true,
+      description: "pwd",
+      dangerouslyDisableSandbox: false,
+    });
+  });
+
+  it("adapts lowercase Codex/OpenAI-style tools without client detection", () => {
+    const body = {
+      tools: [{
+        type: "function",
+        function: {
+          name: "read_file",
+          description: "Read a file",
+          parameters: {
+            type: "object",
+            properties: { filePath: { type: "string" }, lineOffset: { type: "integer" } },
+            required: ["filePath"],
+          },
+        },
+      }, {
+        type: "function",
+        function: {
+          name: "terminal",
+          description: "Run command",
+          parameters: {
+            type: "object",
+            properties: { cmd: { type: "string" }, cwd: { type: "string" }, timeoutMs: { type: "integer" } },
+            required: ["cmd"],
+          },
+        },
+      }],
+    };
+    const map = applyFingerprintTools(body, false);
+
+    expect(namesOf(body.tools)).toEqual(["read", "shell"]);
+    expect(map.get("read").callerName).toBe("read_file");
+    expect(map.get("shell").callerName).toBe("terminal");
+  });
+
+  it("does not confuse a write_file tool with a read capability", () => {
+    const body = {
+      tools: [{
+        type: "function",
+        name: "write_file",
+        parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+      }],
+    };
+    const map = applyFingerprintTools(body, true);
+
+    expect(namesOf(body.tools)).toEqual(["write_file", "read", "shell"]);
+    expect(map.size).toBe(0);
+  });
+
+  it("keeps an incompatible reserved tool separate from a compatible alias", () => {
+    const body = {
+      tools: [{
+        type: "function",
+        name: "read",
+        parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      }, claudeRead],
+    };
+    const map = applyFingerprintTools(body, true);
+
+    expect(namesOf(body.tools)).toEqual(["read_client", "read", "shell"]);
+    expect(map.get("read_client")).toBe("read");
+    expect(map.get("read").callerName).toBe("Read");
+  });
+
+  it("rejects a semantic alias whose required arguments cannot be synthesized", () => {
+    const body = {
+      tools: [{
+        type: "function",
+        name: "terminal",
+        parameters: {
+          type: "object",
+          properties: { command: { type: "string" }, approval_ticket: { type: "string" } },
+          required: ["command", "approval_ticket"],
+        },
+      }],
+    };
+    const map = applyFingerprintTools(body, true);
+
+    expect(namesOf(body.tools)).toEqual(["terminal", "read", "shell"]);
+    expect(map.size).toBe(0);
+  });
+
+  it("keeps guarded placeholders for incompatible unknown harness tools", () => {
+    const body = {
+      instructions: "Be useful.",
+      tools: [{ type: "function", name: "filesystem_lookup", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } }],
+    };
+    const map = applyFingerprintTools(body, true);
+
+    expect(namesOf(body.tools)).toEqual(["filesystem_lookup", "read", "shell"]);
+    expect(map.size).toBe(0);
+    expect(body.instructions).toContain("placeholders that do nothing");
+  });
+
+  it("rewrites prior caller tool history into the native contract", () => {
+    const body = {
+      tools: [claudeRead],
+      messages: [{ role: "assistant", tool_calls: [{ function: { name: "Read", arguments: '{"file_path":"/tmp/a","pages":"1"}' } }] }],
+    };
+    applyFingerprintTools(body, true);
+
+    expect(body.messages[0].tool_calls[0].function).toEqual({
+      name: "read",
+      arguments: '{"path":"/tmp/a"}',
+    });
+  });
+
+  it("buffers Responses argument events before restoring a caller schema", () => {
+    const body = { tools: [claudeRead] };
+    const map = applyFingerprintTools(body, true);
+    const state = {};
+    const added = adaptResponsesStreamToolCalls({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { id: "fc_c1", type: "function_call", call_id: "c1", name: "read", arguments: "" },
+    }, map, state);
+    const delta = adaptResponsesStreamToolCalls({
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_c1",
+      output_index: 0,
+      delta: '{"path":"/tmp/a"}',
+    }, map, state);
+    const done = adaptResponsesStreamToolCalls({
+      type: "response.function_call_arguments.done",
+      item_id: "fc_c1",
+      output_index: 0,
+      arguments: '{"path":"/tmp/a"}',
+    }, map, state);
+
+    expect(added.item.name).toBe("Read");
+    expect(delta.delta).toBe("");
+    expect(done.arguments).toBe('{"file_path":"/tmp/a"}');
+  });
+
+  it("restores adapted tools in Responses terminal output", () => {
+    const body = { tools: [claudeRead] };
+    const map = applyFingerprintTools(body, true);
+    const event = adaptResponsesStreamToolCalls({
+      type: "response.completed",
+      response: { output: [{ type: "function_call", name: "read", arguments: '{"path":"/tmp/a"}' }] },
+    }, map, {});
+
+    expect(event.response.output[0]).toEqual({
+      type: "function_call",
+      name: "Read",
+      arguments: '{"file_path":"/tmp/a"}',
+    });
+  });
+
+  it("buffers fragmented arguments before restoring a caller schema", () => {
+    const body = { tools: [claudeRead] };
+    const map = applyFingerprintTools(body, true);
+    const state = {};
+    const first = adaptOpenAIStreamToolCalls({
+      choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read", arguments: '{"pa' } }] }, finish_reason: null }],
+    }, map, state);
+    const second = adaptOpenAIStreamToolCalls({
+      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"/tmp/a"}' } }] }, finish_reason: null }],
+    }, map, state);
+    const finish = adaptOpenAIStreamToolCalls({
+      choices: [{ delta: {}, finish_reason: "tool_calls" }],
+    }, map, state);
+
+    expect(first.choices[0].delta.tool_calls[0].function.name).toBe("Read");
+    expect(first.choices[0].delta.tool_calls[0].function.arguments).toBe("");
+    expect(second.choices[0].delta.tool_calls[0].function.arguments).toBe("");
+    expect(finish.choices[0].delta.tool_calls[0].function.arguments).toBe('{"file_path":"/tmp/a"}');
   });
 });
 

@@ -183,16 +183,16 @@ describe("OpenCode Free User-Agent Validation", () => {
   it("defaults User-Agent to the v2 CLI form for non-opencode downstream clients", () => {
     const executor = getExecutor("opencode");
     const headersNoUa = executor.buildHeaders({});
-    expect(headersNoUa["User-Agent"]).toBe("opencode/latest/2.0.26/cli");
+    expect(headersNoUa["User-Agent"]).toBe("opencode/latest/2.1.2/cli");
 
     const headersClaude = executor.buildHeaders({ rawHeaders: { "user-agent": "Claude-Code/1.0" } });
-    expect(headersClaude["User-Agent"]).toBe("opencode/latest/2.0.26/cli");
+    expect(headersClaude["User-Agent"]).toBe("opencode/latest/2.1.2/cli");
   });
 
   it("replaces v1-style opencode User-Agents, which upstream now rejects with 403", () => {
     const executor = getExecutor("opencode");
     for (const ua of ["opencode", "opencode/1.15.0", "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14"]) {
-      expect(executor.buildHeaders({ rawHeaders: { "user-agent": ua } })["User-Agent"]).toBe("opencode/latest/2.0.26/cli");
+      expect(executor.buildHeaders({ rawHeaders: { "user-agent": ua } })["User-Agent"]).toBe("opencode/latest/2.1.2/cli");
     }
   });
 
@@ -215,7 +215,42 @@ describe("OpenCode Free User-Agent Validation", () => {
     expect(headers["x-opencode-client"]).toBe("cli");
     expect("x-opencode-request" in headers).toBe(false);
   });
+
+  it("mints native-shaped W3C trace headers on every request", () => {
+    const executor = getExecutor("opencode");
+    const headers = executor.buildHeaders({});
+
+    expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(headers.b3).toMatch(/^[0-9a-f]{32}-[0-9a-f]{16}-1-[0-9a-f]{16}$/);
+    const next = executor.buildHeaders({});
+    expect(next.traceparent).not.toBe(headers.traceparent);
+    expect(next.b3).not.toBe(headers.b3);
+  });
+
+  it("sends Accept */* like the native CLI and adds chat-lane stream_options", () => {
+    const executor = getExecutor("opencode");
+    expect(executor.buildHeaders({})["Accept"]).toBe("*/*");
+
+    const body = executor.transformRequest(
+      "big-pickle",
+      { messages: [{ role: "user", content: "hi" }] },
+      true,
+      {},
+    );
+    expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
+
+    // Caller-provided stream_options wins; Responses lane never receives it.
+    const custom = executor.transformRequest(
+      "big-pickle",
+      { messages: [{ role: "user", content: "hi" }], stream_options: { include_usage: false } },
+      true,
+      {},
+    );
+    expect(custom.stream_options).toEqual({ include_usage: false });
+  });
 });
+
 
 describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
   function anonymousCredentials(auth) {
