@@ -4,6 +4,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 const { AsyncLocalStorage } = require("async_hooks");
+const { spawn } = require("child_process");
 const inferenceAccessLog = require("./inference-access-log.cjs");
 
 // Initialize Sentry early if configured in environment
@@ -44,8 +45,50 @@ if (!globalThis.__9router_request_als) {
 // so the request-detail header sanitizer redacts it too.
 const PEER_TOKEN = crypto.randomBytes(24).toString("hex");
 process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
+// Mint before requiring Next's server bundle so route modules that import the
+// Bun transport client capture the same process-local credential as the helper.
+if (!process.env.OPENCODE_BUN_TRANSPORT_TOKEN) {
+  process.env.OPENCODE_BUN_TRANSPORT_TOKEN = crypto.randomBytes(32).toString("hex");
+}
 
 let backgroundRefreshStarted = false;
+let opencodeBunTransport = null;
+let opencodeBunRestartTimer = null;
+let opencodeBunStopping = false;
+
+function startOpenCodeBunTransport() {
+  if (opencodeBunTransport || opencodeBunStopping || process.env.OPENCODE_BUN_TRANSPORT_DISABLED === "1") return;
+  const bun = process.env.BUN_BINARY || "/usr/local/bin/bun";
+  const helper = path.join(__dirname, "open-sse", "services", "opencodeBunTransport.js");
+  if (!fs.existsSync(bun) || !fs.existsSync(helper)) {
+    console.warn("[OpenCodeBunTransport] Bun/helper unavailable; OpenCode Free requests will fail closed");
+    return;
+  }
+  if (!process.env.OPENCODE_BUN_TRANSPORT_TOKEN) {
+    process.env.OPENCODE_BUN_TRANSPORT_TOKEN = crypto.randomBytes(32).toString("hex");
+  }
+  const child = spawn(bun, [helper], {
+    cwd: __dirname,
+    env: process.env,
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  opencodeBunTransport = child;
+  child.once("exit", (code, signal) => {
+    opencodeBunTransport = null;
+    if (opencodeBunStopping) return;
+    console.error(`[OpenCodeBunTransport] exited (${signal || code}); restarting in 1s`);
+    opencodeBunRestartTimer = setTimeout(startOpenCodeBunTransport, 1000);
+    opencodeBunRestartTimer.unref?.();
+  });
+}
+
+function stopOpenCodeBunTransport() {
+  opencodeBunStopping = true;
+  if (opencodeBunRestartTimer) clearTimeout(opencodeBunRestartTimer);
+  opencodeBunRestartTimer = null;
+  if (opencodeBunTransport && !opencodeBunTransport.killed) opencodeBunTransport.kill("SIGTERM");
+  opencodeBunTransport = null;
+}
 
 function startBackgroundTokenRefreshFromCustomServer() {
   if (backgroundRefreshStarted) return;
@@ -124,11 +167,19 @@ http.createServer = (...args) => {
   };
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
+    startOpenCodeBunTransport();
     startBackgroundTokenRefreshFromCustomServer();
     inferenceAccessLog.purgeExpiredSafely();
     const cleanup = setInterval(() => inferenceAccessLog.purgeExpiredSafely(), 24 * 60 * 60 * 1000);
     cleanup.unref?.();
-    server.once("close", () => { clearInterval(cleanup); inferenceAccessLog.flushPending(); });
+    const stop = () => {
+      clearInterval(cleanup);
+      inferenceAccessLog.flushPending();
+      stopOpenCodeBunTransport();
+    };
+    server.once("close", stop);
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.

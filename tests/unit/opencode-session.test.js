@@ -8,6 +8,10 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: fetchMock,
 }));
 
+vi.mock("../../open-sse/services/opencodeBunClient.js", () => ({
+  opencodeBunFetch: fetchMock,
+}));
+
 import { getExecutor } from "../../open-sse/executors/index.js";
 import {
   OPENCODE_SESSION_RE,
@@ -265,6 +269,41 @@ describe("OpenCode Free User-Agent Validation", () => {
     );
     expect(custom.stream_options).toEqual({ include_usage: false });
   });
+
+  it("wraps foreign client system instructions in the public OpenCode harness", () => {
+    const executor = getExecutor("opencode");
+    const body = executor.transformRequest(
+      "glm-5.3-flash-free",
+      {
+        messages: [
+          { role: "system", content: "You are Claude Code." },
+          { role: "user", content: "hi" },
+        ],
+        max_tokens: 4096,
+      },
+      true,
+      { rawHeaders: { "user-agent": "claude-code/2.1.0" } },
+    );
+
+    expect(body.messages[0].content).toMatch(/^You are an AI agent running in OpenCode/);
+    expect(body.messages[0].content).toContain("You are Claude Code.");
+    expect(body.max_tokens).toBeUndefined();
+    expect(body.max_completion_tokens).toBe(4096);
+  });
+
+  it("does not duplicate the harness for a native OpenCode request", () => {
+    const executor = getExecutor("opencode");
+    const nativeSystem = "You are an AI agent running in OpenCode, a coding agent harness.";
+    const body = executor.transformRequest(
+      "glm-5.3-flash-free",
+      { messages: [{ role: "system", content: nativeSystem }, { role: "user", content: "hi" }] },
+      true,
+      { rawHeaders: { "user-agent": "opencode/latest/2.1.2/cli" } },
+    );
+
+    expect(body.messages[0].content).toContain(nativeSystem);
+    expect(body.messages[0].content.match(/You are an AI agent running in OpenCode/g)).toHaveLength(1);
+  });
 });
 
 
@@ -444,20 +483,6 @@ describe("OpenCode 429 FreeUsageLimitError session rotation", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  // The lane admits sporadically between resets (native CLI succeeded minutes
-  // after identical 429s), so the multi-hour Retry-After must not cool the
-  // identity down until the reset — cap it to the short re-probe window.
-  it("caps the FreeUsageLimitError cooldown to the re-probe window", () => {
-    const executor = getExecutor("opencode");
-    const parsed = executor.parseError(
-      { status: 429 },
-      JSON.stringify({ type: "error", error: { type: "FreeUsageLimitError", message: "Free usage limit reached." } }),
-    );
-    expect(parsed.status).toBe(429);
-    expect(parsed.message).toMatch(/Free usage limit reached/);
-    expect(parsed.resetsAtMs).toBeGreaterThan(Date.now() + 60_000);
-    expect(parsed.resetsAtMs).toBeLessThan(Date.now() + 120_000);
-  });
 });
 
 describe("translateSessionId produces a canonical inverted-timestamp session", () => {

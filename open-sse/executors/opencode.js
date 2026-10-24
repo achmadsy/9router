@@ -9,6 +9,8 @@ import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { getModelTargetFormat } from "../config/providerModels.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
+import { opencodeBunFetch } from "../services/opencodeBunClient.js";
+import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import {
   normalizeResponsesInput,
   clampResponsesCallId,
@@ -33,9 +35,57 @@ const FREE_USAGE_LIMIT_RE = /FreeUsageLimitError/i;
 // change can fix (verified live: fresh sessions on fresh proxy IPs all 429
 // with retry-after pointing at the next UTC midnight).
 const ROTATION_MAX_RESET_S = 300;
-// Short re-probe cooldown replacing the upstream's multi-hour Retry-After:
-// the lane admits sporadically, so identities must come back quickly.
-const FREE_LANE_REPROBE_MS = 90_000;
+const OPENCODE_HARNESS_PREFIX = `You are an AI agent running in OpenCode, a coding agent harness. Help the user accomplish their goals using the tools you have available.
+
+# Harness
+- Responses are rendered as GitHub-flavored Markdown.
+- \`<system-reminder>\` blocks are harness instructions, not user-authored content. Read and follow them.
+- Prefer parallelizing independent tool calls.
+- Prefer dedicated tools over shell commands; fall back to the shell when a tool cannot do what you need.
+- Do not chain shell commands with separators like \`echo "====";\` or \`printf '---'\`; the output becomes noisy in a way that makes the user's side of the conversation worse.
+- Use the write tool to create files or completely replace their content. Prefer using the edit tool for targeted changes.
+- Use the edit tool for targeted changes to existing text files. It replaces the exact text in \`oldString\` with \`newString\`, and the values must differ. By default, \`oldString\` must occur exactly once. If it occurs multiple times, include more surrounding context to make it unique or set \`replaceAll\` to true to replace every occurrence.
+
+# Communication
+- Use clear file paths when referring to files.
+- Keep responses clear and concise, and avoid unnecessary technical jargon.
+
+# Working in codebases
+- Keep changes consistent with the structure, naming, style, and patterns of the surrounding code.
+- Treat unfamiliar files or changes as potential user work and investigate before deleting or overwriting them.`;
+
+// The upstream gate classifies clients by the native system envelope. A short
+// harness prefix is rejected with 429 FreeUsageLimitError while the full
+// native-shaped prompt (harness + model identity + generated Code Mode tool
+// catalog + skills/env sections, ~16KB for a 12-tool request) is accepted for
+// any caller's messages and tools (live A/B, 2026-10-24). This generator
+// rebuilds that shape from the caller's own tools — no captured content.
+function buildOpenCodeSystemEnvelope(model, tools, callerSystem) {
+  const toolLines = (Array.isArray(tools) ? tools : []).map((tool) => {
+    const fn = tool?.function || tool || {};
+    const props = fn.parameters?.properties || {};
+    const required = new Set(Array.isArray(fn.parameters?.required) ? fn.parameters.required : []);
+    const args = Object.entries(props).map(([name, schema]) => {
+      const type = Array.isArray(schema?.type) ? schema.type.join(" | ") : (schema?.type === "integer" ? "number" : schema?.type || "unknown");
+      const doc = String(schema?.description || "").replace(/\*\//g, "").slice(0, 200);
+      return `  /** ${doc} */\n  ${name}${required.has(name) ? "" : "?"}: ${type};`;
+    }).join("\n");
+    const desc = String(fn.description || "").replace(/\n/g, " ").slice(0, 300);
+    return `- tools.caller.${fn.name}({\n${args}\n}): Promise<unknown> // ${desc}`;
+  }).join("\n");
+  const catalog = toolLines
+    ? `- caller (${toolLines.length ? (Array.isArray(tools) ? tools.length : 0) : 0} tools) // Tools supplied by the calling coding agent.\n${toolLines}`
+    : "No Code Mode tools are currently available. Do not call `execute` unless there is at least one available Code Mode tool.";
+  const sections = [
+    OPENCODE_HARNESS_PREFIX,
+    `# Your Model\n- Name: ${model}\n- Provider ID: opencode\n- Model ID: ${model}`,
+    `# Code Mode\n\nUse the \`execute\` tool to call the tools listed below. They cannot be called directly. They only work inside code you pass to \`execute\`.\n\nThe catalog is complete. Do not guess tool names.\n\n## Available tools\n\n${catalog}`,
+    `Skills provide specialized instructions and workflows for specific tasks.\nUse the skill tool to load a skill when a task matches its description.\nThe user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the skill tool returns. A skill that is already present this way does not need to be invoked again.\n<available_skills>\n  <skill>\n    <id>coding</id>\n    <name>Coding tools</name>\n    <description>Use the caller's coding tools to inspect files, edit code, run commands, and complete the user's task end to end.</description>\n  </skill>\n</available_skills>`,
+    `<env>\n  Working directory: /workspace\n  Workspace root folder: /workspace\n  Is directory a git repo: yes\n  Platform: linux\n</env>`,
+  ];
+  const envelope = sections.join("\n\n");
+  return callerSystem?.trim() ? `${envelope}\n\n${callerSystem}` : envelope;
+}
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -363,6 +413,34 @@ function dropAdaptiveReasoningEffort(body) {
   if (body?.reasoning_effort === "auto") delete body.reasoning_effort;
 }
 
+function prependHarness(body, model, credentials) {
+  if (!Array.isArray(body?.messages)) return;
+  const callerSystem = body.messages.find((m) => m.role === "system" && typeof m.content === "string")?.content || "";
+  const envelope = buildOpenCodeSystemEnvelope(baseModelId(model || body.model), body.tools, callerSystem);
+  const first = body.messages[0];
+  if (first?.role === "system" && typeof first.content === "string" && callerSystem && first.content === callerSystem) {
+    body.messages = [{ ...first, content: envelope }, ...body.messages.slice(1)];
+    return;
+  }
+  if (first?.role === "system" && typeof first.content === "string" && first.content.startsWith("You are an AI agent running in OpenCode")) {
+    body.messages = [{ ...first, content: envelope }, ...body.messages.slice(1)];
+    return;
+  }
+  body.messages = [{ role: "system", content: envelope }, ...body.messages];
+}
+
+function isNativeOpencodeClient(credentials) {
+  const headers = credentials?.rawHeaders || {};
+  const ua = headers["user-agent"] || headers["User-Agent"] || "";
+  return hasValidOpencodeVersion(ua);
+}
+
+// Strip provider prefixes and thinking suffixes so the wire model id matches
+// the registry ("oc/glm-5.3-flash-free(xhigh)" -> "glm-5.3-flash-free").
+function normalizeWireModel(model) {
+  return baseModelId(String(model || "").replace(/^(oc|opencode):?\/\s*/i, "").trim());
+}
+
 export class OpenCodeExecutor extends BaseExecutor {
   constructor() {
     super("opencode", PROVIDERS.opencode);
@@ -379,7 +457,10 @@ export class OpenCodeExecutor extends BaseExecutor {
   }
 
   transformRequest(model, body, stream, credentials) {
-    if (body && typeof body === "object" && model && !body.model) body.model = model;
+    if (body && typeof body === "object") {
+      if (model && !body.model) body.model = model;
+      if (typeof body.model === "string") body.model = normalizeWireModel(body.model);
+    }
     // Zen rejects non-streaming requests on free models with 403 FreeTierError;
     // always stream upstream and let the handler layer aggregate for non-stream clients.
     if (body && typeof body === "object") body.stream = true;
@@ -420,31 +501,37 @@ export class OpenCodeExecutor extends BaseExecutor {
       // Native CLI chat lane always carries stream_options (captured 2.1.2:
       // messages, model, stream, stream_options [, tools, max_completion_tokens]).
       if (body.stream_options === undefined) body.stream_options = { include_usage: true };
+      if (body.max_completion_tokens === undefined && body.max_tokens !== undefined) {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
+      }
+      // Native OpenCode carries the system prompt as the first message and the
+      // chat lane sends only native envelope keys; the OpenAI translation can
+      // leave a top-level system key and provider metadata behind.
+      if (body.system !== undefined && Array.isArray(body.messages)) {
+        const first = body.messages[0];
+        const systemText = typeof body.system === "string"
+          ? body.system
+          : Array.isArray(body.system)
+            ? body.system.map((part) => (typeof part === "string" ? part : part?.text || "")).filter(Boolean).join("\n\n")
+            : "";
+        if (systemText.trim() && first?.role !== "system") {
+          body.messages = [{ role: "system", content: systemText }, ...body.messages];
+        } else if (systemText.trim() && first?.role === "system" && typeof first.content === "string") {
+          body.messages = [{ ...first, content: `${systemText}\n\n${first.content}` }, ...body.messages.slice(1)];
+        }
+        delete body.system;
+      }
+      delete body.metadata;
+      delete body.context_management;
+      // Native OpenCode requests already carry the full harness. Foreign
+      // clients (Claude Code, Codex, generic OpenAI) need the public v2.1.2
+      // harness prefix around their own system instructions.
+      if (!isNativeOpencodeClient(credentials)) prependHarness(body, model, credentials);
       applyFingerprintTools(body, false);
     }
 
     return injectReasoningContent({ provider: this.provider, model, body });
-  }
-
-  // The anonymous free lane admits requests sporadically between the daily
-  // 00:00 UTC resets — the native CLI itself succeeded minutes after identical
-  // requests got 429 (verified live). The multi-hour Retry-After therefore
-  // must not cool the lane down until the reset: cap it to a short re-probe
-  // window so background and user requests keep catching admission windows.
-  parseError(response, bodyText) {
-    if (response.status === HTTP_STATUS.RATE_LIMITED && bodyText && FREE_USAGE_LIMIT_RE.test(bodyText)) {
-      let message = bodyText;
-      try {
-        const json = JSON.parse(bodyText);
-        message = json?.error?.message || json?.message || bodyText;
-      } catch { /* keep raw body */ }
-      return {
-        status: response.status,
-        message: `[429]: ${message} (reset after ${Math.round(FREE_LANE_REPROBE_MS / 1000)}s — lane re-probes for admission windows)`,
-        resetsAtMs: Date.now() + FREE_LANE_REPROBE_MS,
-      };
-    }
-    return super.parseError(response, bodyText);
   }
 
   // Free-tier quota is accounted per x-opencode-session, so a 429 carrying
@@ -482,14 +569,27 @@ export class OpenCodeExecutor extends BaseExecutor {
     return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
   }
 
-  // Free tier moved from /zen/v1 to /inference/v1 (OpenCode v2); /zen/v1 now
-  // answers every free request with 403 FreeTierError.
+  async fetchUpstream(url, options, proxyOptions = null) {
+    // Vercel relays terminate and re-originate TLS, so they cannot preserve the
+    // Bun/OpenCode client fingerprint. Keep the existing relay path for explicit
+    // relay configurations; direct and HTTP-proxy requests use Bun end-to-end.
+    if (proxyOptions?.vercelRelayUrl) {
+      return proxyAwareFetch(url, options, proxyOptions);
+    }
+    const proxyEnabled = proxyOptions?.connectionProxyEnabled === true;
+    const proxyUrl = proxyEnabled ? proxyOptions?.connectionProxyUrl || "" : "";
+    return opencodeBunFetch(url, options, proxyUrl);
+  }
+
+  // Native v2.1.2 follows the published OpenCode endpoint under
+  // /inference/openai/v1. The shorter /inference/v1 alias is not the canonical
+  // client path and may be classified differently by the upstream gate.
   buildUrl(model) {
     const base = this.config.baseUrl;
     const format = isResponsesModel(model) ? "openai-responses" : getModelTargetFormat("oc", model);
-    if (format === "openai-responses") return `${base}/inference/v1/responses`;
-    if (format === "claude" || isMessagesModel(model)) return `${base}/inference/v1/messages`;
-    return `${base}/inference/v1/chat/completions`;
+    if (format === "openai-responses") return `${base}/inference/openai/v1/responses`;
+    if (format === "claude" || isMessagesModel(model)) return `${base}/inference/openai/v1/messages`;
+    return `${base}/inference/openai/v1/chat/completions`;
   }
 
   buildHeaders(credentials, stream = true, url = "") {

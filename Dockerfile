@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22.23.4-bookworm
+ARG BUN_IMAGE=oven/bun:1.4.4-debian
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG APP_VERSION=unknown
 
+FROM ${BUN_IMAGE} AS bun-runtime
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
 
@@ -39,6 +41,10 @@ RUN npm run build
 FROM ${NODE_IMAGE} AS runner
 ARG APP_VERSION
 WORKDIR /app
+
+# OpenCode Free validates Bun's native transport fingerprint. This helper
+# runtime is used only by the loopback allowlisted opencode.ai transport.
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
 
 # Use Aliyun Debian mirrors again on the runner stage
 RUN sed -i \

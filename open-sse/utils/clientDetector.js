@@ -9,6 +9,7 @@ const NATIVE_PAIRS = {
   "gemini-cli": ["gemini-cli"],
   "antigravity": ["antigravity"],
   "codex": ["codex"],
+  "opencode": ["opencode"],
 };
 
 /**
@@ -31,6 +32,10 @@ export function detectClientTool(headers = {}, body = {}) {
   if (ua.includes("githubcopilotchat") || openaiIntent === "conversation-panel" || initiator === "user") {
     return "github-copilot";
   }
+
+  // OpenCode v2 native CLI/desktop. Check before the generic x-app=cli marker
+  // so native requests can pass through to the OpenCode provider losslessly.
+  if (/^opencode\/[a-z0-9-]+\/\d+\.\d+\.\d+\/[a-z0-9-]+$/i.test(ua)) return "opencode";
 
   // Claude Code / Claude CLI
   if (ua.includes("claude-cli") || ua.includes("claude-code") || xApp === "cli") return "claude";
