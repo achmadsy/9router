@@ -33,6 +33,9 @@ const FREE_USAGE_LIMIT_RE = /FreeUsageLimitError/i;
 // change can fix (verified live: fresh sessions on fresh proxy IPs all 429
 // with retry-after pointing at the next UTC midnight).
 const ROTATION_MAX_RESET_S = 300;
+// Short re-probe cooldown replacing the upstream's multi-hour Retry-After:
+// the lane admits sporadically, so identities must come back quickly.
+const FREE_LANE_REPROBE_MS = 90_000;
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -421,6 +424,27 @@ export class OpenCodeExecutor extends BaseExecutor {
     }
 
     return injectReasoningContent({ provider: this.provider, model, body });
+  }
+
+  // The anonymous free lane admits requests sporadically between the daily
+  // 00:00 UTC resets — the native CLI itself succeeded minutes after identical
+  // requests got 429 (verified live). The multi-hour Retry-After therefore
+  // must not cool the lane down until the reset: cap it to a short re-probe
+  // window so background and user requests keep catching admission windows.
+  parseError(response, bodyText) {
+    if (response.status === HTTP_STATUS.RATE_LIMITED && bodyText && FREE_USAGE_LIMIT_RE.test(bodyText)) {
+      let message = bodyText;
+      try {
+        const json = JSON.parse(bodyText);
+        message = json?.error?.message || json?.message || bodyText;
+      } catch { /* keep raw body */ }
+      return {
+        status: response.status,
+        message: `[429]: ${message} (reset after ${Math.round(FREE_LANE_REPROBE_MS / 1000)}s — lane re-probes for admission windows)`,
+        resetsAtMs: Date.now() + FREE_LANE_REPROBE_MS,
+      };
+    }
+    return super.parseError(response, bodyText);
   }
 
   // Free-tier quota is accounted per x-opencode-session, so a 429 carrying

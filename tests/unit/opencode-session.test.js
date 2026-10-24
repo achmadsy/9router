@@ -443,6 +443,21 @@ describe("OpenCode 429 FreeUsageLimitError session rotation", () => {
     expect(result.response.status).toBe(429);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  // The lane admits sporadically between resets (native CLI succeeded minutes
+  // after identical 429s), so the multi-hour Retry-After must not cool the
+  // identity down until the reset — cap it to the short re-probe window.
+  it("caps the FreeUsageLimitError cooldown to the re-probe window", () => {
+    const executor = getExecutor("opencode");
+    const parsed = executor.parseError(
+      { status: 429 },
+      JSON.stringify({ type: "error", error: { type: "FreeUsageLimitError", message: "Free usage limit reached." } }),
+    );
+    expect(parsed.status).toBe(429);
+    expect(parsed.message).toMatch(/Free usage limit reached/);
+    expect(parsed.resetsAtMs).toBeGreaterThan(Date.now() + 60_000);
+    expect(parsed.resetsAtMs).toBeLessThan(Date.now() + 120_000);
+  });
 });
 
 describe("translateSessionId produces a canonical inverted-timestamp session", () => {
