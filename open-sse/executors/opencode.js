@@ -154,6 +154,13 @@ function identityKey(credentials) {
   return "opencode:default";
 }
 
+// Native 2.1.2 sends a stable 40-hex project id per device/workspace
+// (captured live) instead of a word. Derive one per connection identity so
+// upstream sees a native-shaped, per-connection project bucket.
+function projectKey(credentials) {
+  return crypto.createHash("sha256").update(identityKey(credentials)).digest("hex").slice(0, 40);
+}
+
 export function stableSessionId(credentials) {
   const key = identityKey(credentials);
   const existing = stableOpencodeSessions.get(key);
@@ -489,7 +496,7 @@ export class OpenCodeExecutor extends BaseExecutor {
       "x-opencode-session-id": session,
       "x-session-affinity": session,
       "x-session-id": session,
-      "x-opencode-project": lower["x-opencode-project"] || "global",
+      "x-opencode-project": lower["x-opencode-project"] || projectKey(credentials),
       "traceparent": `00-${traceId}-${spanId}-01`,
       "b3": `${traceId}-${spanId}-1-${parentSpanId}`,
       // Native CLI sends Accept: */* even on the SSE chat lane.

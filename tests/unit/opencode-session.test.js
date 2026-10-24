@@ -216,6 +216,22 @@ describe("OpenCode Free User-Agent Validation", () => {
     expect("x-opencode-request" in headers).toBe(false);
   });
 
+  // Native 2.1.2 sends a stable 40-hex project id per device, not a word.
+  it("derives a stable 40-hex x-opencode-project per connection identity", () => {
+    const executor = getExecutor("opencode");
+    const a = executor.buildHeaders({ rawHeaders: {} });
+    const b = executor.buildHeaders({ rawHeaders: {} });
+    expect(a["x-opencode-project"]).toMatch(/^[0-9a-f]{40}$/);
+    expect(b["x-opencode-project"]).toBe(a["x-opencode-project"]);
+
+    const other = executor.buildHeaders({ connectionId: "other", rawHeaders: {} });
+    expect(other["x-opencode-project"]).toMatch(/^[0-9a-f]{40}$/);
+    expect(other["x-opencode-project"]).not.toBe(a["x-opencode-project"]);
+
+    const passed = executor.buildHeaders({ rawHeaders: { "x-opencode-project": "d53a3b191b8fc0ffb99e6717016927e50c7a11bc" } });
+    expect(passed["x-opencode-project"]).toBe("d53a3b191b8fc0ffb99e6717016927e50c7a11bc");
+  });
+
   it("mints native-shaped W3C trace headers on every request", () => {
     const executor = getExecutor("opencode");
     const headers = executor.buildHeaders({});
