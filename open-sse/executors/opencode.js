@@ -530,11 +530,13 @@ export class OpenCodeExecutor extends BaseExecutor {
       }
       delete body.metadata;
       delete body.context_management;
-      // Only the full native envelope may pass unchanged. OpenCode itself also
-      // uses ordinary OpenAI-compatible requests for custom providers, so its
-      // User-Agent alone does not prove that the cloud harness is present.
-      if (!hasNativeOpencodeEnvelope(body)) prependHarness(body, model, credentials);
+      // Add the native fingerprint definitions before synthesizing an envelope
+      // so no-tool auxiliary requests catalog the same tools sent on the wire.
+      // OpenCode custom providers do not carry the native cloud envelope even
+      // though their User-Agent is native-shaped.
+      const hasNativeEnvelope = hasNativeOpencodeEnvelope(body);
       applyFingerprintTools(body, false);
+      if (!hasNativeEnvelope) prependHarness(body, model, credentials);
     }
 
     return injectReasoningContent({ provider: this.provider, model, body });

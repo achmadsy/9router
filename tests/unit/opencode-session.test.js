@@ -401,6 +401,10 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
     expect(chatNoTools.tool_choice).toBeUndefined();
     expect(chatNoTools.tools.map((t) => t.function?.name)).toEqual(["read", "shell"]);
     expect(chatNoTools.messages[0].role).toBe("system");
+    expect(chatNoTools.messages[0].content).toContain("- tools.caller.read(");
+    expect(chatNoTools.messages[0].content).toContain("- tools.caller.shell(");
+    expect(chatNoTools.messages[0].content).not.toContain("No Code Mode tools are currently available");
+    expect(chatNoTools.messages[0].content).not.toContain("placeholders that do nothing");
 
     const chatWithTools = executor.transformRequest("nemotron-3-ultra-free", {
       messages: [{ role: "user", content: "hi" }],

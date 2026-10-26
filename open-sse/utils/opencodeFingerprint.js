@@ -495,6 +495,7 @@ function noteUnavailableTools(body, flat, names) {
 export function applyFingerprintTools(body, flat) {
   if (!body || typeof body !== "object") return new Map();
 
+  const hadCallerTools = Array.isArray(body.tools) && body.tools.length > 0;
   const genericAdapters = findGenericAdapters(body.tools);
   const adaptedMap = new Map();
   const adaptedTools = applyGenericAdapters(Array.isArray(body.tools) ? body.tools : [], genericAdapters, adaptedMap);
@@ -505,7 +506,7 @@ export function applyFingerprintTools(body, flat) {
   retargetToolChoice(body, map);
   aliasHistoryToolCalls(body, map);
   noteAdaptedTools(body, flat, map);
-  if (appended.length) noteUnavailableTools(body, flat, appended);
+  if (hadCallerTools && appended.length) noteUnavailableTools(body, flat, appended);
 
   // Responses keeps its explicit auto default. Never default to "none": upstream
   // answers tool_choice "none" with 403 FreeTierError.

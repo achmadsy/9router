@@ -42,7 +42,15 @@ vi.mock("@/lib/db/repos/selfAwareRepo.js", () => {
         r.scopeType === scopeType && scopeIds.includes(r.scopeId) &&
         new Date(r.expiresAt).getTime() > nowMs)),
     deleteCooldown: vi.fn(async () => true),
-    deleteByScope: vi.fn(async () => true),
+    deleteByScope: vi.fn(async (provider, model, scopeType, scopeId) => {
+      for (const [key, row] of store) {
+        if (row.provider === provider && row.scopeType === scopeType && row.scopeId === scopeId &&
+            (model == null || (row.model || "") === (model || ""))) {
+          store.delete(key);
+        }
+      }
+      return true;
+    }),
     deleteAllActive: vi.fn(async () => { const n = store.size; store.clear(); return n; }),
     purgeExpired: vi.fn(async () => 0),
     __store: store,
@@ -93,6 +101,21 @@ beforeEach(async () => {
 });
 
 describe("OpenCode proxy-scope isolation", () => {
+  it("classifies only native-client no-tool FreeUsageLimitError as auxiliary", () => {
+    const base = {
+      provider: "opencode",
+      userAgent: "opencode/latest/2.1.2/cli",
+      body: { messages: [{ role: "user", content: "title" }] },
+      status: 429,
+      errorText: "[429]: FreeUsageLimitError",
+    };
+    expect(auth.isOpenCodeAuxiliaryFreeLimit(base)).toBe(true);
+    expect(auth.isOpenCodeAuxiliaryFreeLimit({ ...base, body: { ...base.body, tools: [{ type: "function" }] } })).toBe(false);
+    expect(auth.isOpenCodeAuxiliaryFreeLimit({ ...base, userAgent: "claude-code/2.1.0" })).toBe(false);
+    expect(auth.isOpenCodeAuxiliaryFreeLimit({ ...base, errorText: "ordinary rate limit" })).toBe(false);
+    expect(auth.isOpenCodeAuxiliaryFreeLimit({ ...base, provider: "glm" })).toBe(false);
+  });
+
   it("marks cooldown on selected proxy identity, no fake connection rows, no modelLock", async () => {
     const result = await auth.markAccountUnavailable({
       credentials: {
@@ -120,6 +143,72 @@ describe("OpenCode proxy-scope isolation", () => {
     expect(rows[0].source).toBe("upstream-header");
     // Real noauth shape (id: "noauth", no connectionId) must still reach proxy-cooldown recording
     expect(rows[0].provider).toBe("opencode");
+  });
+
+  it("caps OpenCode upstream reset headers to a 90-second re-probe", async () => {
+    const result = await auth.markAccountUnavailable({
+      credentials: {
+        id: "noauth", provider: "opencode",
+        providerSpecificData: {
+          cooldownTarget: { scopeType: "proxy", scopeId: "pool-a", proxyPoolId: "pool-a" },
+        },
+      },
+      status: 429,
+      errorText: "FreeUsageLimitError",
+      provider: "opencode",
+      model: "glm-5.3-flash-free",
+      cooldownHint: {
+        source: "upstream-header", headerName: "Retry-After",
+        expiresAtMs: Date.now() + 12 * 60 * 60 * 1000,
+        durationMs: 12 * 60 * 60 * 1000,
+      },
+    });
+
+    expect(result).toEqual({ shouldFallback: true, cooldownMs: 90_000 });
+    const row = [...repoMock.__store.values()][0];
+    const remainingMs = new Date(row.expiresAt).getTime() - Date.now();
+    expect(remainingMs).toBeGreaterThanOrEqual(89_000);
+    expect(remainingMs).toBeLessThanOrEqual(90_000);
+    expect(row.source).toBe("upstream-header");
+  });
+
+  it("preserves ordinary OpenCode 429 cooldowns that are not FreeUsageLimitError", async () => {
+    const result = await auth.markAccountUnavailable({
+      credentials: {
+        id: "noauth", provider: "opencode",
+        providerSpecificData: {
+          cooldownTarget: { scopeType: "proxy", scopeId: "pool-a", proxyPoolId: "pool-a" },
+        },
+      },
+      status: 429,
+      errorText: "ordinary rate limit",
+      provider: "opencode",
+      model: "glm-5.3-flash-free",
+      cooldownHint: {
+        source: "upstream-header", headerName: "Retry-After",
+        expiresAtMs: Date.now() + 5 * 60 * 1000,
+        durationMs: 5 * 60 * 1000,
+      },
+    });
+
+    expect(result).toEqual({ shouldFallback: true, cooldownMs: 5 * 60 * 1000 });
+  });
+
+  it("successful noauth request clears its matching OpenCode proxy cooldown", async () => {
+    await repoMock.upsertCooldown({
+      provider: "opencode", model: "glm-5.3-flash-free", scopeType: "proxy", scopeId: "pool-a",
+      expiresAtMs: Date.now() + 90_000, source: "upstream-header",
+    });
+
+    await auth.clearAccountError("noauth", {
+      id: "noauth",
+      provider: "opencode",
+      providerSpecificData: {
+        cooldownTarget: { scopeType: "proxy", scopeId: "pool-a", proxyPoolId: "pool-a" },
+      },
+    }, "glm-5.3-flash-free");
+
+    expect(repoMock.__store.size).toBe(0);
   });
 
   it("proxy A blocked does not block proxy B", async () => {

@@ -6,6 +6,7 @@ import {
   clearAccountError,
   extractApiKey,
   isValidApiKey,
+  isOpenCodeAuxiliaryFreeLimit,
 } from "../services/auth.js";
 import { resolveApiKeyContext, authorizeOriginalResource } from "../services/apiKeyPolicy.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
@@ -354,7 +355,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         });
       },
       onRequestSuccess: async () => {
-        await clearAccountError(credentials.connectionId, credentials, model);
+        await clearAccountError(credentials.connectionId || credentials.id, credentials, model);
         // "Consecutive" strikes: a success clears the breaker for this pair.
         clearAntigravityStrikes(credentials.connectionId, model);
       },
@@ -375,6 +376,21 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) return result.response;
+
+    // OpenCode custom providers send no-tool auxiliary requests beside the main
+    // agent request. A FreeUsageLimitError on that auxiliary shape does not mean
+    // the proxy is exhausted; return it without rotating or cooling identities.
+    if (isOpenCodeAuxiliaryFreeLimit({
+      provider,
+      userAgent,
+      body: clientRawRequest?.body || body,
+      status: result.status,
+      errorText: result.error,
+      upstreamBody: result.upstreamBody,
+    })) {
+      log.warn("OPENCODE", `Auxiliary no-tool request rejected (${result.status}); proxy remains eligible`);
+      return result.response;
+    }
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;

@@ -16,6 +16,19 @@ import * as log from "../utils/logger.js";
 let selectionMutex = Promise.resolve();
 
 const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit for your plan";
+const OPENCODE_FREE_USAGE_LIMIT_RE = /FreeUsageLimitError/i;
+const OPENCODE_FREE_REPROBE_MS = 90 * 1000;
+
+export function isOpenCodeAuxiliaryFreeLimit({ provider, userAgent, body, status, errorText, upstreamBody } = {}) {
+  const isOpenCodeClient = /^opencode\/[a-z0-9-]+\/\d+\.\d+\.\d+\/[a-z0-9-]+$/i.test(String(userAgent || ""));
+  const hasCallerTools = Array.isArray(body?.tools) && body.tools.length > 0;
+  const error = `${errorText || ""}\n${upstreamBody || ""}`;
+  return resolveRuntimeProviderId(resolveProviderId(provider || "")) === "opencode"
+    && Number(status) === 429
+    && isOpenCodeClient
+    && !hasCallerTools
+    && OPENCODE_FREE_USAGE_LIMIT_RE.test(error);
+}
 
 function githubMonthlyResetMs(status, errorText, provider) {
   if (resolveProviderId(provider) !== "github" || Number(status) !== 402) return null;
@@ -114,6 +127,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         : undefined;
       return {
         id: "noauth",
+        provider: providerId,
         connectionName: "Public",
         isActive: true,
         accessToken: "public",
@@ -476,18 +490,30 @@ async function markProxyCooldown({ status, errorText, provider, model, resetsAtM
   if (!decision.shouldFallback || decision.cooldownMs <= 0) {
     return { shouldFallback: false, cooldownMs: 0 };
   }
+  // FreeUsageLimitError can describe a malformed auxiliary request while a
+  // sibling agent request succeeds. Never let its midnight Retry-After poison
+  // every proxy identity; briefly re-probe instead.
+  const isOpenCodeFreeLimit = resolvedProvider === "opencode"
+    && status === 429
+    && OPENCODE_FREE_USAGE_LIMIT_RE.test(String(errorText || ""));
+  const cooldownMs = isOpenCodeFreeLimit
+    ? Math.min(decision.cooldownMs, OPENCODE_FREE_REPROBE_MS)
+    : decision.cooldownMs;
+  const expiresAtMs = cooldownMs === decision.cooldownMs && decision.expiresAt
+    ? new Date(decision.expiresAt).getTime()
+    : Date.now() + cooldownMs;
   await upsertSelfAwareCooldown({
     provider: resolvedProvider,
     model: model || "",
     scopeType: "proxy",
     scopeId: decision.scopeId || "direct",
-    expiresAtMs: decision.expiresAt ? new Date(decision.expiresAt).getTime() : Date.now() + decision.cooldownMs,
+    expiresAtMs,
     source: decision.source || "upstream-header",
     reason: decision.reason,
     status: status ?? null,
     headerName: decision.headerName,
   }).catch(() => {});
-  return { shouldFallback: true, cooldownMs: decision.cooldownMs };
+  return { shouldFallback: true, cooldownMs };
 }
 
 /**
@@ -500,8 +526,22 @@ async function markProxyCooldown({ status, errorText, provider, model, resetsAtM
  * @param {string|null} model - model that succeeded
  */
 export async function clearAccountError(connectionId, currentConnection, model = null) {
-  if (!connectionId || connectionId === "noauth") return;
+  if (!connectionId) return;
   const conn = currentConnection._connection || currentConnection;
+  if (connectionId === "noauth") {
+    const provider = resolveProviderId(conn.provider || "");
+    const target = conn.providerSpecificData?.cooldownTarget || conn.cooldownTarget || null;
+    if (provider === "opencode" && target?.scopeId) {
+      await clearSelfAwareCooldown({
+        provider,
+        model: model || "",
+        scopeType: "proxy",
+        scopeId: target.scopeId,
+      }).catch(() => {});
+      await purgeExpiredSelfAwareCooldowns().catch(() => {});
+    }
+    return;
+  }
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));
 
