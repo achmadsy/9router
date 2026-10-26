@@ -291,9 +291,37 @@ describe("OpenCode Free User-Agent Validation", () => {
     expect(body.max_completion_tokens).toBe(4096);
   });
 
-  it("does not duplicate the harness for a native OpenCode request", () => {
+  it("wraps plain OpenAI-compatible requests even when OpenCode is the caller", () => {
     const executor = getExecutor("opencode");
-    const nativeSystem = "You are an AI agent running in OpenCode, a coding agent harness.";
+    const body = executor.transformRequest(
+      "glm-5.3-flash-free",
+      {
+        messages: [
+          { role: "system", content: "You are OpenCode using a custom provider." },
+          { role: "user", content: "hi" },
+        ],
+      },
+      true,
+      { rawHeaders: { "user-agent": "opencode/latest/2.1.2/cli" } },
+    );
+
+    expect(body.messages[0].content).toMatch(/^You are an AI agent running in OpenCode/);
+    expect(body.messages[0].content).toContain("You are OpenCode using a custom provider.");
+    expect(body.messages[0].content).toContain("# Your Model");
+    expect(body.messages[0].content).toContain("# Code Mode");
+    expect(body.messages[0].content).toContain("<available_skills>");
+    expect(body.messages[0].content).toContain("<env>");
+  });
+
+  it("does not duplicate a complete native OpenCode envelope", () => {
+    const executor = getExecutor("opencode");
+    const nativeSystem = [
+      "You are an AI agent running in OpenCode, a coding agent harness.",
+      "# Your Model",
+      "# Code Mode",
+      "<available_skills>",
+      "<env>",
+    ].join("\n\n");
     const body = executor.transformRequest(
       "glm-5.3-flash-free",
       { messages: [{ role: "system", content: nativeSystem }, { role: "user", content: "hi" }] },
@@ -303,6 +331,8 @@ describe("OpenCode Free User-Agent Validation", () => {
 
     expect(body.messages[0].content).toContain(nativeSystem);
     expect(body.messages[0].content.match(/You are an AI agent running in OpenCode/g)).toHaveLength(1);
+    expect(body.messages[0].content.match(/# Your Model/g)).toHaveLength(1);
+    expect(body.messages[0].content.match(/# Code Mode/g)).toHaveLength(1);
   });
 });
 

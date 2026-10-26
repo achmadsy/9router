@@ -429,10 +429,16 @@ function prependHarness(body, model, credentials) {
   body.messages = [{ role: "system", content: envelope }, ...body.messages];
 }
 
-function isNativeOpencodeClient(credentials) {
-  const headers = credentials?.rawHeaders || {};
-  const ua = headers["user-agent"] || headers["User-Agent"] || "";
-  return hasValidOpencodeVersion(ua);
+function hasNativeOpencodeEnvelope(body) {
+  if (!Array.isArray(body?.messages)) return false;
+  const system = body.messages.find((message) =>
+    message?.role === "system" && typeof message.content === "string"
+  )?.content || "";
+  return system.startsWith("You are an AI agent running in OpenCode")
+    && system.includes("# Your Model")
+    && system.includes("# Code Mode")
+    && system.includes("<available_skills>")
+    && system.includes("<env>");
 }
 
 // Strip provider prefixes and thinking suffixes so the wire model id matches
@@ -524,10 +530,10 @@ export class OpenCodeExecutor extends BaseExecutor {
       }
       delete body.metadata;
       delete body.context_management;
-      // Native OpenCode requests already carry the full harness. Foreign
-      // clients (Claude Code, Codex, generic OpenAI) need the public v2.1.2
-      // harness prefix around their own system instructions.
-      if (!isNativeOpencodeClient(credentials)) prependHarness(body, model, credentials);
+      // Only the full native envelope may pass unchanged. OpenCode itself also
+      // uses ordinary OpenAI-compatible requests for custom providers, so its
+      // User-Agent alone does not prove that the cloud harness is present.
+      if (!hasNativeOpencodeEnvelope(body)) prependHarness(body, model, credentials);
       applyFingerprintTools(body, false);
     }
 
