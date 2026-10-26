@@ -4,6 +4,7 @@ import gemini from "./gemini.js";
 import github from "./github.js";
 import openaiCompatNode from "./openaiCompatNode.js";
 import selfhostedEmbedding from "./selfhostedEmbedding.js";
+import ollamaLocal from "./ollamaLocal.js";
 import { resolveRuntimeProviderId } from "../../providers/clones.js";
 
 const OPENAI_COMPAT_PROVIDERS = [
@@ -23,6 +24,7 @@ const ADAPTERS = {
   // "Self-hosted Embedding" means silently shipping the input and API key to
   // OpenAI. selfhostedEmbedding refuses instead.
   "selfhosted-embedding": selfhostedEmbedding,
+  "ollama-local": ollamaLocal,
 };
 
 export function getEmbeddingAdapter(provider) {

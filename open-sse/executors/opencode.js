@@ -8,8 +8,9 @@ import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { getModelTargetFormat } from "../config/providerModels.js";
+import { opencodeTlsFetch } from "../services/opencodeTlsClient.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
-import { opencodeBunFetch } from "../services/opencodeBunClient.js";
+import { opencodeBunFetch, OpenCodeBunTransportError } from "../services/opencodeBunClient.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import {
   normalizeResponsesInput,
@@ -116,7 +117,6 @@ function unstableRandom() {
 // Upstream decodes it and rejects a non-small counter with 403 FreeTierError
 // (live probes: counter 0–16 pass, >=100 fail), so the counter must stay real.
 const SESSION_PREFIX_MASK = (1n << 48n) - 1n;
-const SESSION_TIME_MASK = (1n << 36n) - 1n;
 
 function descendingTimeHex(time, counterValue) {
   return (~(BigInt(time) * 0x1000n + BigInt(counterValue)) & SESSION_PREFIX_MASK)
@@ -133,30 +133,40 @@ export function generateSessionId(timestamp = Date.now()) {
   return `ses_${descendingTimeHex(timestamp, counter)}${unstableRandom()}`;
 }
 
-// Zen validates that the 12 hex prefix decodes to a recent inverted timestamp, so a hash
-// of the downstream session id (random bits) is rejected with 403 FreeTierError. Mint a
-// canonical id once per downstream session and reuse it, like the real CLI does.
-const translatedSessions = new Map();
-const MAX_TRANSLATED_SESSIONS = 1000;
-const TRANSLATED_SESSION_TTL_MS = 60 * 60 * 1000;
+// Upstream decodes the prefix timestamp and refuses sessions whose time is in
+// the future or older than the free-tier window (live probes 2026-10-26: a
+// Date.now() session passed 10/10 while digest-derived ones passed 1/10). A
+// digest is uniform over 2^36 ms, so most translated ids were refused even
+// though their shape matched. Mint with the current time and memoize per
+// conversation so a conversation keeps one stable, valid session.
+const translatedOpencodeSessions = new Map();
+const MAX_TRANSLATED_SESSIONS = 5000;
+const translatedSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of translatedOpencodeSessions) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      translatedOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (translatedSessionCleanup.unref) translatedSessionCleanup.unref();
 
 export function translateSessionId(sessionId, clientTool = "") {
   if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
   const key = `${clientTool || "generic"}\0${sessionId || ""}`;
-  const now = Date.now();
-  const hit = translatedSessions.get(key);
-  if (hit && now - hit.createdAt < TRANSLATED_SESSION_TTL_MS) return hit.id;
-  // Each translated conversation starts at counter 1; upstream validates this
-  // low counter while TTL mapping keeps retries stable.
-  const id = `ses_${descendingTimeHex(Date.now(), 1)}${unstableRandom()}`;
-  translatedSessions.delete(key);
-  if (translatedSessions.size >= MAX_TRANSLATED_SESSIONS) {
-    translatedSessions.delete(translatedSessions.keys().next().value);
+  const existing = translatedOpencodeSessions.get(key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
   }
-  translatedSessions.set(key, { id, createdAt: now });
-  return id;
+  const translated = `ses_${descendingTimeHex(Date.now(), 1)}${unstableRandom()}`;
+  if (translatedOpencodeSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedOpencodeSessions.delete(translatedOpencodeSessions.keys().next().value);
+  }
+  translatedOpencodeSessions.set(key, { sessionId: translated, lastUsed: Date.now() });
+  return translated;
 }
 
 function normalizeSession(value) {
@@ -535,7 +545,7 @@ export class OpenCodeExecutor extends BaseExecutor {
       // OpenCode custom providers do not carry the native cloud envelope even
       // though their User-Agent is native-shaped.
       const hasNativeEnvelope = hasNativeOpencodeEnvelope(body);
-      applyFingerprintTools(body, false);
+      applyFingerprintTools(body, false, { claude: isMessagesModel(model || body?.model) });
       if (!hasNativeEnvelope) prependHarness(body, model, credentials);
     }
 
@@ -573,8 +583,20 @@ export class OpenCodeExecutor extends BaseExecutor {
     return Math.max(200, delayMs || 0);
   }
 
+  // The free gate keys on the TLS ClientHello, so a native Node fetch is refused
+  // no matter how faithful the body is. Route through the Bun sidecar when it is
+  // configured, with wreq-js as the direct-path fallback.
   async execute(args) {
-    return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
+    const credentials = this.prepareRequestCredentials(args);
+    return super.execute({
+      ...args,
+      credentials,
+      directFetch: (url, options) => opencodeTlsFetch(url, {
+        method: options.method,
+        headers: options.headers,
+        body: options.body,
+      }, { signal: options.signal }),
+    });
   }
 
   async fetchUpstream(url, options, proxyOptions = null) {
@@ -586,7 +608,15 @@ export class OpenCodeExecutor extends BaseExecutor {
     }
     const proxyEnabled = proxyOptions?.connectionProxyEnabled === true;
     const proxyUrl = proxyEnabled ? proxyOptions?.connectionProxyUrl || "" : "";
-    return opencodeBunFetch(url, options, proxyUrl);
+    try {
+      return await opencodeBunFetch(url, options, proxyUrl);
+    } catch (error) {
+      if (!(error instanceof OpenCodeBunTransportError)) throw error;
+      // Development and non-custom-server installs may not run the supervised
+      // Bun sidecar. Preserve configured proxies, otherwise use the in-process
+      // TLS impersonator threaded through BaseExecutor as directFetch.
+      return proxyAwareFetch(url, options, proxyOptions);
+    }
   }
 
   // Native v2.1.2 follows the published OpenCode endpoint under

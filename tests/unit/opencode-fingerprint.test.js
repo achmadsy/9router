@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   applyFingerprintTools,
+  applyEnvFingerprint,
   concealFingerprintToolNames,
   appendMissingFingerprintTools,
   fingerprintToolKey,
@@ -55,7 +56,7 @@ describe("opencodeFingerprint — request side", () => {
     const map = applyFingerprintTools(body, true);
     expect(namesOf(body.tools)).toEqual(OPENCODE_FINGERPRINT_TOOLS);
     expect(map.size).toBe(0);
-    expect(body.instructions).toBeUndefined();
+    expect(body.instructions).toContain("<env>");
   });
 
   it("drops duplicate declarations of one fingerprint name", () => {
@@ -75,23 +76,26 @@ describe("opencodeFingerprint — request side", () => {
     expect(chatBody.tool_choice).toBeUndefined();
   });
 
-  it("tells the model the appended tools are placeholders", () => {
+  it("adds placeholder guidance where no generated chat envelope will explain the tools", () => {
     const responses = { instructions: "Be brief.", tools: [] };
     applyFingerprintTools(responses, true);
-    expect(responses.instructions).toMatch(/^Be brief\.\n\nDo not call the `read` or `shell` tools;/);
+    expect(responses.instructions).toContain("Do not call the `read` or `shell` tools;");
+    expect(responses.instructions).toContain("<env>");
 
     const chatBody = { messages: [{ role: "system", content: "Be brief." }, { role: "user", content: "hi" }] };
     applyFingerprintTools(chatBody, false);
     expect(chatBody.messages).toHaveLength(2);
-    expect(chatBody.messages[0].content).toMatch(/^Be brief\.\n\nDo not call the `read` or `shell` tools;/);
+    expect(chatBody.messages[0].content).toContain("<env>");
+    expect(chatBody.messages[0].content).not.toContain("placeholders that do nothing");
 
     const noSystem = { messages: [{ role: "user", content: "hi" }] };
     applyFingerprintTools(noSystem, false);
-    expect(noSystem.messages[0]).toEqual({ role: "system", content: expect.stringMatching(/^Do not call/) });
+    expect(noSystem.messages[0]).toEqual({ role: "system", content: expect.stringContaining("<env>") });
 
     const claudeShape = { system: "Be brief.", messages: [{ role: "user", content: "hi" }] };
-    applyFingerprintTools(claudeShape, false);
+    applyFingerprintTools(claudeShape, false, { claude: true });
     expect(claudeShape.messages).toHaveLength(1);
+    expect(claudeShape.system).toContain("<env>");
   });
 
   it("retargets flat tool_choice that points at an aliased tool", () => {
@@ -160,7 +164,8 @@ describe("opencodeFingerprint — in-place normalization", () => {
     expect(body.tools[0].description).toContain("Commands run on Linux using zsh.");
     expect(body.tools[0].parameters.required).toEqual(["command"]);
     // Only the genuinely absent `read` is still advertised as a placeholder.
-    expect(body.instructions).toBe("Do not call the `read` tool; it is a placeholder that does nothing. Use the other tools you have been given instead.");
+    expect(body.instructions).toContain("Do not call the `read` tool; it is a placeholder that does nothing. Use the other tools you have been given instead.");
+    expect(body.instructions).toContain("<env>");
   });
 
   it("normalizes the nested chat shape without adding a system note", () => {
@@ -515,6 +520,35 @@ describe("opencodeFingerprint — generic harness adapters", () => {
     expect(first.choices[0].delta.tool_calls[0].function.arguments).toBe("");
     expect(second.choices[0].delta.tool_calls[0].function.arguments).toBe("");
     expect(finish.choices[0].delta.tool_calls[0].function.arguments).toBe('{"file_path":"/tmp/a"}');
+  });
+});
+
+describe("applyEnvFingerprint", () => {
+  it("appends the environment marker to chat system text", () => {
+    const body = { messages: [{ role: "system", content: "Be brief." }, { role: "user", content: "hi" }] };
+    expect(applyEnvFingerprint(body, false)).toBe(true);
+    expect(body.messages[0].content).toContain("Be brief.");
+    expect(body.messages[0].content).toContain("<env>");
+  });
+
+  it("does not duplicate an existing environment marker", () => {
+    const body = { messages: [{ role: "system", content: "x\n\n<env>\n</env>" }] };
+    expect(applyEnvFingerprint(body, false)).toBe(false);
+    expect(body.messages[0].content.match(/<env>/g)).toHaveLength(1);
+  });
+
+  it("supports Responses instructions", () => {
+    const body = { instructions: "Be brief." };
+    expect(applyEnvFingerprint(body, true)).toBe(true);
+    expect(body.instructions).toContain("Be brief.");
+    expect(body.instructions).toContain("<env>");
+  });
+
+  it("supports Claude system text blocks without adding a system message", () => {
+    const body = { system: [{ type: "text", text: "Be brief." }], messages: [{ role: "user", content: "hi" }] };
+    expect(applyEnvFingerprint(body, false, { claude: true })).toBe(true);
+    expect(body.system[0].text).toContain("<env>");
+    expect(body.messages).toHaveLength(1);
   });
 });
 
