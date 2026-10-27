@@ -1,5 +1,6 @@
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
+import { groupQuotaConnections } from "@/shared/utils/quotaProviderGroups.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 export const QUOTA_CACHE_KEY = "quotaCacheData";
@@ -35,6 +36,98 @@ export function getConnectionQuotaRemaining(connection, quotaData) {
   if (!quota) return Number.POSITIVE_INFINITY;
   if (typeof quota.remaining === "number") return quota.remaining;
   return Number.POSITIVE_INFINITY;
+}
+
+export { groupQuotaConnections };
+
+function earliestResetAt(current, candidate) {
+  const currentTime = current ? new Date(current).getTime() : Number.POSITIVE_INFINITY;
+  const candidateTime = candidate ? new Date(candidate).getTime() : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(candidateTime)) return current || null;
+  if (!Number.isFinite(currentTime) || candidateTime < currentTime) return candidate;
+  return current;
+}
+
+/**
+ * Sum like-named quota buckets across accounts in one provider group.
+ * Missing or failed accounts are reported separately and never treated as zero quota.
+ */
+export function aggregateProviderQuotas(connections = [], quotaData = {}, errors = {}) {
+  const buckets = new Map();
+  let successfulAccounts = 0;
+  const failedConnections = [];
+
+  for (const connection of connections) {
+    const quotaEntry = quotaData[connection.id];
+    const quotas = Array.isArray(quotaEntry?.quotas) ? quotaEntry.quotas : [];
+    const failure = errors[connection.id] || quotaEntry?.message;
+
+    if (quotas.length === 0) {
+      failedConnections.push({
+        connection,
+        message: failure || "Quota unavailable",
+      });
+      continue;
+    }
+
+    successfulAccounts += 1;
+    for (const quota of quotas) {
+      const key = getQuotaVisibilityKey(quota);
+      if (!key) continue;
+
+      const used = Number(quota.used);
+      const total = Number(quota.total);
+      const safeUsed = Number.isFinite(used) ? used : 0;
+      const safeTotal = Number.isFinite(total) ? total : 0;
+      const isSyntheticDepleted =
+        resolveRuntimeProviderId(connection.provider) === "grok-cli" &&
+        quota.name === "On-demand" &&
+        safeUsed === 1 &&
+        safeTotal === 1 &&
+        quota.remainingPercentage === 0;
+      const existing = buckets.get(key);
+
+      if (!existing) {
+        buckets.set(key, {
+          ...quota,
+          used: safeUsed,
+          total: safeTotal,
+          resetAt: quota.resetAt || null,
+          accountCount: 1,
+          _syntheticDepleted: isSyntheticDepleted,
+        });
+        continue;
+      }
+
+      if (existing._syntheticDepleted && !isSyntheticDepleted) {
+        existing.used = safeUsed;
+        existing.total = safeTotal;
+        existing._syntheticDepleted = false;
+      } else if (!existing._syntheticDepleted && isSyntheticDepleted) {
+        // Grok represents a zero-cap free/promo account as 1/1 so the single
+        // account UI can show depletion. Do not add that synthetic unit to a
+        // real paid capacity pool.
+      } else {
+        existing.used += safeUsed;
+        existing.total += safeTotal;
+      }
+      existing.resetAt = earliestResetAt(existing.resetAt, quota.resetAt);
+      existing.accountCount += 1;
+      existing.unlimited = existing.unlimited === true || quota.unlimited === true;
+      // Recompute from summed capacity instead of averaging percentages. This
+      // keeps unequal account limits correctly weighted.
+      delete existing.remaining;
+      delete existing.remainingPercentage;
+      delete existing.percentage;
+      delete existing.colorPercentage;
+    }
+  }
+
+  return {
+    quotas: [...buckets.values()].map(({ _syntheticDepleted, ...quota }) => quota),
+    successfulAccounts,
+    failedConnections,
+  };
 }
 
 // Stable group-by-provider: first-seen provider order, original order within group.
@@ -111,11 +204,12 @@ export function filterQuotaStateByConnections(state, connections) {
 }
 
 export function getConnectionsPageRange(pagination) {
-  if (!pagination.total) {
+  const totalItems = pagination.totalItems ?? pagination.total;
+  if (!totalItems) {
     return { start: 0, end: 0 };
   }
   const start = (pagination.page - 1) * pagination.pageSize + 1;
-  const end = Math.min(pagination.page * pagination.pageSize, pagination.total);
+  const end = Math.min(pagination.page * pagination.pageSize, totalItems);
   return { start, end };
 }
 
@@ -156,7 +250,9 @@ export function getPageSizeLabel(pageSize, isCustomPageSize) {
 
 export function getConnectionsPaginationSummary(pagination) {
   const { start, end } = getConnectionsPageRange(pagination);
-  return `Showing ${start}-${end} of ${pagination.total}`;
+  const totalItems = pagination.totalItems ?? pagination.total;
+  const itemLabel = pagination.totalItems === undefined ? "account" : "card";
+  return `Showing ${start}-${end} of ${totalItems} ${itemLabel}${totalItems === 1 ? "" : "s"} · ${pagination.total} account${pagination.total === 1 ? "" : "s"}`;
 }
 
 export function getSafePagination(pagination, fallbackPageSize) {

@@ -15,6 +15,8 @@ import {
   getConnectionLabel,
   getConnectionQuotaRemaining,
   sortVisibleConnections,
+  groupQuotaConnections,
+  aggregateProviderQuotas,
   buildLoadingState,
   filterQuotaStateByConnections,
   getConnectionsEmptyMessage,
@@ -278,6 +280,7 @@ export default function ProviderLimits() {
           pageSize: String(pageSize),
           accountStatus: accountFilter,
           sort: "priority",
+          groupQuotaProviders: "1",
         });
 
         if (providerFilter !== "all") {
@@ -410,6 +413,18 @@ export default function ProviderLimits() {
   const refreshProvider = useCallback(
     async (connectionId, provider) => {
       await fetchQuota(connectionId, provider, { force: true });
+      setLastUpdated(new Date());
+    },
+    [fetchQuota],
+  );
+
+  const refreshProviderGroup = useCallback(
+    async (groupConnections) => {
+      await Promise.all(
+        groupConnections.map((connection) =>
+          fetchQuota(connection.id, connection.provider, { force: true }),
+        ),
+      );
       setLastUpdated(new Date());
     },
     [fetchQuota],
@@ -854,6 +869,10 @@ export default function ProviderLimits() {
       ),
     [connections, quotaData, expiringFirst, providerFilter, quotaSortMode],
   );
+  const quotaCardItems = useMemo(
+    () => groupQuotaConnections(sortedConnections),
+    [sortedConnections],
+  );
 
   // Connection is depleted when any quota entry hit the threshold
   const isConnectionDepleted = (conn) => {
@@ -1259,7 +1278,216 @@ export default function ProviderLimits() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {sortedConnections.map((conn) => {
+        {quotaCardItems.map((item) => {
+          if (item.type === "group") {
+            const groupConnections = item.connections;
+            const activeCount = groupConnections.filter((connection) => connection.isActive ?? true).length;
+            const isLoading = groupConnections.some((connection) => loading[connection.id]);
+            const isBusy = groupConnections.some((connection) =>
+              deletingId === connection.id || togglingId === connection.id,
+            );
+            const aggregated = aggregateProviderQuotas(groupConnections, quotaData, errors);
+            const visibleQuotas = filterQuotasByVisibility(
+              item.provider,
+              aggregated.quotas,
+              quotaVisibility,
+            );
+            const hiddenQuotaRows = getHiddenQuotaRows(
+              item.provider,
+              aggregated.quotas,
+              quotaVisibility,
+            );
+            const groupLabel = providerLabel(item.provider);
+
+            return (
+              <Card key={`group-${item.provider}`} padding="none" className="min-w-0">
+                <div className="border-b border-black/10 px-3 py-2 dark:border-white/10">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md">
+                        <ProviderIcon
+                          src={`/providers/${item.provider}.png`}
+                          alt={item.provider}
+                          size={32}
+                          className="object-contain"
+                          fallbackText={item.provider.slice(0, 2).toUpperCase()}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-semibold text-text-primary">
+                          {groupLabel}
+                        </h3>
+                        <p className="text-xs text-text-muted">
+                          {groupConnections.length} account{groupConnections.length === 1 ? "" : "s"} · {activeCount} active · combined quota
+                        </p>
+                      </div>
+                    </div>
+                    <Tooltip text={`Refresh all ${groupLabel} accounts`}>
+                      <button
+                        type="button"
+                        onClick={() => refreshProviderGroup(groupConnections)}
+                        disabled={isLoading || isBusy}
+                        aria-label={`Refresh all ${groupLabel} accounts`}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 disabled:opacity-50 dark:hover:bg-white/5"
+                      >
+                        <span className={`material-symbols-outlined text-[18px] text-text-muted ${isLoading ? "animate-spin" : ""}`}>
+                          refresh
+                        </span>
+                      </button>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                <div className="px-2 py-1.5">
+                  {isLoading && aggregated.quotas.length === 0 ? (
+                    <div className="py-5 text-center text-text-muted">
+                      <span className="material-symbols-outlined animate-spin text-[28px]">
+                        progress_activity
+                      </span>
+                    </div>
+                  ) : aggregated.quotas.length > 0 ? (
+                    <QuotaTable
+                      quotas={visibleQuotas}
+                      compact
+                      sortMode="default"
+                      onHideQuota={(quotaRow) => handleHideQuota(item.provider, quotaRow)}
+                    />
+                  ) : (
+                    <div className="py-5 text-center">
+                      <span className="material-symbols-outlined text-[28px] text-text-muted">
+                        data_alert
+                      </span>
+                      <p className="mt-1.5 text-xs text-text-muted">
+                        Quota is unavailable for these accounts.
+                      </p>
+                    </div>
+                  )}
+
+                  {!isLoading && aggregated.failedConnections.length > 0 && (
+                    <div className="mx-1 mt-2 flex items-start gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">
+                      <span className="material-symbols-outlined text-[14px]">warning</span>
+                      <span>
+                        {aggregated.failedConnections.length} of {groupConnections.length} account{groupConnections.length === 1 ? "" : "s"} could not be included in the combined quota.
+                      </span>
+                    </div>
+                  )}
+
+                  {hiddenQuotaRows.length > 0 && (
+                    <div className="mt-2 flex min-w-0 items-center gap-1 border-t border-black/5 pt-2 text-[10px] text-text-muted dark:border-white/5">
+                      <span className="material-symbols-outlined shrink-0 text-[14px]">visibility_off</span>
+                      <span className="shrink-0">Hidden:</span>
+                      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap pb-2">
+                        {hiddenQuotaRows.map((quotaRow) => (
+                          <button
+                            key={getQuotaVisibilityKey(quotaRow)}
+                            type="button"
+                            onClick={() => handleShowQuota(item.provider, quotaRow)}
+                            className="shrink-0 rounded-md border border-black/10 px-1.5 py-0.5 transition-colors hover:bg-black/5 hover:text-text-primary dark:border-white/10 dark:hover:bg-white/5"
+                            title="Show this quota row"
+                          >
+                            {quotaRow.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <details className="mx-1 mt-2 border-t border-black/5 pt-2 dark:border-white/5">
+                    <summary className="flex cursor-pointer list-none items-center justify-between rounded-md px-1 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-black/[0.03] hover:text-text-primary dark:hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+                      <span>Manage {groupConnections.length} account{groupConnections.length === 1 ? "" : "s"}</span>
+                      <span className="material-symbols-outlined text-[16px]">expand_more</span>
+                    </summary>
+                    <div className="mt-1 space-y-px">
+                      {groupConnections.map((connection) => {
+                        const accountBusy = deletingId === connection.id || togglingId === connection.id;
+                        const runtimeProvider = resolveRuntimeProviderId(connection.provider);
+                        const accountError = errors[connection.id] || quotaData[connection.id]?.message;
+                        return (
+                          <div
+                            key={connection.id}
+                            className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
+                          >
+                            <span
+                              className={`h-2 w-2 shrink-0 rounded-full ${connection.isActive ?? true ? "bg-green-500" : "bg-text-muted/40"}`}
+                              title={connection.isActive ?? true ? "Active" : "Turned off"}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-[11px] font-medium text-text-primary">
+                                {getConnectionLabel(connection) || `Account ${connection.id.slice(0, 8)}`}
+                              </p>
+                              <p className={`truncate text-[10px] ${accountError ? "text-amber-600 dark:text-amber-300" : "text-text-muted"}`}>
+                                {accountError || (runtimeProvider === "kiro"
+                                  ? [kiroMethodLabel(connection), kiroRegion(connection)].filter(Boolean).join(" · ")
+                                  : quotaData[connection.id]?.plan || getConnectionSecondaryLabel(connection) || "Quota included")}
+                              </p>
+                            </div>
+                            {runtimeProvider === "kiro" && connection.providerSpecificData?.profileArn && (
+                              <Tooltip text="Copy profile ARN">
+                                <button
+                                  type="button"
+                                  onClick={() => copy(connection.providerSpecificData.profileArn, connection.id)}
+                                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
+                                  aria-label="Copy profile ARN"
+                                >
+                                  <span className="material-symbols-outlined text-[15px]">
+                                    {copied === connection.id ? "check" : "content_copy"}
+                                  </span>
+                                </button>
+                              </Tooltip>
+                            )}
+                            <Tooltip text="Refresh account quota">
+                              <button
+                                type="button"
+                                onClick={() => refreshProvider(connection.id, connection.provider)}
+                                disabled={loading[connection.id] || accountBusy}
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-black/5 hover:text-primary disabled:opacity-50 dark:hover:bg-white/5"
+                                aria-label="Refresh account quota"
+                              >
+                                <span className={`material-symbols-outlined text-[15px] ${loading[connection.id] ? "animate-spin" : ""}`}>refresh</span>
+                              </button>
+                            </Tooltip>
+                            <Tooltip text="Edit connection">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedConnection(connection);
+                                  setShowEditModal(true);
+                                }}
+                                disabled={accountBusy}
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-black/5 hover:text-primary disabled:opacity-50 dark:hover:bg-white/5"
+                                aria-label="Edit connection"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">edit</span>
+                              </button>
+                            </Tooltip>
+                            <Tooltip text="Delete connection">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteConnection(connection.id)}
+                                disabled={accountBusy}
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                                aria-label="Delete connection"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">delete</span>
+                              </button>
+                            </Tooltip>
+                            <Toggle
+                              size="sm"
+                              checked={connection.isActive ?? true}
+                              disabled={accountBusy}
+                              onChange={(nextActive) => handleToggleConnectionActive(connection.id, nextActive)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                </div>
+              </Card>
+            );
+          }
+
+          const conn = item.connection;
           const quota = quotaData[conn.id];
           const isLoading = loading[conn.id];
           const error = errors[conn.id];

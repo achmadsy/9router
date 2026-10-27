@@ -4,6 +4,7 @@ import { backfillCodexEmails } from "@/lib/oauth/providers";
 import { isUsageApiKeyProvider, isUsageSupportedProvider, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 import { resolveQuotaScope, connectionInScope } from "@/lib/apiKeys/quotaScope.js";
+import { groupQuotaConnections } from "@/shared/utils/quotaProviderGroups.js";
 
 const SAFE_FIELDS = [
   "id", "provider", "authType", "name", "email", "displayName",
@@ -84,6 +85,7 @@ export async function GET(request) {
     const provider = searchParams.get("provider") || "all";
     const accountStatus = searchParams.get("accountStatus") || "all";
     const sort = searchParams.get("sort") || "priority";
+    const groupQuotaProviders = searchParams.get("groupQuotaProviders") === "1";
     const page = parsePositiveInt(searchParams.get("page"), 1);
     const pageSize = Math.min(parsePositiveInt(searchParams.get("pageSize"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
 
@@ -115,11 +117,18 @@ export async function GET(request) {
     });
 
     const sortedConnections = sortConnections(accountFilteredConnections, sort);
-    const total = sortedConnections.length;
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const quotaItems = groupQuotaProviders
+      ? groupQuotaConnections(sortedConnections)
+      : sortedConnections.map((connection) => ({ type: "single", connection }));
+    const total = accountFilteredConnections.length;
+    const totalItems = quotaItems.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
     const currentPage = Math.min(page, totalPages);
     const offset = (currentPage - 1) * pageSize;
-    const pageConnections = sortedConnections.slice(offset, offset + pageSize).map(sanitize);
+    const pageItems = quotaItems.slice(offset, offset + pageSize);
+    const pageConnections = pageItems
+      .flatMap((item) => item.type === "group" ? item.connections : [item.connection])
+      .map(sanitize);
 
     return NextResponse.json({
       connections: pageConnections,
@@ -128,6 +137,7 @@ export async function GET(request) {
         page: currentPage,
         pageSize,
         total,
+        totalItems,
         totalPages,
       },
       totals: {
