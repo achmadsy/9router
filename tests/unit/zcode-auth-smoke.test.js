@@ -98,6 +98,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
       "https://zcode.z.ai/app/oauth/login?redirect=zcode%3A%2F%2Foauth%2Fcallback&app_version=3.16.3"
     );
+    expect(init.startPlanAuthorizeUrl).toBeUndefined();
     expect(ready).toMatchObject({
       status: "ready",
       token: "jwt-token",
@@ -106,6 +107,41 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     });
     expect(ready.zai.refresh_token).toBeUndefined();
     expect(flow.nextPollDelayMs).toBe(1000);
+  });
+
+  it("initializes Start Plan through the native billing balance request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 0, data: { plans: [] } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const flow = new ZaiAuthFlow("https://zcode.z.ai/api/v1");
+    await expect(flow.initializeStartPlan("zcode-jwt")).resolves.toMatchObject({ code: 0 });
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.16.3"
+    );
+    expect(options.method).toBe("GET");
+    expect(options.headers).toMatchObject({
+      Authorization: "Bearer zcode-jwt",
+      "User-Agent": "ZCode/3.16.3",
+      "X-ZCode-App-Version": "3.16.3",
+    });
+  });
+
+  it("rejects a failed Start Plan balance envelope", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 1113, msg: "no plan" }),
+    }));
+
+    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
+      "no plan"
+    );
   });
 
   it("uses the configured endpoint origin in native request headers", async () => {

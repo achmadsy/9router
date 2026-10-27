@@ -27,6 +27,7 @@ export async function POST(request) {
     }
 
     const targetProviderId = sessionDestination(session, readAsParam(request, body), "glm");
+    if (body?.initializeStartPlan === true) session.initializeStartPlan = true;
 
     // Rebuild flow handle from session (CLI poll needs Bearer pollToken only).
     const flow = new ZaiAuthFlow(undefined, session.pollToken);
@@ -72,6 +73,16 @@ export async function POST(request) {
       );
     }
 
+    let startPlanWarning;
+    if (session.initializeStartPlan) {
+      try {
+        await flow.initializeStartPlan(zcodeJwtToken);
+      } catch (err) {
+        startPlanWarning = err.message || "Start Plan initialization failed";
+        console.warn("[Z.AI OAuth] Start Plan initialization warning:", err);
+      }
+    }
+
     await deleteZaiSession(flowId);
 
     const connection = await saveOAuthConnection({
@@ -90,6 +101,7 @@ export async function POST(request) {
         email: connection.email,
         name: connection.name,
       },
+      ...(startPlanWarning ? { warning: startPlanWarning } : {}),
     });
   } catch (error) {
     console.error("[Z.AI OAuth] poll error:", error);

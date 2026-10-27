@@ -14,9 +14,12 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
   const [step, setStep] = useState("idle");
   const [flowId, setFlowId] = useState(null);
   const [authorizeUrl, setAuthorizeUrl] = useState(null);
+  const [initializeStartPlan, setInitializeStartPlan] = useState(false);
+  const [successWarning, setSuccessWarning] = useState(null);
   const [error, setError] = useState(null);
   const pollCountRef = useRef(0);
   const pollTimerRef = useRef(null);
+  const initializeStartPlanRef = useRef(false);
   const initAbortRef = useRef(null);
   const activeFlowIdRef = useRef(null);
   const sessionMissRef = useRef(0);
@@ -38,6 +41,9 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     setStep("idle");
     setFlowId(null);
     setAuthorizeUrl(null);
+    initializeStartPlanRef.current = false;
+    setInitializeStartPlan(false);
+    setSuccessWarning(null);
     setError(null);
   }, [stopPolling]);
 
@@ -69,7 +75,10 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
           const res = await fetch(withAs("/api/oauth/zai/poll"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ flowId: id }),
+            body: JSON.stringify({
+              flowId: id,
+              initializeStartPlan: initializeStartPlanRef.current,
+            }),
           });
           const data = await res.json();
           nextDelayMs = data.pollAfterMs || initialDelayMs;
@@ -108,6 +117,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
 
           if (data.status === "ready") {
             stopPolling();
+            setSuccessWarning(data.warning || null);
             setStep("success");
             setTimeout(() => {
               onSuccess?.();
@@ -130,12 +140,16 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     [handleClose, onSuccess, stopPolling, withAs]
   );
 
-  const startOAuth = useCallback(async () => {
+  const startOAuth = useCallback(async (withStartPlan = false) => {
     initAbortRef.current?.abort();
+    stopPolling();
     const abortController = new AbortController();
     initAbortRef.current = abortController;
     sessionMissRef.current = 0;
     setError(null);
+    setSuccessWarning(null);
+    initializeStartPlanRef.current = withStartPlan;
+    setInitializeStartPlan(withStartPlan);
     setStep("init");
 
     try {
@@ -161,23 +175,29 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
       setError(err.message);
       setStep("error");
     }
-  }, [startPoll, withAs]);
+  }, [startPoll, stopPolling, withAs]);
 
   useEffect(() => {
-    if (!isOpen) {
-      resetInternal();
-      return undefined;
-    }
+    if (!isOpen) return undefined;
 
-    startOAuth();
+    const startTimer = setTimeout(() => startOAuth(false), 0);
 
     return () => {
+      clearTimeout(startTimer);
       initAbortRef.current?.abort();
       stopPolling();
     };
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openAuthorizeUrl = () => {
+    if (authorizeUrl) {
+      window.open(authorizeUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const openStartPlanAuthorizeUrl = () => {
+    initializeStartPlanRef.current = true;
+    setInitializeStartPlan(true);
     if (authorizeUrl) {
       window.open(authorizeUrl, "_blank", "noopener,noreferrer");
     }
@@ -192,7 +212,14 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
           <div className="text-center py-8">
             <div className="text-6xl mb-4">✅</div>
             <p className="text-lg font-medium text-text-primary">Account connected!</p>
-            <p className="text-sm text-text-muted mt-2">Coding Plan credentials saved</p>
+            <p className="text-sm text-text-muted mt-2">
+              {initializeStartPlan && !successWarning
+                ? "Coding Plan credentials saved and Start Plan initialized"
+                : "Coding Plan credentials saved"}
+            </p>
+            {successWarning && (
+              <p className="text-xs text-warning mt-2">Connected, but {successWarning}</p>
+            )}
           </div>
         ) : step === "error" ? (
           <>
@@ -203,7 +230,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
               <Button variant="secondary" onClick={handleClose} fullWidth>
                 Cancel
               </Button>
-              <Button onClick={startOAuth} fullWidth>
+              <Button onClick={() => startOAuth(initializeStartPlan)} fullWidth>
                 Retry
               </Button>
             </div>
@@ -227,15 +254,25 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
                 <div className="bg-surface-secondary p-4 rounded-lg text-sm space-y-2">
                   <p className="font-medium text-text-primary">Complete authorization in your browser:</p>
                   <ol className="list-decimal list-inside space-y-1 text-text-muted">
-                    <li>Click &quot;Open Authorization Page&quot; below</li>
+                    <li>Choose standard authorization or Start Plan setup below</li>
                     <li>Log in and approve access on z.ai</li>
                     <li>Return here — connection completes automatically</li>
                   </ol>
                 </div>
 
-                <Button onClick={openAuthorizeUrl} fullWidth icon="open_in_new">
-                  Open Authorization Page
-                </Button>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button onClick={openAuthorizeUrl} fullWidth icon="open_in_new">
+                    Open Authorization Page
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={openStartPlanAuthorizeUrl}
+                    fullWidth
+                    icon="auto_awesome"
+                  >
+                    Auth with Create Start Plan
+                  </Button>
+                </div>
 
                 <div className="flex items-center justify-center gap-2 text-text-muted py-2">
                   <span className="animate-spin text-xs">⏳</span>

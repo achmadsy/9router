@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), nodes: new Map(), sessions: new Map() }));
+const mocks = vi.hoisted(() => ({
+  initializeStartPlan: vi.fn(),
+  save: vi.fn(),
+  nodes: new Map(),
+  sessions: new Map(),
+}));
 vi.mock("next/server", () => ({ NextResponse: { json: (body, init) => ({ status: init?.status || 200, json: async () => body }) } }));
 vi.mock("@/models", () => ({ getProviderNodeById: async (id) => mocks.nodes.get(id), createProviderConnection: mocks.save }));
 vi.mock("@/lib/oauth/providers", () => ({ extractCodexAccountInfo: () => ({ email: "test@example.test" }) }));
@@ -15,7 +20,8 @@ vi.mock("@/lib/oauth/services/kiro", () => ({ KiroService: class {
 } }));
 vi.mock("@/lib/zcode/auth", () => ({ ZaiAuthFlow: class {
   async start() { return { flowId: "flow-test", pollToken: "fake-poll", provider: "zai", authorizeUrl: "https://example.test" }; }
-  async poll() { return { status: "ready", zai: { access_token: "fake" } }; }
+  async poll() { return { status: "ready", token: "fake-jwt", zai: { access_token: "fake" } }; }
+  async initializeStartPlan(token) { return mocks.initializeStartPlan(token); }
   async exchangeForConnection() { return { accessToken: "fake-key", providerSpecificData: { username: "user-test", zcodeJwtToken: "fake-jwt" } }; }
 } }));
 vi.mock("@/lib/zcode/sessions", () => ({
@@ -47,6 +53,7 @@ const req = (path, as, body = {}) => new Request(`http://localhost/api/oauth/${p
 beforeEach(() => {
   mocks.nodes.clear(); mocks.sessions.clear();
   for (const base of ["codex", "grok-cli", "cursor", "kiro", "glm"]) mocks.nodes.set(`${base}-clone-test`, { type: "provider-clone", baseProvider: base, prefix: `${base}-2`, name: "Duplicate" });
+  mocks.initializeStartPlan.mockReset().mockResolvedValue({ code: 0 });
   mocks.save.mockReset().mockImplementation(async (data) => ({ id: "conn-test", ...data }));
 });
 describe("provider-specific clone authentication", () => {
@@ -64,5 +71,33 @@ describe("provider-specific clone authentication", () => {
     expect(mocks.sessions.get("flow-test").targetProviderId).toBe("glm-clone-test");
     expect((await pollGlm(req("zai/poll", "glm-clone-test", { flowId: "flow-test" }))).status).toBe(200);
     expect(mocks.save.mock.calls[0][0]).toMatchObject({ provider: "glm-clone-test", providerSpecificData: { baseProvider: "glm", username: "user-test", zcodeJwtToken: "fake-jwt" } });
+    expect(mocks.initializeStartPlan).not.toHaveBeenCalled();
+  });
+
+  it("binds Start Plan initialization to its GLM polling session", async () => {
+    expect((await initGlm(req("zai/init", "glm-clone-test"))).status).toBe(200);
+
+    const response = await pollGlm(req("zai/poll", "glm-clone-test", {
+      flowId: "flow-test",
+      initializeStartPlan: true,
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.initializeStartPlan).toHaveBeenCalledWith("fake-jwt");
+  });
+
+  it("saves GLM credentials when Start Plan initialization fails", async () => {
+    mocks.initializeStartPlan.mockRejectedValueOnce(new Error("Start Plan unavailable"));
+    await initGlm(req("zai/init", "glm-clone-test"));
+
+    const response = await pollGlm(req("zai/poll", "glm-clone-test", {
+      flowId: "flow-test",
+      initializeStartPlan: true,
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.warning).toContain("Start Plan unavailable");
+    expect(mocks.save).toHaveBeenCalledOnce();
   });
 });

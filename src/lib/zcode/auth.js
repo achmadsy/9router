@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import config from "./config.js";
-import { buildZcodeGuiRequestHeaders } from "./headers.js";
+import { buildZcodeBalanceHeaders, buildZcodeGuiRequestHeaders } from "./headers.js";
 import { ZCODE_ZAI_DEFAULT_EXPIRES_IN } from "./constants.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -295,6 +295,33 @@ export class ZaiAuthFlow {
     }
 
     return { status: "pending" };
+  }
+
+  /**
+   * Trigger the same automatic Start Plan initialization as ZCode desktop.
+   * Reading billing/balance is idempotent; campaign plans use a separate manual claim endpoint.
+   */
+  async initializeStartPlan(zcodeJwtToken) {
+    const jwt = typeof zcodeJwtToken === "string" ? zcodeJwtToken.trim() : "";
+    if (!jwt) throw new Error("Z.AI Start Plan initialization requires a ZCode JWT");
+
+    const balanceUrl = new URL(config.startPlanBalanceUrl);
+    balanceUrl.searchParams.set("app_version", config.appVersion);
+    const res = await fetch(balanceUrl.toString(), {
+      method: "GET",
+      headers: buildZcodeBalanceHeaders(jwt),
+    });
+    const text = await res.text();
+    const json = safeJson(text);
+    const code = json?.code;
+    const envelopeOk = code === undefined || code === null || code === 0 || code === 200;
+    if (!res.ok || !json || json.success === false || !envelopeOk) {
+      throw new Error(
+        `Z.AI Start Plan initialization failed: ${res.status} ${json?.msg || text.slice(0, 300)}`
+      );
+    }
+
+    return json;
   }
 
   /** Seconds the client should wait before the next poll. */
