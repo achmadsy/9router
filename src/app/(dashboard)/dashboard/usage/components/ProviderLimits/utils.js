@@ -88,14 +88,21 @@ export function aggregateProviderQuotas(connections = [], quotaData = {}, errors
       const existing = buckets.get(key);
 
       if (!existing) {
-        buckets.set(key, {
+        const initial = {
           ...quota,
           used: safeUsed,
           total: safeTotal,
           resetAt: quota.resetAt || null,
           accountCount: 1,
           _syntheticDepleted: isSyntheticDepleted,
-        });
+        };
+        // Every grouped row derives its percentage from the combined used/total
+        // capacity, including buckets present on only one account.
+        delete initial.remaining;
+        delete initial.remainingPercentage;
+        delete initial.percentage;
+        delete initial.colorPercentage;
+        buckets.set(key, initial);
         continue;
       }
 
@@ -687,6 +694,25 @@ export function parseQuotaData(provider, data) {
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
               recurring: quota.recurring !== false,
+            });
+          });
+        }
+        break;
+
+      case "glm":
+      case "glm-cn":
+        // Coding Plan rows already use a synthetic 0-100 capacity, while Start
+        // Plan rows use real units. Never forward absolute `remaining`: the UI
+        // treats that field as a percentage (for example, 750 units as 750%).
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              remainingPercentage: quota.remainingPercentage,
+              unlimited: quota.unlimited === true,
             });
           });
         }

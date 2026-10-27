@@ -221,20 +221,16 @@ export class GlmExecutor extends DefaultExecutor {
         };
       }
 
-      if (String(code) === "3009") {
+      const isConcurrencyLimit =
+        String(code) === "3009" ||
+        String(code) === "3010" ||
+        (typeof message === "string" && message.toLowerCase().includes("concurrency limit"));
+      if (isConcurrencyLimit) {
         return {
           status: response.status || 429,
           message:
             "Z.AI model admission concurrency limit exceeded. Close other ZCode/9router sessions and retry.",
           noCooldown: true,
-        };
-      }
-
-      if (code === "3010" || (typeof message === "string" && message.includes("concurrency limit"))) {
-        return {
-          status: response.status || 429,
-          message:
-            "Z.AI model admission concurrency limit exceeded. Close other ZCode/9router sessions and retry.",
         };
       }
 

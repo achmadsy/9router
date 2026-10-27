@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateProviderQuotas,
+  getRemainingPercentage,
   groupQuotaConnections,
+  parseQuotaData,
 } from "@/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils.js";
 
 function connection(id, provider, extra = {}) {
@@ -75,6 +77,50 @@ describe("grouped quota provider cards", () => {
 
     expect(result.quotas[0]).toMatchObject({ used: 70, total: 200, accountCount: 2 });
     expect(result.quotas[0]).not.toHaveProperty("remainingPercentage");
+    expect(getRemainingPercentage(result.quotas[0])).toBe(65);
+  });
+
+  it("normalizes GLM Start Plan units before grouping", () => {
+    const quotas = parseQuotaData("glm", {
+      quotas: {
+        "Start: GLM-5.3": {
+          used: 250,
+          total: 1000,
+          remaining: 750,
+          remainingPercentage: 75,
+          unlimited: false,
+        },
+        "Session (5h)": {
+          used: 25,
+          total: 100,
+          remaining: 75,
+          remainingPercentage: 75,
+          unlimited: false,
+        },
+      },
+    });
+
+    expect(quotas).toEqual([
+      expect.objectContaining({ name: "Start: GLM-5.3", used: 250, total: 1000, remainingPercentage: 75 }),
+      expect.objectContaining({ name: "Session (5h)", used: 25, total: 100, remainingPercentage: 75 }),
+    ]);
+    expect(quotas[0]).not.toHaveProperty("remaining");
+    expect(getRemainingPercentage(quotas[0])).toBe(75);
+
+    const result = aggregateProviderQuotas(
+      [connection("oauth", "glm"), connection("api-key", "glm")],
+      {
+        oauth: { quotas },
+        "api-key": { quotas: [{ name: "Session (5h)", used: 45, total: 100, remainingPercentage: 55 }] },
+      },
+      {},
+    );
+    const start = result.quotas.find((quota) => quota.name === "Start: GLM-5.3");
+    const session = result.quotas.find((quota) => quota.name === "Session (5h)");
+
+    expect(start).not.toHaveProperty("remainingPercentage");
+    expect(getRemainingPercentage(start)).toBe(75);
+    expect(getRemainingPercentage(session)).toBe(65);
   });
 
   it("does not add Grok's synthetic depleted unit to a paid capacity pool", () => {

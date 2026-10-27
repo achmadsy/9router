@@ -81,6 +81,7 @@ describe("Probe sidecar custom-header payloads", () => {
         apiKey: "judge-key",
         customHeaders: { "User-Agent": "Judge Agent", "X-Judge": "only-judge" },
       },
+      requestRetries: 5,
     });
   });
 });

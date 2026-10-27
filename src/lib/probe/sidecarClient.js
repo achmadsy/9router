@@ -163,6 +163,9 @@ export async function runProbeOnSidecar(payload, signal) {
     // similarity scoring (engine contract: Record<probeId, string>).
     ...(payload.baseline ? { baseline: payload.baseline } : {}),
     ...(payload.config?.timeoutMs ? { timeoutMs: payload.config.timeoutMs } : {}),
+    // Probe transport failures and retryable upstream responses (429/5xx)
+    // five times. The engine applies exponential backoff between attempts.
+    requestRetries: 5,
   };
   return fetch(`${getSidecarUrl()}/v1/runs`, {
     method: "POST",

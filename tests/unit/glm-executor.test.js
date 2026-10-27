@@ -158,7 +158,7 @@ describe("GlmExecutor", () => {
     expect(parsed.message).not.toContain('{"type":"error"');
   });
 
-  it.each([3009, "3009"])("marks GLM %s concurrency errors as no-cooldown", async (code) => {
+  it.each([3009, "3009", 3010, "3010"])("marks GLM %s concurrency errors as no-cooldown", async (code) => {
     const parsed = await parseUpstreamError(
       new Response(JSON.stringify({ code, msg: "model concurrency limit exceeded" }), {
         status: 429,
@@ -174,15 +174,15 @@ describe("GlmExecutor", () => {
     expect(result.noCooldown).toBe(true);
   });
 
-  it("keeps other GLM concurrency errors eligible for cooldown", async () => {
+  it("marks message-only GLM concurrency errors as no-cooldown", async () => {
     const parsed = await parseUpstreamError(
-      new Response(JSON.stringify({ code: 3010, msg: "model concurrency limit exceeded" }), {
+      new Response(JSON.stringify({ msg: "Model Concurrency Limit exceeded" }), {
         status: 429,
       }),
       executor
     );
 
-    expect(parsed.noCooldown).toBe(false);
+    expect(parsed.noCooldown).toBe(true);
   });
 
   it("retries with API key fallback on 401 when apiKey is present", () => {

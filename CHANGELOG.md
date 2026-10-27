@@ -8,6 +8,8 @@
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 
 ## Fixes
+- **Probe Runs**: retry transient task failures up to five times with exponential backoff, and keep all GLM/Z.AI concurrency-limit variants eligible instead of cooling the account.
+- **Quota Tracker**: normalize grouped GLM Coding and Start Plan balances so combined and account-unique rows calculate the correct remaining percentage.
 - **ZCode**: add a separate Z.AI OAuth action that automatically initializes the Start Plan through the native billing balance request while preserving the existing authorization flow and manual campaign-plan claiming behavior.
 - **OpenCode Free**: make round-robin honor its selected pool list instead of staying pinned to the saved single-pool fallback; namespace stable session and project identities by the selected proxy pool so proxies no longer share one upstream quota identity; preserve no-auth behavior for provider clones; and fail closed when a strict pool resolves without a usable proxy URL.
 - **OpenCode Free**: align no-tool auxiliary requests by adding native `read`/`shell` fingerprint definitions before generating the Code Mode catalog; if OpenCode still rejects that exact auxiliary shape with `FreeUsageLimitError`, return it without rotating or cooling proxy identities; cap other genuine free-limit cooldowns to a 90-second re-probe window and clear a matching proxy cooldown when a sibling request succeeds.
