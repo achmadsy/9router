@@ -151,11 +151,18 @@ const translatedSessionCleanup = setInterval(() => {
 }, MEMORY_CONFIG.sessionCleanupIntervalMs);
 if (translatedSessionCleanup.unref) translatedSessionCleanup.unref();
 
-export function translateSessionId(sessionId, clientTool = "") {
-  if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
+function dropTranslatedSession(sessionId) {
+  if (!sessionId) return;
+  for (const [key, entry] of translatedOpencodeSessions) {
+    if (entry.sessionId === sessionId) translatedOpencodeSessions.delete(key);
+  }
+}
+
+export function translateSessionId(sessionId, clientTool = "", identity = "") {
+  if (!identity && typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
     return sessionId.trim();
   }
-  const key = `${clientTool || "generic"}\0${sessionId || ""}`;
+  const key = `${identity || "shared"}\0${clientTool || "generic"}\0${sessionId || ""}`;
   const existing = translatedOpencodeSessions.get(key);
   if (existing) {
     existing.lastUsed = Date.now();
@@ -207,7 +214,15 @@ if (stableSessionCleanup.unref) stableSessionCleanup.unref();
 
 function identityKey(credentials) {
   const connectionId = credentials?.connectionId || credentials?.id;
-  if (connectionId) return `opencode:conn:${String(connectionId).slice(0, 128)}`;
+  const proxyPoolId = credentials?.providerSpecificData?.connectionProxyPoolId
+    || credentials?.providerSpecificData?.cooldownTarget?.proxyPoolId
+    || credentials?.cooldownTarget?.proxyPoolId;
+  if (connectionId) {
+    const connectionKey = String(connectionId).slice(0, 128);
+    return proxyPoolId
+      ? `opencode:conn:${connectionKey}:proxy:${String(proxyPoolId).slice(0, 128)}`
+      : `opencode:conn:${connectionKey}`;
+  }
   const raw = credentials?.rawHeaders || {};
   const auth = raw.authorization || raw.Authorization || raw["x-api-key"] || raw["X-Api-Key"] || "";
   if (auth) {
@@ -289,8 +304,13 @@ function isMessagesModel(model) {
 
 function resolveOpencodeSession(body, credentials, providerSessionId, clientTool) {
   const headers = credentials?.rawHeaders || {};
+  const proxyPoolId = credentials?.providerSpecificData?.connectionProxyPoolId
+    || credentials?.providerSpecificData?.cooldownTarget?.proxyPoolId
+    || credentials?.cooldownTarget?.proxyPoolId
+    || "";
+  const proxyIdentity = proxyPoolId ? identityKey(credentials) : "";
   const native = nativeSession(headers);
-  if (native) return native;
+  if (native) return proxyIdentity ? translateSessionId(native, clientTool, proxyIdentity) : native;
 
   let incoming = null;
   for (const [key, value] of Object.entries(headers)) {
@@ -301,7 +321,7 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
   }
 
   const hinted = incoming || normalizeSession(providerSessionId);
-  if (hinted) return translateSessionId(hinted, clientTool);
+  if (hinted) return translateSessionId(hinted, clientTool, proxyIdentity);
 
   if (credentials?.connectionId || bodyHasSessionHints(body)) {
     let viaManager = null;
@@ -315,7 +335,7 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
     } catch {
       viaManager = null;
     }
-    if (viaManager) return translateSessionId(viaManager, clientTool);
+    if (viaManager) return translateSessionId(viaManager, clientTool, proxyIdentity);
   }
 
   return stableSessionId(credentials);
@@ -574,6 +594,7 @@ export class OpenCodeExecutor extends BaseExecutor {
     }
     const credentials = ctx?.credentials;
     if (credentials) {
+      dropTranslatedSession(credentials[SESSION_FIELD]);
       credentials[SESSION_FIELD] = generateSessionId();
       // Drop the exhausted stable entry so the next request also mints a
       // fresh session instead of reusing the one that just burned out.
@@ -608,6 +629,9 @@ export class OpenCodeExecutor extends BaseExecutor {
     }
     const proxyEnabled = proxyOptions?.connectionProxyEnabled === true;
     const proxyUrl = proxyEnabled ? proxyOptions?.connectionProxyUrl || "" : "";
+    if (proxyOptions?.strictProxy === true && !proxyUrl) {
+      throw new OpenCodeBunTransportError("Strict proxy is enabled but no usable proxy URL resolved");
+    }
     try {
       return await opencodeBunFetch(url, options, proxyUrl);
     } catch (error) {

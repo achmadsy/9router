@@ -63,8 +63,10 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const providerId = resolveProviderId(provider);
     const runtimeProviderId = resolveRuntimeProviderId(providerId);
 
-    // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings)
-    if (FREE_PROVIDERS[providerId]?.noAuth) {
+    // Inject a virtual connection for no-auth free providers (with optional proxy pool from settings).
+    // Provider clones inherit the base provider's no-auth runtime behavior while
+    // keeping their own strategy/settings namespace.
+    if (FREE_PROVIDERS[runtimeProviderId]?.noAuth) {
       const settings = await getSettings();
       const override = (settings.providerStrategies || {})[providerId] || {};
       const strategy = override.rotateStrategy || "none";
@@ -109,9 +111,12 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         if (eligible.length > 0) {
           poolIds = eligible;
           if (pickedId && !eligible.includes(pickedId)) pickedId = null;
-          if (strategy === "single" && !pickedId) {
-            pickedId = await pickProxyPoolId(eligible, "random", providerId);
-          } else if (strategy !== "none" && !pickedId) {
+          if (strategy === "single") {
+            if (!pickedId) pickedId = await pickProxyPoolId(eligible, "random", providerId);
+          } else if (strategy !== "none") {
+            // Rotation pools are authoritative while rotation is active. The UI
+            // intentionally retains proxyPoolId as the single-pool selection to
+            // restore when rotation is disabled; it must not pin every request.
             pickedId = await pickProxyPoolId(eligible, strategy, providerId);
           }
         } else if (!pickedId && strategy === "none") {

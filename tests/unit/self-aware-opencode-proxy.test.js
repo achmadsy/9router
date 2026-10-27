@@ -1,10 +1,15 @@
 // HIGH: OpenCode proxy-scoped isolation — proxy A block ≠ proxy B, round-robin skips blocked.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+const { settingsMock, pickProxyPoolIdMock } = vi.hoisted(() => ({
+  settingsMock: vi.fn(async () => ({ providerStrategies: { opencode: { rotateStrategy: "round-robin" } } })),
+  pickProxyPoolIdMock: vi.fn((poolIds) => poolIds[0] || null),
+}));
+
 vi.mock("@/lib/db/index.js", () => ({
   getProviderConnections: vi.fn(async () => []),
   updateProviderConnection: vi.fn(async (id, data) => ({ id, ...data })),
-  getSettings: vi.fn(async () => ({ providerStrategies: { opencode: { rotateStrategy: "round-robin" } } })),
+  getSettings: settingsMock,
   getProxyPools: vi.fn(async () => ([
     { id: "pool-a", name: "CN A", proxyUrl: "http://a:1", isActive: true },
     { id: "pool-b", name: "CN B", proxyUrl: "http://b:2", isActive: true },
@@ -16,7 +21,7 @@ vi.mock("@/lib/localDb", () => ({
   getProviderConnections: vi.fn(async () => []),
   updateProviderConnection: vi.fn(async (id, data) => ({ id, ...data })),
   validateApiKey: vi.fn(async () => true),
-  getSettings: vi.fn(async () => ({ providerStrategies: { opencode: { rotateStrategy: "round-robin" } } })),
+  getSettings: settingsMock,
   getProxyPools: vi.fn(async () => ([
     { id: "pool-a", name: "CN A", proxyUrl: "http://a:1", isActive: true },
     { id: "pool-b", name: "CN B", proxyUrl: "http://b:2", isActive: true },
@@ -64,7 +69,7 @@ vi.mock("@/lib/network/connectionProxy.js", () => ({
     connectionNoProxy: "",
     proxyPoolId: proxyPoolId || null,
   })),
-  pickProxyPoolId: vi.fn((poolIds, strategy) => poolIds[0] || null),
+  pickProxyPoolId: pickProxyPoolIdMock,
 }));
 
 vi.mock("@/models", () => ({
@@ -97,6 +102,10 @@ beforeEach(async () => {
   process.env.DATA_DIR = "/tmp/self-aware-opencode-test";
   repoMock = await import("@/lib/db/repos/selfAwareRepo.js");
   repoMock.__store.clear();
+  settingsMock.mockReset();
+  settingsMock.mockResolvedValue({ providerStrategies: { opencode: { rotateStrategy: "round-robin" } } });
+  pickProxyPoolIdMock.mockClear();
+  pickProxyPoolIdMock.mockImplementation((poolIds) => poolIds[0] || null);
   auth = await import("@/sse/services/auth.js");
 });
 
@@ -242,6 +251,46 @@ describe("OpenCode proxy-scope isolation", () => {
     expect(creds.allRateLimited).toBe(true);
     const earliest = new Date(creds.retryAfter).getTime();
     expect(Math.abs(earliest - (now + 10_000))).toBeLessThanOrEqual(1000);
+  });
+
+  it("round-robin ignores the saved single-pool selection while rotation is active", async () => {
+    settingsMock.mockResolvedValue({
+      providerStrategies: {
+        opencode: {
+          proxyPoolId: "pool-a",
+          rotateStrategy: "round-robin",
+          rotatePoolIds: ["pool-a", "pool-b", "pool-c"],
+        },
+      },
+    });
+    pickProxyPoolIdMock.mockReturnValue("pool-b");
+
+    const creds = await auth.getProviderCredentials("opencode", null, "glm-4.6");
+
+    expect(pickProxyPoolIdMock).toHaveBeenCalledWith(
+      ["pool-a", "pool-b", "pool-c"],
+      "round-robin",
+      "opencode",
+    );
+    expect(creds.providerSpecificData.connectionProxyPoolId).toBe("pool-b");
+  });
+
+  it("provider clones inherit the no-auth OpenCode proxy path", async () => {
+    settingsMock.mockResolvedValue({
+      providerStrategies: {
+        "opencode-clone-test": {
+          rotateStrategy: "round-robin",
+          rotatePoolIds: ["pool-a", "pool-b"],
+        },
+      },
+    });
+    pickProxyPoolIdMock.mockReturnValue("pool-b");
+
+    const creds = await auth.getProviderCredentials("opencode-clone-test", null, "glm-4.6");
+
+    expect(creds.id).toBe("noauth");
+    expect(creds.provider).toBe("opencode-clone-test");
+    expect(creds.providerSpecificData.connectionProxyPoolId).toBe("pool-b");
   });
 
   it("round-robin skips blocked proxy", async () => {

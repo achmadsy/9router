@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchMock } = vi.hoisted(() => ({
-  fetchMock: vi.fn(),
-}));
+const { fetchMock, OpenCodeBunTransportErrorMock } = vi.hoisted(() => {
+  class OpenCodeBunTransportErrorMock extends Error {}
+  return { fetchMock: vi.fn(), OpenCodeBunTransportErrorMock };
+});
 
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: fetchMock,
@@ -10,6 +11,7 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 
 vi.mock("../../open-sse/services/opencodeBunClient.js", () => ({
   opencodeBunFetch: fetchMock,
+  OpenCodeBunTransportError: OpenCodeBunTransportErrorMock,
 }));
 
 import { getExecutor } from "../../open-sse/executors/index.js";
@@ -134,7 +136,7 @@ describe("OpenCode Free Executor Session Resolution", () => {
     expect(executor).not.toHaveProperty("_currentSessionId");
   });
 
-  it("preserves valid native x-opencode-session header case-insensitively", () => {
+  it("preserves valid native x-opencode-session headers unless a proxy identity must isolate them", () => {
     const executor = getExecutor("opencode");
     const valid = "ses_f534dfae8ffeCy4Ee4tLWNygDc";
     const { prepared } = prepare(executor, {
@@ -142,6 +144,17 @@ describe("OpenCode Free Executor Session Resolution", () => {
     });
 
     expect(prepared._opencodeSession).toBe(valid);
+
+    const proxied = prepare(executor, {
+      credentials: makeCredentials({
+        connectionId: undefined,
+        id: "noauth",
+        rawHeaders: { "X-OpenCode-Session": ` ${valid} ` },
+        providerSpecificData: { connectionProxyPoolId: "pool-a" },
+      }),
+    }).prepared._opencodeSession;
+    expect(proxied).toMatch(OPENCODE_SESSION_RE);
+    expect(proxied).not.toBe(valid);
   });
 
   it("translates invalid native x-opencode-session header into a valid session", () => {
@@ -163,15 +176,34 @@ describe("OpenCode Free Executor Session Resolution", () => {
     expect(first).toMatch(OPENCODE_SESSION_RE);
   });
 
-  it("isolates different conversations and tools", () => {
+  it("isolates different conversations, tools, and proxy identities", () => {
     const executor = getExecutor("opencode");
     const convA = prepare(executor, { providerSessionId: "conversation-a" }).prepared._opencodeSession;
     const convB = prepare(executor, { providerSessionId: "conversation-b" }).prepared._opencodeSession;
     const toolClaude = prepare(executor, { providerSessionId: "same", clientTool: "claude" }).prepared._opencodeSession;
     const toolCodex = prepare(executor, { providerSessionId: "same", clientTool: "codex" }).prepared._opencodeSession;
+    const proxyCredentials = (pool) => makeCredentials({
+      connectionId: undefined,
+      id: "noauth",
+      providerSpecificData: { connectionProxyPoolId: pool },
+    });
+    const proxyA = prepare(executor, {
+      providerSessionId: "shared-conversation",
+      credentials: proxyCredentials("pool-a"),
+    }).prepared._opencodeSession;
+    const proxyAAgain = prepare(executor, {
+      providerSessionId: "shared-conversation",
+      credentials: proxyCredentials("pool-a"),
+    }).prepared._opencodeSession;
+    const proxyB = prepare(executor, {
+      providerSessionId: "shared-conversation",
+      credentials: proxyCredentials("pool-b"),
+    }).prepared._opencodeSession;
 
     expect(convA).not.toBe(convB);
     expect(toolClaude).not.toBe(toolCodex);
+    expect(proxyAAgain).toBe(proxyA);
+    expect(proxyB).not.toBe(proxyA);
   });
 
   it("adds the valid session header to fetch requests", async () => {
@@ -199,6 +231,17 @@ describe("OpenCode Free Executor Session Resolution", () => {
 
     expect(headers["x-opencode-session"]).toMatch(OPENCODE_SESSION_RE);
     expect(headers["Authorization"]).toBe("Bearer public");
+  });
+
+  it("fails closed when strict proxy is enabled without a usable URL", async () => {
+    const executor = getExecutor("opencode");
+
+    await expect(executor.fetchUpstream(
+      "https://opencode.ai/inference/openai/v1/chat/completions",
+      { method: "POST", body: "{}" },
+      { strictProxy: true, proxyPoolId: "pool-a", connectionProxyEnabled: false, connectionProxyUrl: "" },
+    )).rejects.toBeInstanceOf(OpenCodeBunTransportErrorMock);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("handles null or undefined body gracefully in transformRequest", () => {
     const executor = getExecutor("opencode");
@@ -245,7 +288,7 @@ describe("OpenCode Free User-Agent Validation", () => {
   });
 
   // Native 2.1.2 sends a stable 40-hex project id per device, not a word.
-  it("derives a stable 40-hex x-opencode-project per connection identity", () => {
+  it("derives a stable 40-hex x-opencode-project per connection and proxy identity", () => {
     const executor = getExecutor("opencode");
     const a = executor.buildHeaders({ rawHeaders: {} });
     const b = executor.buildHeaders({ rawHeaders: {} });
@@ -255,6 +298,21 @@ describe("OpenCode Free User-Agent Validation", () => {
     const other = executor.buildHeaders({ connectionId: "other", rawHeaders: {} });
     expect(other["x-opencode-project"]).toMatch(/^[0-9a-f]{40}$/);
     expect(other["x-opencode-project"]).not.toBe(a["x-opencode-project"]);
+
+    const proxyA = {
+      id: "noauth",
+      rawHeaders: {},
+      providerSpecificData: { connectionProxyPoolId: "pool-a" },
+    };
+    const proxyB = {
+      id: "noauth",
+      rawHeaders: {},
+      providerSpecificData: { connectionProxyPoolId: "pool-b" },
+    };
+    const proxyAHeaders = executor.buildHeaders(proxyA);
+    expect(executor.buildHeaders(proxyA)["x-opencode-project"]).toBe(proxyAHeaders["x-opencode-project"]);
+    expect(executor.buildHeaders(proxyB)["x-opencode-project"]).not.toBe(proxyAHeaders["x-opencode-project"]);
+    expect(executor.buildHeaders(proxyB)["x-opencode-session"]).not.toBe(proxyAHeaders["x-opencode-session"]);
 
     const passed = executor.buildHeaders({ rawHeaders: { "x-opencode-project": "d53a3b191b8fc0ffb99e6717016927e50c7a11bc" } });
     expect(passed["x-opencode-project"]).toBe("d53a3b191b8fc0ffb99e6717016927e50c7a11bc");
