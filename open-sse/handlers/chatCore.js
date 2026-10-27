@@ -538,7 +538,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Provider returned error
   if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false, true);
-    const { statusCode, message, resetsAtMs, cooldownHint, upstreamBody } = await parseUpstreamError(providerResponse, executor);
+    const { statusCode, message, resetsAtMs, cooldownHint, upstreamBody, noCooldown } = await parseUpstreamError(providerResponse, executor);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${statusCode}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId, apiKeyId,
@@ -569,6 +569,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       resetsAtMs,
       cooldownHint,
       upstreamBody,
+      noCooldown,
       extraHeaders: upstreamResponseHeaders(providerResponse.headers),
     });
   }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { GlmExecutor, glmRequestContext } from "../../open-sse/executors/glm.js";
+import { createErrorResult, parseUpstreamError } from "../../open-sse/utils/error.js";
 import { __test__ as headerTest } from "../../src/lib/zcode/headers.js";
 
 function withGlmRequest(credentials, fn, urlIndex = 0) {
@@ -155,6 +156,33 @@ describe("GlmExecutor", () => {
     );
     expect(parsed.message).toContain("GLM quota exhausted");
     expect(parsed.message).not.toContain('{"type":"error"');
+  });
+
+  it.each([3009, "3009"])("marks GLM %s concurrency errors as no-cooldown", async (code) => {
+    const parsed = await parseUpstreamError(
+      new Response(JSON.stringify({ code, msg: "model concurrency limit exceeded" }), {
+        status: 429,
+        headers: { "Retry-After": "60" },
+      }),
+      executor
+    );
+    const result = createErrorResult(parsed.statusCode, parsed.message, parsed);
+
+    expect(parsed.message).toContain("concurrency limit exceeded");
+    expect(parsed.cooldownHint).toBeTruthy();
+    expect(parsed.noCooldown).toBe(true);
+    expect(result.noCooldown).toBe(true);
+  });
+
+  it("keeps other GLM concurrency errors eligible for cooldown", async () => {
+    const parsed = await parseUpstreamError(
+      new Response(JSON.stringify({ code: 3010, msg: "model concurrency limit exceeded" }), {
+        status: 429,
+      }),
+      executor
+    );
+
+    expect(parsed.noCooldown).toBe(false);
   });
 
   it("retries with API key fallback on 401 when apiKey is present", () => {

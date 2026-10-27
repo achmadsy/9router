@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getComboModels: vi.fn(),
   getModelInfo: vi.fn(),
   getProviderCredentials: vi.fn(),
+  markAccountUnavailable: vi.fn(),
   handleChatCore: vi.fn(),
   resolveApiKeyContext: vi.fn(),
   authorizeOriginalResource: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock("@/lib/localDb", () => ({ getSettings: mocks.getSettings }));
 vi.mock("@/sse/services/model.js", () => ({ getComboModels: mocks.getComboModels, getModelInfo: mocks.getModelInfo }));
 vi.mock("@/sse/services/auth.js", () => ({
   getProviderCredentials: mocks.getProviderCredentials,
-  markAccountUnavailable: vi.fn(), clearAccountError: vi.fn(),
+  markAccountUnavailable: mocks.markAccountUnavailable, clearAccountError: vi.fn(),
   extractApiKey: () => "sk-test", isValidApiKey: vi.fn(),
 }));
 vi.mock("@/sse/services/apiKeyPolicy.js", () => ({
@@ -78,5 +79,24 @@ describe("nested combo API-key attribution", () => {
     expect(mocks.handleChatCore).toHaveBeenCalledWith(expect.objectContaining({
       apiKeyId: "default-key", apiKeyNameSnapshot: "Default Key",
     }));
+  });
+
+  it("returns no-cooldown failures without marking or rotating the account", async () => {
+    mocks.getComboModels.mockResolvedValue(null);
+    mocks.getModelInfo.mockResolvedValue({ provider: "glm", model: "glm-5.2" });
+    mocks.handleChatCore.mockResolvedValue({
+      success: false,
+      status: 429,
+      error: "[429]: Z.AI model admission concurrency limit exceeded.",
+      noCooldown: true,
+      response: new Response("limited", { status: 429 }),
+    });
+
+    const response = await handleChat(request());
+
+    expect(response.status).toBe(429);
+    expect(await response.text()).toBe("limited");
+    expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
+    expect(mocks.getProviderCredentials).toHaveBeenCalledTimes(1);
   });
 });

@@ -72,7 +72,7 @@ export function reportUpstreamError(log, { tag = "UPSTREAM", provider, model, st
  * Parse upstream provider error response
  * @param {Response} response - Fetch response from provider
  * @param {object} [executor] - Optional executor with parseError() override for provider-specific parsing
- * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null}>}
+ * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null, noCooldown?: boolean}>}
  */
 export async function parseUpstreamError(response, executor = null) {
   let bodyText = "";
@@ -104,6 +104,7 @@ export async function parseUpstreamError(response, executor = null) {
           resetsAtMs: parsed.resetsAtMs,
           cooldownHint: parsed.cooldownHint ?? cooldownHint,
           upstreamBody,
+          noCooldown: parsed.noCooldown === true,
         };
       }
     } catch { /* fall through to default parsing */ }
@@ -128,8 +129,8 @@ export async function parseUpstreamError(response, executor = null) {
  * @param {number} statusCode - HTTP status code
  * @param {string} message - Error message
  * @param {number} [resetsAtMs] - Optional precise cooldown expiry (ms epoch) for provider-specific quota errors
- * @param {object} [opts] - Extra metadata: { resetsAtMs, cooldownHint, upstreamBody } (object-arg form for new callers)
- * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null }}
+ * @param {object} [opts] - Extra metadata: { resetsAtMs, cooldownHint, upstreamBody, noCooldown } (object-arg form for new callers)
+ * @returns {{ success: false, status: number, error: string, response: Response, resetsAtMs?: number, cooldownHint?: object|null, upstreamBody?: string|null, noCooldown?: boolean }}
  */
 export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOpts) {
   // New signature: createErrorResult(status, message, { resetsAtMs, cooldownHint, upstreamBody, extraHeaders })
@@ -138,11 +139,13 @@ export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOp
   let cooldownHint = null;
   let upstreamBody = null;
   let extraHeaders = null;
+  let noCooldown = false;
   if (resetsAtMsOrOpts !== null && typeof resetsAtMsOrOpts === "object") {
     resetsAtMs = resetsAtMsOrOpts.resetsAtMs;
     cooldownHint = resetsAtMsOrOpts.cooldownHint ?? null;
     upstreamBody = resetsAtMsOrOpts.upstreamBody ?? null;
     extraHeaders = resetsAtMsOrOpts.extraHeaders ?? null;
+    noCooldown = resetsAtMsOrOpts.noCooldown === true;
   } else {
     resetsAtMs = resetsAtMsOrOpts;
     if (maybeOpts && typeof maybeOpts === "object") {
@@ -150,6 +153,7 @@ export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOp
       if (maybeOpts.resetsAtMs !== undefined) resetsAtMs = maybeOpts.resetsAtMs;
       if (maybeOpts.upstreamBody !== undefined) upstreamBody = maybeOpts.upstreamBody;
       extraHeaders = maybeOpts.extraHeaders ?? null;
+      noCooldown = maybeOpts.noCooldown === true;
     }
   }
   return {
@@ -159,6 +163,7 @@ export function createErrorResult(statusCode, message, resetsAtMsOrOpts, maybeOp
     resetsAtMs,
     cooldownHint,
     upstreamBody,
+    noCooldown,
     response: errorResponse(statusCode, message, extraHeaders),
   };
 }

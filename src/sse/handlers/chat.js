@@ -377,6 +377,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     if (result.success) return result.response;
 
+    // Some provider failures are request-scoped capacity signals rather than an
+    // unhealthy credential. Return them without account rotation, model locks,
+    // or a Self-Aware cooldown sidecar.
+    if (result.noCooldown) {
+      log.warn("COOLDOWN", `No-cooldown upstream rejection (${result.status}); account remains eligible`);
+      return result.response;
+    }
+
     // OpenCode custom providers send no-tool auxiliary requests beside the main
     // agent request. A FreeUsageLimitError on that auxiliary shape does not mean
     // the proxy is exhausted; return it without rotating or cooling identities.
