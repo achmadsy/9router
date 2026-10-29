@@ -219,7 +219,8 @@ export async function claimZaiPlan(
   planId,
   proxyOptions = null,
   fetchImpl = proxyAwareFetch,
-  captchaProxyUrl = ""
+  captchaProxyUrl = "",
+  { activationRetries = 0, activationDelayMs = 5000 } = {}
 ) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   const requestedPlanId = typeof planId === "string" ? planId.trim() : "";
@@ -229,7 +230,7 @@ export async function claimZaiPlan(
   // actually offered (dated variants like zcode-v3-start-plan-1029).
   const autoSelect = !requestedPlanId || requestedPlanId === zcodeConfig.startPlanId;
 
-  const before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
+  let before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
   if (autoSelect) {
     if (hasActiveStartPlan(before)) {
       const active = before.activePlans.find(
@@ -241,13 +242,32 @@ export async function claimZaiPlan(
     return { status: "already_active", planId: requestedPlanId, plans: before };
   }
 
+  // Z.AI activates the trial asynchronously after login (observed ~3h lag),
+  // so the offer may not be visible yet — re-inspect before giving up.
   const target = autoSelect
     ? selectClaimableStartPlan(before)
     : before.offers.find((offer) => offer.planId === requestedPlanId && offer.claimable) || null;
   if (!target) {
+    for (let attempt = 0; attempt < activationRetries; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, activationDelayMs));
+      before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
+      const found = autoSelect
+        ? selectClaimableStartPlan(before)
+        : before.offers.find((offer) => offer.planId === requestedPlanId && offer.claimable) || null;
+      if (found) {
+        // Re-enter with the original planId so the fresh inspection decides.
+        return claimZaiPlan(jwt, requestedPlanId, proxyOptions, fetchImpl, captchaProxyUrl);
+      }
+      if (autoSelect && hasActiveStartPlan(before)) {
+        const active = before.activePlans.find(
+          (plan) => plan.status === "active" && isStartPlanIdentity(plan)
+        );
+        return { status: "already_active", planId: active.planId, plans: before };
+      }
+    }
     throw new Error(
       autoSelect
-        ? "No Start Plan is currently offered to this account"
+        ? "No Start Plan is currently offered to this account (Z.AI activates the trial asynchronously — try again in a few minutes)"
         : "This plan is not currently offered to the account"
     );
   }

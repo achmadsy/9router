@@ -20,6 +20,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  */
 const ZCODE_API_BASE = process.env.ZCODE_API_BASE_URL || config.apiBaseUrl;
 const MAX_POLL_DURATION_MS = 300 * 1000;
+// Z.AI provisions the trial asynchronously after login. Poll the preview endpoint
+// up to 6 times at 5s intervals (~30s total) within the poll route's single call
+// before declaring the claim delayed.
+const START_PLAN_ACTIVATION_RETRIES = 6;
+const START_PLAN_ACTIVATION_DELAY_MS = 5000;
 
 function decodeJwtPayload(jwt) {
   try {
@@ -316,8 +321,13 @@ export class ZaiAuthFlow {
   /** Claim the official ZCode Start Plan trial, then verify the entitlement. */
   async initializeStartPlan(zcodeJwtToken) {
     try {
-      // null → auto-select the dated Start Plan campaign the account is offered
-      const result = await claimZaiPlan(zcodeJwtToken, null);
+      // null → auto-select the dated Start Plan campaign the account is offered.
+      // Z.AI provisions the trial asynchronously after login (observed ~3h lag),
+      // so poll the preview for a while before declaring failure.
+      const result = await claimZaiPlan(zcodeJwtToken, null, null, undefined, "", {
+        activationRetries: START_PLAN_ACTIVATION_RETRIES,
+        activationDelayMs: START_PLAN_ACTIVATION_DELAY_MS,
+      });
       const message =
         result.status === "already_active"
           ? "[Start Plan] Active trial already present"

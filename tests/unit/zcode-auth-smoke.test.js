@@ -225,34 +225,37 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
   });
 
   it("rejects accounts without the official Start Plan preview", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
+    vi.useFakeTimers();
+    try {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fetchMock = vi.fn().mockImplementation(async (url) => ({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify({ code: 0, data: { plans: [] } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({
-          code: 0,
-          data: { plans: [{ plan_id: "weekend-build", name: "Weekend Build" }] },
-        }),
-      });
-    vi.stubGlobal("fetch", fetchMock);
-    mocks.proxyFetch.mockImplementation(fetchMock);
+        text: async () => JSON.stringify(
+          url.includes("/billing/preview")
+            ? { code: 0, data: { plans: [{ plan_id: "weekend-build", name: "Weekend Build" }] } }
+            : { code: 0, data: { plans: [] } }
+        ),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      mocks.proxyFetch.mockImplementation(fetchMock);
 
-    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
-      "No Start Plan is currently offered to this account"
-    );
+      const assertion = expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
+        "No Start Plan is currently offered to this account"
+      );
+      await vi.advanceTimersByTimeAsync(31 * 1000);
+      await assertion;
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[Start Plan] Creation failed",
-      expect.objectContaining({ reason: expect.stringContaining("No Start Plan is currently offered") })
-    );
+      // 1 initial inspection + 6 activation retries, never a claim
+      expect(fetchMock).toHaveBeenCalledTimes(14);
+      expect(fetchMock.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[Start Plan] Creation failed",
+        expect.objectContaining({ reason: expect.stringContaining("No Start Plan is currently offered") })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("redacts provider errors while creating Start Plan", async () => {
