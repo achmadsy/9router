@@ -298,7 +298,26 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     const toolN = translatedBody.tools?.length || body.tools?.length || 0;
     const fmtStr = passthrough ? `FMT: ${sourceFormat} (passthrough)` : `FMT: ${sourceFormat}→${targetFormat}`;
     const showThinking = provider !== "grok-cli" || supportsGrokCliReasoningEffort(model);
-    const think = showThinking ? log.fmtThink?.(extractThinking(translatedBody)) : null;
+    const thinkIntent = showThinking ? extractThinking(translatedBody) : null;
+    const think = showThinking ? log.fmtThink?.(thinkIntent) : null;
+    // Effective effort level on the wire: explicit fields win; GLM-5.3 Start Plan
+    // derives effort from the budget (mirrors GlmExecutor.transformRequest).
+    let effortLevel = showThinking
+      ? (translatedBody?.output_config?.effort
+        || translatedBody?.reasoning_effort
+        || (typeof translatedBody?.reasoning === "object" ? translatedBody?.reasoning?.effort : null)
+        || null)
+      : null;
+    if (
+      !effortLevel && thinkIntent?.mode === "budget" &&
+      (runtimeProvider === "glm" || runtimeProvider === "glm-cn") && /^glm-5\.3/.test(model)
+    ) {
+      const psd = credentials?.providerSpecificData;
+      if (psd?.zcodeJwtToken || credentials?.accessToken || psd?.useCodingPlan) {
+        effortLevel = thinkIntent.budget >= 32000 ? "max" : "high";
+      }
+    }
+    const thinkLabel = think ? `THINK:${think}${effortLevel ? `(${effortLevel})` : ""}` : null;
     const acc = credentials?.connectionName || credentials?.connectionId?.slice(0, 8) || "-";
     const parts = [
       `POST ${clientModel} → ${provider}/${model}`,
@@ -307,7 +326,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       `${msgN} MSG`,
     ];
     if (toolN) parts.push(`${toolN} TOOL`);
-    if (think) parts.push(`THINK:${think}`);
+    if (thinkLabel) parts.push(thinkLabel);
     parts.push(`ACC:${acc}`);
     log.line(reqTag, "▶", parts.join(" · "));
   }
