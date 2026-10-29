@@ -236,12 +236,16 @@ export function buildZcodeGuiRequestHeaders(extraHeaders = {}, endpoint) {
   return headers;
 }
 
-/** Native billing/balance request: NodeApiClient GUI headers + Authorization only. */
-export function buildZcodeBalanceHeaders(jwt) {
+/** Native Start Plan billing requests: GUI headers plus the ZCode JWT. */
+export function buildZcodeBillingHeaders(jwt, endpoint = zcodeConfig.startPlanBalanceUrl) {
   return buildZcodeGuiRequestHeaders(
     { Authorization: `Bearer ${jwt}` },
-    zcodeConfig.startPlanBalanceUrl
+    endpoint
   );
+}
+
+export function buildZcodeBalanceHeaders(jwt) {
+  return buildZcodeBillingHeaders(jwt);
 }
 
 const ANTHROPIC_HEADER_KEYS = [

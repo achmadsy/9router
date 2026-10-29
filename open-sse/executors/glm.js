@@ -151,15 +151,22 @@ export class GlmExecutor extends DefaultExecutor {
       // Native GLM-5.3 Start Plan: thinking.budgetTokens + output_config.effort
       if (bareId === "glm-5.3" || bareId === "glm-5.3-flash") {
         const disabled = transformed.thinking?.type === "disabled";
+        // The translator rebuilds `thinking` without budget_tokens for the zai
+        // format, so max-effort requests must recover the 32k ceiling here.
         const budget =
           Number.isFinite(transformed.thinking?.budget_tokens) && transformed.thinking.budget_tokens > 0
             ? transformed.thinking.budget_tokens
-            : 8000;
+            : transformed.reasoning_effort === "max"
+              ? 32000
+              : 8000;
         if (!disabled) {
           transformed.thinking = { type: "enabled", budgetTokens: budget };
           transformed.output_config = {
             ...transformed.output_config,
-            effort: transformed.reasoning_effort || transformed.output_config?.effort || "high",
+            effort:
+              transformed.reasoning_effort ||
+              transformed.output_config?.effort ||
+              (budget >= 32000 ? "max" : "high"),
           };
         }
         delete transformed.reasoning_effort;

@@ -44,7 +44,14 @@ const zcodeConfig = {
   codingPlanUrl:
     process.env.ZAI_CODING_PLAN_URL ||
     `${apiBaseUrl.replace(/\/+$/, "")}/zcode-plan/anthropic/v1/messages`,
-  /** Start Plan billing balance (native ZCode quota panel). */
+  /** Start Plan trial claim flow from the native ZCode subscription service. */
+  startPlanId: process.env.ZAI_START_PLAN_ID || "zcode-v3-start-plan",
+  startPlanPreviewUrl:
+    process.env.ZAI_START_PLAN_PREVIEW_URL ||
+    `${apiBaseUrl.replace(/\/+$/, "")}/zcode-plan/billing/preview`,
+  startPlanClaimUrl:
+    process.env.ZAI_START_PLAN_CLAIM_URL ||
+    `${apiBaseUrl.replace(/\/+$/, "")}/zcode-plan/billing/claim`,
   startPlanBalanceUrl:
     process.env.ZAI_START_PLAN_BALANCE_URL ||
     `${apiBaseUrl.replace(/\/+$/, "")}/zcode-plan/billing/balance`,

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import config from "./config.js";
-import { buildZcodeBalanceHeaders, buildZcodeGuiRequestHeaders } from "./headers.js";
+import { buildZcodeGuiRequestHeaders } from "./headers.js";
+import { claimZaiPlan } from "./plans.js";
 import { ZCODE_ZAI_DEFAULT_EXPIRES_IN } from "./constants.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -125,26 +126,6 @@ function safeStartPlanReason(value, fallback) {
     .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[REDACTED]");
 }
 
-function summarizeStartPlanResponse(res, json, text) {
-  const summary = {
-    provider: "zai",
-    httpStatus: res.status,
-  };
-
-  if (!json) {
-    summary.response = text ? "non-JSON response" : "empty response";
-    summary.bodyLength = text.length;
-    return summary;
-  }
-
-  if (typeof json.code === "number") summary.code = json.code;
-  if (typeof json.success === "boolean") summary.success = json.success;
-  if (typeof json.msg === "string" && json.msg.trim()) {
-    summary.message = safeStartPlanReason(json.msg, "Provider returned an error");
-  }
-  if (Array.isArray(json.data?.plans)) summary.planCount = json.data.plans.length;
-  return summary;
-}
 
 /**
  * Z.AI OAuth via ZCode CLI poll (server-mediated callback).
@@ -332,60 +313,27 @@ export class ZaiAuthFlow {
     return { status: "pending" };
   }
 
-  /**
-   * Trigger the same automatic Start Plan initialization as ZCode desktop.
-   * Reading billing/balance is idempotent; campaign plans use a separate manual claim endpoint.
-   */
+  /** Claim the official ZCode Start Plan trial, then verify the entitlement. */
   async initializeStartPlan(zcodeJwtToken) {
-    const jwt = typeof zcodeJwtToken === "string" ? zcodeJwtToken.trim() : "";
-    if (!jwt) throw new Error("Z.AI Start Plan initialization requires a ZCode JWT");
-
-    const balanceUrl = new URL(config.startPlanBalanceUrl);
-    balanceUrl.searchParams.set("app_version", config.appVersion);
-
-    let res;
     try {
-      res = await fetch(balanceUrl.toString(), {
-        method: "GET",
-        headers: buildZcodeBalanceHeaders(jwt),
-      });
-    } catch (error) {
-      const reason = safeStartPlanReason(error?.message, "Network request failed");
-      console.warn("[Start Plan] Initialization failed", {
+      const result = await claimZaiPlan(zcodeJwtToken, config.startPlanId);
+      const message =
+        result.status === "already_active"
+          ? "[Start Plan] Active trial already present"
+          : result.status === "claimed_pending"
+            ? "[Start Plan] Claim succeeded; balance update pending"
+            : "[Start Plan] Created and verified";
+      console.info(message, {
         provider: "zai",
-        reason,
+        planId: result.planId,
+        status: result.status,
       });
-      throw new Error(`Z.AI Start Plan initialization failed: ${reason}`);
-    }
-
-    let text;
-    try {
-      text = await res.text();
+      return result;
     } catch (error) {
-      const reason = safeStartPlanReason(error?.message, "Failed to read provider response");
-      console.warn("[Start Plan] Initialization failed", {
-        provider: "zai",
-        httpStatus: res.status,
-        reason,
-      });
-      throw new Error(`Z.AI Start Plan initialization failed: ${res.status} ${reason}`);
+      const reason = safeStartPlanReason(error?.message, "Start Plan creation failed");
+      console.warn("[Start Plan] Creation failed", { provider: "zai", reason });
+      throw new Error(`Z.AI Start Plan creation failed: ${reason}`);
     }
-
-    const json = safeJson(text);
-    const code = json?.code;
-    const envelopeOk = code === undefined || code === null || code === 0 || code === 200;
-    const summary = summarizeStartPlanResponse(res, json, text);
-    if (!res.ok || !json || json.success === false || !envelopeOk) {
-      const reason = safeStartPlanReason(
-        json?.msg,
-        !json ? summary.response : "Provider rejected Start Plan initialization"
-      );
-      console.warn("[Start Plan] Initialization failed", { ...summary, reason });
-      throw new Error(`Z.AI Start Plan initialization failed: ${res.status} ${reason}`);
-    }
-
-    console.info("[Start Plan] Initialization succeeded", summary);
-    return json;
   }
 
   /** Seconds the client should wait before the next poll. */

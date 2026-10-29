@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Features
+- **Z.AI GLM**: add a provider-page Force Max Thinking toggle that overrides lower or disabled request effort, plus account-scoped plan management for retrieving and claiming offers individually or across all eligible OAuth accounts.
 - **Probe parity**: run and display the exact ordered 86-check BazaarLink suite (Identity 29, Sub-model ID 29, Security 16, Integrity 12), with server-authoritative membership and English catalog metadata.
 - **Probe Model Discovery**: add shared target/judge source controls, secure sidecar-backed custom endpoint catalogs, local key-filtered 9Router catalogs, explicit fetch/custom model controls, and primary sidebar navigation.
 - **Container CI**: publish native amd64/arm64 `ghcr.io/achmadsy/9router:latest` images from `master` without automatic deployment.
@@ -10,7 +11,7 @@
 ## Fixes
 - **Probe Runs**: retry transient task failures up to five times with exponential backoff, and keep all GLM/Z.AI concurrency-limit variants eligible instead of cooling the account.
 - **Quota Tracker**: normalize grouped GLM Coding and Start Plan balances so combined and account-unique rows calculate the correct remaining percentage.
-- **ZCode**: add a separate Z.AI OAuth action that automatically initializes the Start Plan through the native billing balance request while preserving the existing authorization flow and manual campaign-plan claiming behavior.
+- **ZCode**: add a separate Z.AI OAuth option that claims the official `zcode-v3-start-plan` through the native billing preview/claim flow, verifies the resulting active entitlement, and preserves the existing authorization flow.
 - **OpenCode Free**: make round-robin honor its selected pool list instead of staying pinned to the saved single-pool fallback; namespace stable session and project identities by the selected proxy pool so proxies no longer share one upstream quota identity; preserve no-auth behavior for provider clones; and fail closed when a strict pool resolves without a usable proxy URL.
 - **OpenCode Free**: align no-tool auxiliary requests by adding native `read`/`shell` fingerprint definitions before generating the Code Mode catalog; if OpenCode still rejects that exact auxiliary shape with `FreeUsageLimitError`, return it without rotating or cooling proxy identities; cap other genuine free-limit cooldowns to a 90-second re-probe window and clear a matching proxy cooldown when a sibling request succeeds.
 - **OpenCode Free**: detect the complete native cloud system envelope from request content rather than trusting the OpenCode User-Agent, so OpenCode custom-provider and auxiliary requests receive the required generated envelope instead of triggering upstream `FreeUsageLimitError` and exhausting proxy identities.

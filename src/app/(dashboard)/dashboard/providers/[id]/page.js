@@ -6,6 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, ZedAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, ZaiOAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
+import ZaiPlanManagementModal from "./ZaiPlanManagementModal";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { resolveRuntimeProviderId, isProviderCloneId } from "open-sse/providers/clones.js";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
@@ -55,6 +56,7 @@ export default function ProviderDetailPage() {
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
+  const [showZaiPlanModal, setShowZaiPlanModal] = useState(false);
   const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
   const [showIFlowCookieModal, setShowIFlowCookieModal] = useState(false);
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
@@ -86,6 +88,7 @@ export default function ProviderDetailPage() {
   const [providerStickyLimit, setProviderStickyLimit] = useState("");
   const [savedRotatePoolIds, setSavedRotatePoolIds] = useState([]);
   const [thinkingMode, setThinkingMode] = useState("auto");
+  const [forceMaxThinking, setForceMaxThinking] = useState(false);
   const [autoPing, setAutoPing] = useState({ enabled: false, connections: {}, schedules: {} });
   const [scheduleConnection, setScheduleConnection] = useState(null);
   const [suggestedModels, setSuggestedModels] = useState([]);
@@ -375,6 +378,7 @@ export default function ProviderDetailPage() {
       // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
+      setForceMaxThinking(thinkingCfg.forceMax === true);
       const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[cloneBaseId];
       const apCfg = autoPingSettingsKey ? settingsData[autoPingSettingsKey] || {} : {};
       setAutoPing({ enabled: apCfg.enabled === true, connections: apCfg.connections || {}, schedules: apCfg.schedules || {} });
@@ -465,17 +469,17 @@ export default function ProviderDetailPage() {
     saveProviderStrategy("round-robin", value);
   };
 
-  const saveThinkingConfig = async (mode) => {
+  const saveThinkingConfig = async (mode, forceMax = forceMaxThinking) => {
     try {
       const settingsRes = await fetch("/api/settings", { cache: "no-store" });
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
       const current = settingsData.providerThinking || {};
       const updated = { ...current };
-      if (!mode || mode === "auto") {
-        delete updated[providerId];
-      } else {
-        updated[providerId] = { mode };
-      }
+      const config = {};
+      if (mode && mode !== "auto") config.mode = mode;
+      if (forceMax) config.forceMax = true;
+      if (Object.keys(config).length === 0) delete updated[providerId];
+      else updated[providerId] = config;
       await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -489,6 +493,11 @@ export default function ProviderDetailPage() {
   const handleThinkingModeChange = (mode) => {
     setThinkingMode(mode);
     saveThinkingConfig(mode);
+  };
+
+  const handleForceMaxThinkingChange = (enabled) => {
+    setForceMaxThinking(enabled);
+    saveThinkingConfig(thinkingMode, enabled);
   };
 
   const saveAutoPing = async (next) => {
@@ -1907,6 +1916,16 @@ export default function ProviderDetailPage() {
               )}
               {connections.length > 0 && (
                 <>
+                  {cloneBaseId === "glm" && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="workspace_premium"
+                      onClick={() => setShowZaiPlanModal(true)}
+                    >
+                      Manage Plans
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="secondary"
@@ -2165,6 +2184,18 @@ export default function ProviderDetailPage() {
                 ))}
               </select>
             )}
+            {(cloneBaseId === "glm" || cloneBaseId === "glm-cn") && (
+              <label
+                className="flex items-center gap-2 text-xs text-text-muted"
+                title="Override every request for this provider to use maximum supported thinking"
+              >
+                <Toggle
+                  checked={forceMaxThinking}
+                  onChange={handleForceMaxThinkingChange}
+                />
+                Force Max Thinking
+              </label>
+            )}
           </div>
           {!isCompatible && (() => {
             const allIds = [
@@ -2274,6 +2305,14 @@ export default function ProviderDetailPage() {
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
           onClose={() => setShowOAuthModal(false)}
+        />
+      )}
+
+      {cloneBaseId === "glm" && (
+        <ZaiPlanManagementModal
+          isOpen={showZaiPlanModal}
+          providerId={providerId}
+          onClose={() => setShowZaiPlanModal(false)}
         />
       )}
 

@@ -36,6 +36,23 @@ import { resolveSessionId } from "../utils/sessionManager.js";
 import { stripRecognizedContextSuffix } from "../services/model.js";
 import { resolveRuntimeProviderId } from "../providers/clones.js";
 
+export function applyProviderThinkingOverride(body, runtimeProvider, providerThinking) {
+  if (
+    providerThinking?.forceMax !== true ||
+    (runtimeProvider !== "glm" && runtimeProvider !== "glm-cn")
+  ) {
+    return body;
+  }
+
+  return {
+    ...body,
+    reasoning_effort: "max",
+    output_config: { ...body.output_config, effort: "max" },
+    thinking: { type: "enabled", budget_tokens: 32000 },
+    enable_thinking: true,
+  };
+}
+
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -133,9 +150,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
   const stripList = getModelStrip(alias, model);
 
-  // Inject provider-level thinking config override (only if client hasn't set)
-  // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
-  if (providerThinking?.mode && providerThinking.mode !== "auto") {
+  // GLM force-max is an explicit override, including client-supplied lower/disabled values.
+  // Other provider-level modes remain defaults and only fill missing client intent.
+  const forceMaxApplied =
+    providerThinking?.forceMax === true &&
+    (runtimeProvider === "glm" || runtimeProvider === "glm-cn");
+  body = applyProviderThinkingOverride(body, runtimeProvider, providerThinking);
+  if (!forceMaxApplied && providerThinking?.mode && providerThinking.mode !== "auto") {
     const mode = providerThinking.mode;
     if (mode === "on" && !body.thinking) {
       console.log("Injecting provider-level thinking config override: on");

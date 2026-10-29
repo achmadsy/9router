@@ -28,7 +28,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
+      clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
     pollCountRef.current = 0;
