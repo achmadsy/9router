@@ -195,12 +195,10 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     }
   };
 
-  const openStartPlanAuthorizeUrl = () => {
-    initializeStartPlanRef.current = true;
-    setInitializeStartPlan(true);
-    if (authorizeUrl) {
-      window.open(authorizeUrl, "_blank", "noopener,noreferrer");
-    }
+  const handleStartPlanChange = (event) => {
+    const checked = event.target.checked;
+    initializeStartPlanRef.current = checked;
+    setInitializeStartPlan(checked);
   };
 
   const providerName = providerInfo?.name || "GLM Coding";
@@ -254,25 +252,25 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
                 <div className="bg-surface-secondary p-4 rounded-lg text-sm space-y-2">
                   <p className="font-medium text-text-primary">Complete authorization in your browser:</p>
                   <ol className="list-decimal list-inside space-y-1 text-text-muted">
-                    <li>Choose standard authorization or Start Plan setup below</li>
-                    <li>Log in and approve access on z.ai</li>
+                    <li>Choose whether to create a Start Plan below</li>
+                    <li>Open the authorization page, then log in and approve access on z.ai</li>
                     <li>Return here — connection completes automatically</li>
                   </ol>
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Button onClick={openAuthorizeUrl} fullWidth icon="open_in_new">
-                    Open Authorization Page
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={openStartPlanAuthorizeUrl}
-                    fullWidth
-                    icon="auto_awesome"
-                  >
-                    Auth with Create Start Plan
-                  </Button>
-                </div>
+                <label className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-text-primary cursor-pointer hover:bg-black/[0.03] dark:hover:bg-white/[0.03]">
+                  <input
+                    type="checkbox"
+                    checked={initializeStartPlan}
+                    onChange={handleStartPlanChange}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  />
+                  <span>Create Start Plan</span>
+                </label>
+
+                <Button onClick={openAuthorizeUrl} fullWidth icon="open_in_new">
+                  Open Authorization Page
+                </Button>
 
                 <div className="flex items-center justify-center gap-2 text-text-muted py-2">
                   <span className="animate-spin text-xs">⏳</span>
