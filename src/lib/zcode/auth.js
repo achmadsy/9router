@@ -111,6 +111,41 @@ function safeJson(text) {
   }
 }
 
+function safeStartPlanReason(value, fallback) {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  return value
+    .trim()
+    .slice(0, 300)
+    .replace(/bearer\s+[^\s"',;\]}>]+/gi, "Bearer [REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED_JWT]")
+    .replace(
+      /(["']?\b(?:access_token|refresh_token|id_token|jwt|authorization|cookie|secret|token)["']?\s*[:=]\s*["']?)([^"',\s;}>]{6,})([\"']?)/gi,
+      "$1[REDACTED]$3"
+    )
+    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[REDACTED]");
+}
+
+function summarizeStartPlanResponse(res, json, text) {
+  const summary = {
+    provider: "zai",
+    httpStatus: res.status,
+  };
+
+  if (!json) {
+    summary.response = text ? "non-JSON response" : "empty response";
+    summary.bodyLength = text.length;
+    return summary;
+  }
+
+  if (typeof json.code === "number") summary.code = json.code;
+  if (typeof json.success === "boolean") summary.success = json.success;
+  if (typeof json.msg === "string" && json.msg.trim()) {
+    summary.message = safeStartPlanReason(json.msg, "Provider returned an error");
+  }
+  if (Array.isArray(json.data?.plans)) summary.planCount = json.data.plans.length;
+  return summary;
+}
+
 /**
  * Z.AI OAuth via ZCode CLI poll (server-mediated callback).
  * Mint coding-plan API key afterward for standard Anthropic endpoint use.
@@ -307,20 +342,49 @@ export class ZaiAuthFlow {
 
     const balanceUrl = new URL(config.startPlanBalanceUrl);
     balanceUrl.searchParams.set("app_version", config.appVersion);
-    const res = await fetch(balanceUrl.toString(), {
-      method: "GET",
-      headers: buildZcodeBalanceHeaders(jwt),
-    });
-    const text = await res.text();
+
+    let res;
+    try {
+      res = await fetch(balanceUrl.toString(), {
+        method: "GET",
+        headers: buildZcodeBalanceHeaders(jwt),
+      });
+    } catch (error) {
+      const reason = safeStartPlanReason(error?.message, "Network request failed");
+      console.warn("[Start Plan] Initialization failed", {
+        provider: "zai",
+        reason,
+      });
+      throw new Error(`Z.AI Start Plan initialization failed: ${reason}`);
+    }
+
+    let text;
+    try {
+      text = await res.text();
+    } catch (error) {
+      const reason = safeStartPlanReason(error?.message, "Failed to read provider response");
+      console.warn("[Start Plan] Initialization failed", {
+        provider: "zai",
+        httpStatus: res.status,
+        reason,
+      });
+      throw new Error(`Z.AI Start Plan initialization failed: ${res.status} ${reason}`);
+    }
+
     const json = safeJson(text);
     const code = json?.code;
     const envelopeOk = code === undefined || code === null || code === 0 || code === 200;
+    const summary = summarizeStartPlanResponse(res, json, text);
     if (!res.ok || !json || json.success === false || !envelopeOk) {
-      throw new Error(
-        `Z.AI Start Plan initialization failed: ${res.status} ${json?.msg || text.slice(0, 300)}`
+      const reason = safeStartPlanReason(
+        json?.msg,
+        !json ? summary.response : "Provider rejected Start Plan initialization"
       );
+      console.warn("[Start Plan] Initialization failed", { ...summary, reason });
+      throw new Error(`Z.AI Start Plan initialization failed: ${res.status} ${reason}`);
     }
 
+    console.info("[Start Plan] Initialization succeeded", summary);
     return json;
   }
 

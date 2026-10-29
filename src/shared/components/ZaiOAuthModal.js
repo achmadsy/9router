@@ -15,11 +15,13 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
   const [flowId, setFlowId] = useState(null);
   const [authorizeUrl, setAuthorizeUrl] = useState(null);
   const [initializeStartPlan, setInitializeStartPlan] = useState(false);
+  const [startPlanInitialized, setStartPlanInitialized] = useState(false);
   const [successWarning, setSuccessWarning] = useState(null);
   const [error, setError] = useState(null);
   const pollCountRef = useRef(0);
   const pollTimerRef = useRef(null);
   const initializeStartPlanRef = useRef(false);
+  const pollDelayRef = useRef(POLL_INTERVAL_MS);
   const initAbortRef = useRef(null);
   const activeFlowIdRef = useRef(null);
   const sessionMissRef = useRef(0);
@@ -43,6 +45,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     setAuthorizeUrl(null);
     initializeStartPlanRef.current = false;
     setInitializeStartPlan(false);
+    setStartPlanInitialized(false);
     setSuccessWarning(null);
     setError(null);
   }, [stopPolling]);
@@ -117,6 +120,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
 
           if (data.status === "ready") {
             stopPolling();
+            setStartPlanInitialized(data.startPlanInitialized === true);
             setSuccessWarning(data.warning || null);
             setStep("success");
             setTimeout(() => {
@@ -148,6 +152,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     sessionMissRef.current = 0;
     setError(null);
     setSuccessWarning(null);
+    setStartPlanInitialized(false);
     initializeStartPlanRef.current = withStartPlan;
     setInitializeStartPlan(withStartPlan);
     setStep("init");
@@ -168,14 +173,14 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
       activeFlowIdRef.current = data.flowId;
       setFlowId(data.flowId);
       setAuthorizeUrl(data.authorizeUrl);
+      pollDelayRef.current = data.pollAfterMs || POLL_INTERVAL_MS;
       setStep("authorize");
-      startPoll(data.flowId, data.pollAfterMs || POLL_INTERVAL_MS);
     } catch (err) {
       if (abortController.signal.aborted) return;
       setError(err.message);
       setStep("error");
     }
-  }, [startPoll, stopPolling, withAs]);
+  }, [stopPolling, withAs]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -190,9 +195,11 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openAuthorizeUrl = () => {
-    if (authorizeUrl) {
-      window.open(authorizeUrl, "_blank", "noopener,noreferrer");
-    }
+    if (!authorizeUrl || !flowId) return;
+
+    initializeStartPlanRef.current = initializeStartPlan;
+    window.open(authorizeUrl, "_blank", "noopener,noreferrer");
+    startPoll(flowId, pollDelayRef.current);
   };
 
   const handleStartPlanChange = (event) => {
@@ -211,7 +218,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
             <div className="text-6xl mb-4">✅</div>
             <p className="text-lg font-medium text-text-primary">Account connected!</p>
             <p className="text-sm text-text-muted mt-2">
-              {initializeStartPlan && !successWarning
+              {startPlanInitialized
                 ? "Coding Plan credentials saved and Start Plan initialized"
                 : "Coding Plan credentials saved"}
             </p>
@@ -263,19 +270,27 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
                     type="checkbox"
                     checked={initializeStartPlan}
                     onChange={handleStartPlanChange}
-                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    disabled={step === "polling"}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:cursor-not-allowed"
                   />
                   <span>Create Start Plan</span>
                 </label>
 
-                <Button onClick={openAuthorizeUrl} fullWidth icon="open_in_new">
-                  Open Authorization Page
+                <Button
+                  onClick={openAuthorizeUrl}
+                  disabled={step === "polling"}
+                  fullWidth
+                  icon="open_in_new"
+                >
+                  {step === "polling" ? "Authorization Page Opened" : "Open Authorization Page"}
                 </Button>
 
-                <div className="flex items-center justify-center gap-2 text-text-muted py-2">
-                  <span className="animate-spin text-xs">⏳</span>
-                  <span className="text-xs">Waiting for authorization...</span>
-                </div>
+                {step === "polling" && (
+                  <div className="flex items-center justify-center gap-2 text-text-muted py-2">
+                    <span className="animate-spin text-xs">⏳</span>
+                    <span className="text-xs">Waiting for authorization...</span>
+                  </div>
+                )}
               </div>
             )}
 

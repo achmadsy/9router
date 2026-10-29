@@ -27,6 +27,13 @@ vi.mock("@/lib/zcode/auth", () => ({ ZaiAuthFlow: class {
 vi.mock("@/lib/zcode/sessions", () => ({
   createZaiSession: async (data) => mocks.sessions.set(data.flowId, data),
   getZaiSession: async (id) => mocks.sessions.get(id),
+  updateZaiSession: async (id, updates) => {
+    const session = mocks.sessions.get(id);
+    if (!session) return null;
+    const updated = { ...session, ...updates };
+    mocks.sessions.set(id, updated);
+    return updated;
+  },
   deleteZaiSession: async (id) => mocks.sessions.delete(id),
 }));
 const routes = {
@@ -83,6 +90,7 @@ describe("provider-specific clone authentication", () => {
     }));
 
     expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ startPlanInitialized: true });
     expect(mocks.initializeStartPlan).toHaveBeenCalledWith("fake-jwt");
   });
 
@@ -98,6 +106,24 @@ describe("provider-specific clone authentication", () => {
 
     expect(response.status).toBe(200);
     expect(body.warning).toContain("Start Plan unavailable");
+    expect(body.startPlanInitialized).toBe(false);
     expect(mocks.save).toHaveBeenCalledOnce();
+  });
+
+  it("honors unchecking Start Plan before authorization completes", async () => {
+    await initGlm(req("zai/init", "glm-clone-test"));
+    const session = mocks.sessions.get("flow-test");
+    session.initializeStartPlan = true;
+    mocks.sessions.set("flow-test", session);
+
+    const response = await pollGlm(req("zai/poll", "glm-clone-test", {
+      flowId: "flow-test",
+      initializeStartPlan: false,
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.startPlanInitialized).toBe(false);
+    expect(mocks.initializeStartPlan).not.toHaveBeenCalled();
   });
 });

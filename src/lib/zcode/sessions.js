@@ -79,6 +79,16 @@ export async function getZaiSession(sessionId) {
   return session;
 }
 
+export async function updateZaiSession(sessionId, updates) {
+  const session = await getZaiSession(sessionId);
+  if (!session) return null;
+
+  const updated = { ...session, ...updates };
+  getSessionMap().set(sessionId, updated);
+  await kv.set(sessionId, updated);
+  return updated;
+}
+
 export async function deleteZaiSession(sessionId) {
   getSessionMap().delete(sessionId);
   await kv.remove(sessionId).catch(() => {});

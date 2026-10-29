@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZaiAuthFlow } from "@/lib/zcode/auth";
-import { getZaiSession, deleteZaiSession } from "@/lib/zcode/sessions";
+import { getZaiSession, updateZaiSession, deleteZaiSession } from "@/lib/zcode/sessions";
 import { saveOAuthConnection, sessionDestination, readAsParam } from "@/lib/oauth/utils/savedProvider";
 
 export const runtime = "nodejs";
@@ -18,7 +18,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "flowId is required" }, { status: 400 });
     }
 
-    const session = await getZaiSession(flowId);
+    let session = await getZaiSession(flowId);
     if (!session) {
       return NextResponse.json(
         { error: "OAuth session expired or not found" },
@@ -27,7 +27,17 @@ export async function POST(request) {
     }
 
     const targetProviderId = sessionDestination(session, readAsParam(request, body), "glm");
-    if (body?.initializeStartPlan === true) session.initializeStartPlan = true;
+    if (typeof body?.initializeStartPlan === "boolean") {
+      session = await updateZaiSession(flowId, {
+        initializeStartPlan: body.initializeStartPlan,
+      });
+      if (!session) {
+        return NextResponse.json(
+          { error: "OAuth session expired or not found" },
+          { status: 404 }
+        );
+      }
+    }
 
     // Rebuild flow handle from session (CLI poll needs Bearer pollToken only).
     const flow = new ZaiAuthFlow(undefined, session.pollToken);
@@ -79,7 +89,6 @@ export async function POST(request) {
         await flow.initializeStartPlan(zcodeJwtToken);
       } catch (err) {
         startPlanWarning = err.message || "Start Plan initialization failed";
-        console.warn("[Z.AI OAuth] Start Plan initialization warning:", err);
       }
     }
 
@@ -101,6 +110,7 @@ export async function POST(request) {
         email: connection.email,
         name: connection.name,
       },
+      startPlanInitialized: Boolean(session.initializeStartPlan && !startPlanWarning),
       ...(startPlanWarning ? { warning: startPlanWarning } : {}),
     });
   } catch (error) {

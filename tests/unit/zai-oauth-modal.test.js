@@ -14,10 +14,20 @@ describe("Z.AI OAuth modal", () => {
     expect(source).toContain("Create Start Plan");
   });
 
-  it("keeps the running poll synchronized with the checkbox", () => {
+  it("freezes the checkbox choice before polling starts", () => {
     expect(source).toContain("const checked = event.target.checked;");
     expect(source).toContain("initializeStartPlanRef.current = checked;");
     expect(source).toContain("setInitializeStartPlan(checked);");
     expect(source).toContain("initializeStartPlan: initializeStartPlanRef.current");
+    expect(source).toContain("initializeStartPlanRef.current = initializeStartPlan;");
+    expect(source).toContain("startPoll(flowId, pollDelayRef.current);");
+    expect(source).not.toContain("startPoll(data.flowId");
+    expect(source).toContain('disabled={step === "polling"}');
+  });
+
+  it("shows Start Plan success only when the server confirms it", () => {
+    expect(source).toContain("setStartPlanInitialized(data.startPlanInitialized === true);");
+    expect(source).toContain("{startPlanInitialized");
+    expect(source).not.toContain("{initializeStartPlan && !successWarning");
   });
 });

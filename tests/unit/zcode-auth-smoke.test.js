@@ -5,6 +5,7 @@ import { createZaiSession, getZaiSession, deleteZaiSession } from "../../src/lib
 describe("zcode CLI poll oauth (zcode-api method)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("generates poll token and session roundtrip", async () => {
@@ -110,10 +111,11 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
   });
 
   it("initializes Start Plan through the native billing balance request", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ code: 0, data: { plans: [] } }),
+      text: async () => JSON.stringify({ code: 0, success: true, data: { plans: [] } }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -130,18 +132,92 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
       "User-Agent": "ZCode/3.16.3",
       "X-ZCode-App-Version": "3.16.3",
     });
+    expect(infoSpy).toHaveBeenCalledWith("[Start Plan] Initialization succeeded", {
+      provider: "zai",
+      httpStatus: 200,
+      code: 0,
+      success: true,
+      planCount: 0,
+    });
+    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("zcode-jwt");
   });
 
-  it("rejects a failed Start Plan balance envelope", async () => {
+  it("logs a safe reason for a failed Start Plan balance envelope", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ code: 1113, msg: "no plan" }),
+      text: async () => JSON.stringify({
+        code: 1113,
+        msg: "no plan; bearer secret-token-value; jwt=eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.signature",
+        access_token: "provider-access-token-canary",
+      }),
     }));
 
     await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
       "no plan"
     );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[Start Plan] Initialization failed",
+      expect.objectContaining({
+        provider: "zai",
+        httpStatus: 200,
+        code: 1113,
+        reason: expect.stringContaining("no plan"),
+      })
+    );
+    const logs = JSON.stringify(warnSpy.mock.calls);
+    expect(logs).not.toContain("secret-token-value");
+    expect(logs).not.toContain("provider-access-token-canary");
+    expect(logs).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+    expect(logs).not.toContain("zcode-jwt");
+  });
+
+  it("does not expose malformed Start Plan response bodies", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => "Bearer malformed-secret-token eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.signature",
+    }));
+
+    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
+      "non-JSON response"
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[Start Plan] Initialization failed",
+      expect.objectContaining({
+        provider: "zai",
+        httpStatus: 502,
+        response: "non-JSON response",
+        reason: "non-JSON response",
+      })
+    );
+    const logs = JSON.stringify(warnSpy.mock.calls);
+    expect(logs).not.toContain("malformed-secret-token");
+    expect(logs).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+  });
+
+  it("logs a safe reason when the Start Plan request fails before a response", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(
+      new Error("network failure with bearer network-secret-token")
+    ));
+
+    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
+      "network failure"
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[Start Plan] Initialization failed",
+      expect.objectContaining({
+        provider: "zai",
+        reason: expect.stringContaining("network failure"),
+      })
+    );
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("network-secret-token");
   });
 
   it("uses the configured endpoint origin in native request headers", async () => {
