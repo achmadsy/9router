@@ -134,7 +134,19 @@ export async function POST(request, { params }) {
       }
 
       try {
-        const claimed = await claimZaiPlan(jwt, planId, await resolvePlanProxy(connection));
+        // CloakBrowser captcha solver must share the claim's egress IP.
+        const psd = connection.providerSpecificData || {};
+        const captchaProxyUrl =
+          psd.connectionProxyEnabled === true && psd.connectionProxyUrl
+            ? String(psd.connectionProxyUrl).trim()
+            : "";
+        const claimed = await claimZaiPlan(
+          jwt,
+          planId,
+          await resolvePlanProxy(connection),
+          undefined,
+          captchaProxyUrl
+        );
         results.push({
           connectionId,
           name: label,

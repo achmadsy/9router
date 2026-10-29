@@ -1,6 +1,21 @@
 import zcodeConfig from "./config.js";
 import { buildZcodeBillingHeaders } from "./headers.js";
 import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
+import { getCaptchaManager, getZcodeCaptchaPort } from "./captcha-service.js";
+
+// Mirrors GlmExecutor's lazy captcha loop: claim first without the Aliyun
+// headers; when Z.AI demands the security verification, mint a verify param
+// through the shared CloakBrowser manager and retry.
+const MAX_CLAIM_CAPTCHA_RETRIES = 2;
+
+function isCaptchaRejection(code, message) {
+  const text = String(message || "").toLowerCase();
+  return (
+    code === 3007 ||
+    text.includes("captcha") ||
+    text.includes("security_verification")
+  );
+}
 
 function safeReason(value, fallback = "Plan request failed") {
   if (typeof value !== "string" || !value.trim()) return fallback;
@@ -21,6 +36,34 @@ function billingUrl(baseUrl, { includePlatform = false } = {}) {
   url.searchParams.set("app_version", zcodeConfig.appVersion);
   if (includePlatform) url.searchParams.set("platform", `${process.platform}-${process.arch}`);
   return url;
+}
+
+// Z.AI serves the Start Plan as rotating dated campaign variants
+// ("zcode-v3-start-plan-1029"), not the static id. Match the campaign family
+// like the official client's hasActiveStartPlan does — never one exact id.
+function isStartPlanIdentity(plan) {
+  const id = (plan?.planId || plan?.plan_id || "").toLowerCase();
+  const name = (plan?.name || "").toLowerCase();
+  return (
+    id.startsWith("zcode-v3-start-plan") ||
+    /start[-_ ]?plan/.test(id) ||
+    /start[-_ ]?plan/.test(name)
+  );
+}
+
+function friendlyBillingError(code, message) {
+  const text = typeof message === "string" ? message.toLowerCase() : "";
+  if (
+    text.includes("captcha") ||
+    text.includes("security_verification") ||
+    code === 3007
+  ) {
+    return "Z.AI requires captcha verification for this claim — claim once from the official ZCode app, then refresh here";
+  }
+  if (code === 3001) {
+    return "ZCode session expired — re-authenticate this account and retry";
+  }
+  return typeof message === "string" && message.trim() ? message : null;
 }
 
 async function requestBilling(
@@ -59,12 +102,17 @@ async function requestBilling(
     json?.success !== false &&
     (code === undefined || code === null || code === 0 || code === 200);
   if (!response.ok || !json || !envelopeOk) {
-    throw new Error(
+    const rawMessage = json?.data?.message || json?.msg;
+    const error = new Error(
       safeReason(
-        json?.data?.message || json?.msg,
-        !json ? `Invalid provider response (${response.status})` : `Provider rejected request (${response.status})`
+        friendlyBillingError(code, rawMessage) ||
+          (!json ? `Invalid provider response (${response.status})` : `Provider rejected request (${response.status})`),
+        "Plan request failed"
       )
     );
+    error.code = code;
+    error.captchaRequired = isCaptchaRejection(code, rawMessage);
+    throw error;
   }
 
   return json;
@@ -151,47 +199,107 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
   return { activePlans, offers, balances };
 }
 
+export function hasActiveStartPlan(inspection) {
+  return (inspection?.activePlans || []).some(
+    (plan) => plan.status === "active" && isStartPlanIdentity(plan)
+  );
+}
+
+// Newest campaign variant wins: dated suffixes ("…-1029") sort above the
+// generic id, so a fresh campaign is claimed rather than a stale one.
+export function selectClaimableStartPlan(inspection) {
+  const claimable = (inspection?.offers || [])
+    .filter((offer) => offer.claimable && isStartPlanIdentity(offer))
+    .sort((a, b) => b.planId.localeCompare(a.planId));
+  return claimable[0] || null;
+}
+
 export async function claimZaiPlan(
   jwt,
   planId,
   proxyOptions = null,
-  fetchImpl = proxyAwareFetch
+  fetchImpl = proxyAwareFetch,
+  captchaProxyUrl = ""
 ) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   const requestedPlanId = typeof planId === "string" ? planId.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
-  if (!requestedPlanId) throw new Error("planId is required");
+
+  // Empty or generic id → auto-select the Start Plan campaign the account is
+  // actually offered (dated variants like zcode-v3-start-plan-1029).
+  const autoSelect = !requestedPlanId || requestedPlanId === zcodeConfig.startPlanId;
 
   const before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
-  if (before.activePlans.some((plan) => plan.planId === requestedPlanId && plan.status === "active")) {
+  if (autoSelect) {
+    if (hasActiveStartPlan(before)) {
+      const active = before.activePlans.find(
+        (plan) => plan.status === "active" && isStartPlanIdentity(plan)
+      );
+      return { status: "already_active", planId: active.planId, plans: before };
+    }
+  } else if (before.activePlans.some((plan) => plan.planId === requestedPlanId && plan.status === "active")) {
     return { status: "already_active", planId: requestedPlanId, plans: before };
   }
-  if (!before.offers.some((offer) => offer.planId === requestedPlanId && offer.claimable)) {
-    throw new Error("This plan is not currently offered to the account");
+
+  const target = autoSelect
+    ? selectClaimableStartPlan(before)
+    : before.offers.find((offer) => offer.planId === requestedPlanId && offer.claimable) || null;
+  if (!target) {
+    throw new Error(
+      autoSelect
+        ? "No Start Plan is currently offered to this account"
+        : "This plan is not currently offered to the account"
+    );
+  }
+  const claimPlanId = target.planId;
+
+  let verifyParam = null;
+  const captchaManager = getCaptchaManager();
+  const claimOnce = () =>
+    requestBilling(
+      token,
+      new URL(zcodeConfig.startPlanClaimUrl),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-ZCode-App-Version": zcodeConfig.appVersion,
+          "X-Platform": `${process.platform}-${process.arch}`,
+          ...(verifyParam
+            ? {
+                "X-Aliyun-Captcha-Verify-Param": verifyParam,
+                "X-Aliyun-Captcha-Verify-Region": "sgp",
+              }
+            : {}),
+        },
+        body: JSON.stringify({ plan_id: claimPlanId }),
+      },
+      proxyOptions,
+      fetchImpl
+    );
+
+  let claim;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      claim = await claimOnce();
+      break;
+    } catch (error) {
+      if (!error?.captchaRequired || attempt >= MAX_CLAIM_CAPTCHA_RETRIES || !captchaManager?.getVerifyParam) {
+        throw error;
+      }
+      captchaManager.invalidate?.();
+      captchaManager.setProxy?.(captchaProxyUrl || "");
+      verifyParam = await captchaManager.getVerifyParam(getZcodeCaptchaPort());
+    }
   }
 
-  const claim = await requestBilling(
-    token,
-    new URL(zcodeConfig.startPlanClaimUrl),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-ZCode-App-Version": zcodeConfig.appVersion,
-        "X-Platform": `${process.platform}-${process.arch}`,
-      },
-      body: JSON.stringify({ plan_id: requestedPlanId }),
-    },
-    proxyOptions,
-    fetchImpl
-  );
-
   const claimedPlan = normalizePlan(claim.data?.plan);
-  if (!claimedPlan || claimedPlan.planId !== requestedPlanId || claimedPlan.status !== "active") {
+  if (!claimedPlan || claimedPlan.planId !== claimPlanId || claimedPlan.status !== "active") {
     throw new Error(
       safeReason(
-        claim.data?.message || claim.msg,
-        "Z.AI did not return an active plan after the claim"
+        friendlyBillingError(claim.code, claim.data?.message || claim.msg) ||
+          "Z.AI did not return an active plan after the claim",
+        "Plan claim failed"
       )
     );
   }
@@ -199,9 +307,9 @@ export async function claimZaiPlan(
   const after = await inspectZaiPlans(token, proxyOptions, fetchImpl).catch(() => null);
   return {
     status: after?.activePlans?.some(
-      (plan) => plan.planId === requestedPlanId && plan.status === "active"
+      (plan) => plan.planId === claimPlanId && plan.status === "active"
     ) ? "claimed" : "claimed_pending",
-    planId: requestedPlanId,
+    planId: claimPlanId,
     plan: claimedPlan,
     plans: after,
   };

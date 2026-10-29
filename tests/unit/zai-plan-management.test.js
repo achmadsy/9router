@@ -3,10 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   connections: [],
+  captchaManager: {
+    invalidate: vi.fn(),
+    setProxy: vi.fn(),
+    getVerifyParam: vi.fn(),
+  },
 }));
 
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: mocks.fetch,
+}));
+
+vi.mock("../../src/lib/zcode/captcha-service.js", () => ({
+  getCaptchaManager: () => mocks.captchaManager,
+  getZcodeCaptchaPort: () => 30110,
 }));
 
 vi.mock("@/models", () => ({
@@ -38,6 +48,9 @@ const activePlan = {
 beforeEach(() => {
   mocks.fetch.mockReset();
   mocks.connections = [];
+  mocks.captchaManager.getVerifyParam.mockReset().mockResolvedValue("captcha-verify-param");
+  mocks.captchaManager.invalidate.mockClear();
+  mocks.captchaManager.setProxy.mockClear();
 });
 
 describe("Z.AI plan operations", () => {
@@ -108,6 +121,69 @@ describe("Z.AI plan operations", () => {
       "not currently offered"
     );
     expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("auto-selects the dated Start Plan campaign variant the account is offered", async () => {
+    const datedPlan = { plan_id: "zcode-v3-start-plan-1029", name: "Start Plan", status: "active" };
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [], balances: [] } }))
+      .mockResolvedValueOnce(response({
+        code: 0,
+        data: { plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "Start Plan" }] },
+      }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plan: datedPlan } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [datedPlan], balances: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [datedPlan] } }));
+
+    const result = await claimZaiPlan("jwt-secret", null);
+
+    expect(result.status).toBe("claimed");
+    expect(result.planId).toBe("zcode-v3-start-plan-1029");
+    expect(mocks.fetch.mock.calls[2][1].body).toBe(JSON.stringify({ plan_id: "zcode-v3-start-plan-1029" }));
+  });
+
+  it("treats any active dated Start Plan variant as already active on auto-claim", async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(response({
+        code: 0,
+        data: { plans: [{ plan_id: "zcode-v3-start-plan-0817", name: "Start Plan", status: "active" }], balances: [] },
+      }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }));
+
+    const result = await claimZaiPlan("jwt-secret", "zcode-v3-start-plan");
+
+    expect(result.status).toBe("already_active");
+    expect(result.planId).toBe("zcode-v3-start-plan-0817");
+    expect(mocks.fetch.mock.calls.some(([, options]) => options?.body?.includes("claim"))).toBe(false);
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the claim with Aliyun captcha headers when Z.AI demands verification", async () => {
+    const datedPlan = { plan_id: "zcode-v3-start-plan-1029", name: "Start Plan", status: "active" };
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [], balances: [] } }))
+      .mockResolvedValueOnce(response({
+        code: 0,
+        data: { plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "Start Plan" }] },
+      }))
+      // First claim attempt: captcha gate
+      .mockResolvedValueOnce(response({ code: 3007, msg: "captcha verify failed" }, 400))
+      // Second attempt with verify param: success
+      .mockResolvedValueOnce(response({ code: 0, data: { plan: datedPlan } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [datedPlan], balances: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [datedPlan] } }));
+
+    const result = await claimZaiPlan("jwt-secret", null, null, undefined, "http://proxy.test:8080");
+
+    expect(result.status).toBe("claimed");
+    expect(mocks.captchaManager.getVerifyParam).toHaveBeenCalledTimes(1);
+    expect(mocks.captchaManager.setProxy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(mocks.captchaManager.invalidate).toHaveBeenCalledTimes(1);
+    const retryCall = mocks.fetch.mock.calls[3];
+    expect(retryCall[1].headers).toMatchObject({
+      "X-Aliyun-Captcha-Verify-Param": "captcha-verify-param",
+      "X-Aliyun-Captcha-Verify-Region": "sgp",
+    });
   });
 });
 

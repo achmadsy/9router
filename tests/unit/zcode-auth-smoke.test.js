@@ -125,7 +125,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
   it("claims the official Start Plan and verifies the active entitlement", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     const activePlan = {
-      plan_id: "zcode-v3-start-plan",
+      plan_id: "zcode-v3-start-plan-1029",
       name: "Start Plan",
       status: "active",
     };
@@ -141,7 +141,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
         status: 200,
         text: async () => JSON.stringify({
           code: 0,
-          data: { plans: [{ plan_id: "zcode-v3-start-plan", name: "Start Plan" }] },
+          data: { plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "Start Plan" }] },
         }),
       })
       .mockResolvedValueOnce({
@@ -164,7 +164,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
 
     await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).resolves.toMatchObject({
       status: "claimed",
-      planId: "zcode-v3-start-plan",
+      planId: "zcode-v3-start-plan-1029",
     });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
@@ -176,7 +176,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     ]);
     expect(fetchMock.mock.calls[2][1]).toMatchObject({
       method: "POST",
-      body: JSON.stringify({ plan_id: "zcode-v3-start-plan" }),
+      body: JSON.stringify({ plan_id: "zcode-v3-start-plan-1029" }),
       headers: {
         Authorization: "Bearer zcode-jwt",
         "Content-Type": "application/json",
@@ -189,7 +189,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
       "[Start Plan] Created and verified",
       expect.objectContaining({
         provider: "zai",
-        planId: "zcode-v3-start-plan",
+        planId: "zcode-v3-start-plan-1029",
         status: "claimed",
       })
     );
@@ -245,13 +245,13 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     mocks.proxyFetch.mockImplementation(fetchMock);
 
     await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
-      "not currently offered to the account"
+      "No Start Plan is currently offered to this account"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalledWith(
       "[Start Plan] Creation failed",
-      expect.objectContaining({ reason: expect.stringContaining("not currently offered") })
+      expect.objectContaining({ reason: expect.stringContaining("No Start Plan is currently offered") })
     );
   });
 

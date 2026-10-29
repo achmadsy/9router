@@ -316,7 +316,8 @@ export class ZaiAuthFlow {
   /** Claim the official ZCode Start Plan trial, then verify the entitlement. */
   async initializeStartPlan(zcodeJwtToken) {
     try {
-      const result = await claimZaiPlan(zcodeJwtToken, config.startPlanId);
+      // null → auto-select the dated Start Plan campaign the account is offered
+      const result = await claimZaiPlan(zcodeJwtToken, null);
       const message =
         result.status === "already_active"
           ? "[Start Plan] Active trial already present"
