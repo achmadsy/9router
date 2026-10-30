@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({ proxyAwareFetch: mocks.fetch }));
 const { enrollZcodeProject } = await import("../../src/lib/zcode/provisioning.js");
 const { ZaiAuthFlow } = await import("../../src/lib/zcode/auth.js");
+const { prepareOriginalStartPlan } = await import("../../src/lib/zcode/plans.js");
 
 const reply = (data, code = 200) => new Response(JSON.stringify({ code, data }), { status: 200 });
 const info = { organizations: [{ organizationId: "org/id", projects: [{ projectId: "project/id" }] }] };
@@ -16,6 +17,7 @@ const credentials = {
 afterEach(() => {
   mocks.fetch.mockReset();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("native ZCode provisioning credential boundaries", () => {
@@ -72,6 +74,35 @@ describe("native ZCode provisioning credential boundaries", () => {
     });
     expect(result.expiresAt).toBeUndefined();
     expect(fetch.mock.calls[3][1].body).toBe(JSON.stringify({ name: "zcode-api-key", usageScene: 1 }));
+  });
+
+  it("logs API stages and empty balance under one attempt without credential values", async () => {
+    const infoLog = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.fetch
+      .mockResolvedValueOnce(reply(info))
+      .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "key-secret-canary", usageScene: -1 }]))
+      .mockResolvedValueOnce(reply({ enabled: true, accessToken: "project-secret-canary", expiresIn: 18000 }))
+      .mockResolvedValueOnce(reply({ plans: [], balances: [] }, 0));
+    await expect(prepareOriginalStartPlan({ ...credentials, id: "selected-connection" })).rejects.toThrow("not active");
+    const calls = [...infoLog.mock.calls, ...warnLog.mock.calls];
+    expect(new Set(calls.map(([, context]) => context.attempt)).size).toBe(1);
+    expect(calls.every(([, context]) => context.connectionId === "selected-connection")).toBe(true);
+    expect(calls).toContainEqual(["[Start Plan] project-token: result", expect.objectContaining({ enabled: true, tokenReturned: true, expiresIn: 18000, persisted: false })]);
+    expect(calls).toContainEqual(["[Start Plan] balance: response", expect.objectContaining({ httpStatus: 200, providerCode: 0 })]);
+    expect(calls).toContainEqual(["[Start Plan] balance: result", expect.objectContaining({ planCount: 0, originalPlanActive: false })]);
+    expect(warnLog).toHaveBeenCalledWith("[Start Plan] preparation: failed", expect.objectContaining({ reason: expect.stringContaining("not active") }));
+    const serialized = JSON.stringify(calls);
+    for (const secret of ["key-secret-canary", "project-secret-canary", "business-token", "permanent-login-jwt", "existing-key.secret"]) expect(serialized).not.toContain(secret);
+  });
+
+  it("logs the rejected endpoint and provider code without raw error body", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.fetch.mockResolvedValueOnce(reply({ accessToken: "error-body-secret" }, 3001));
+    await expect(prepareOriginalStartPlan(credentials)).rejects.toThrow("code 3001");
+    expect(warnLog).toHaveBeenCalledWith("[Start Plan] customer-info: failed", expect.objectContaining({ httpStatus: 200, providerCode: 3001 }));
+    expect(JSON.stringify(warnLog.mock.calls)).not.toContain("error-body-secret");
   });
 
   it("forwards manual Refresh All force to each quota fetch", () => {

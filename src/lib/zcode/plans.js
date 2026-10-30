@@ -4,6 +4,7 @@ import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
 import { getCaptchaManager, getZcodeCaptchaPort } from "./captcha-service.js";
 import { enrollZcodeProject } from "./provisioning.js";
 import { ZCODE_ORIGINAL_START_PLAN_ID } from "./constants.js";
+import { createStartPlanDiagnostics } from "./planDiagnostics.js";
 
 // Mirrors GlmExecutor's lazy captcha loop: claim first without the Aliyun
 // headers; when Z.AI demands the security verification, mint a verify param
@@ -63,8 +64,12 @@ async function requestBilling(
   url,
   options = {},
   proxyOptions = null,
-  fetchImpl = proxyAwareFetch
+  fetchImpl = proxyAwareFetch,
+  diagnostics = null
 ) {
+  const started = Date.now();
+  const endpoint = `${url.origin}${url.pathname}`;
+  diagnostics?.event("balance", "request", { method: options.method || "GET", endpoint, appVersion: zcodeConfig.appVersion });
   let response;
   try {
     response = await fetchImpl(
@@ -80,6 +85,7 @@ async function requestBilling(
       proxyOptions
     );
   } catch (error) {
+    diagnostics?.event("balance", "failed", { endpoint, durationMs: Date.now() - started, reason: "Network request failed or timed out" });
     throw new Error(safeReason(error?.message, "Plan network request failed"));
   }
 
@@ -93,6 +99,10 @@ async function requestBilling(
   const envelopeOk =
     json?.success !== false &&
     (code === undefined || code === null || code === 0 || code === 200);
+  diagnostics?.event("balance", response.ok && json && envelopeOk ? "response" : "failed", {
+    endpoint, httpStatus: response.status, providerCode: Number.isFinite(code) ? code : null,
+    validJson: !!json, durationMs: Date.now() - started,
+  });
   if (!response.ok || !json || !envelopeOk) {
     const rawMessage = json?.data?.message || json?.msg;
     const error = new Error(
@@ -238,11 +248,18 @@ export function hasActiveStartPlan(inspection) {
 }
 
 /** Verify the login JWT's balance, as in the successful native login capture. */
-export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch) {
+export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
   const balance = await requestBilling(token, billingUrl(zcodeConfig.startPlanBalanceUrl),
-    { method: "GET" }, proxyOptions, fetchImpl);
+    { method: "GET" }, proxyOptions, fetchImpl, diagnostics);
+  const returnedPlans = Array.isArray(balance.data?.plans) ? balance.data.plans : [];
+  diagnostics?.event("balance", "result", {
+    planCount: returnedPlans.length,
+    originalPlanPresent: returnedPlans.some((entry) => entry?.plan_id === ZCODE_ORIGINAL_START_PLAN_ID),
+    originalPlanActive: returnedPlans.some((entry) => entry?.plan_id === ZCODE_ORIGINAL_START_PLAN_ID && entry?.status?.trim().toLowerCase() === "active"),
+    balanceBuckets: Array.isArray(balance.data?.balances) ? balance.data.balances.length : 0,
+  });
   const plan = (Array.isArray(balance.data?.plans) ? balance.data.plans : [])
     .map(normalizePlan)
     .find((entry) => entry?.status === "active" && isStartPlanIdentity(entry));
@@ -253,10 +270,23 @@ export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImp
 }
 
 export async function prepareOriginalStartPlan(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch) {
-  const jwt = credentials?.providerSpecificData?.zcodeJwtToken;
-  if (typeof jwt !== "string" || !jwt.trim()) throw new Error("ZCode OAuth login is required");
-  await enrollZcodeProject(credentials, proxyOptions, fetchImpl);
-  return verifyOriginalStartPlan(jwt, proxyOptions, fetchImpl);
+  const diagnostics = createStartPlanDiagnostics(credentials);
+  diagnostics.event("preparation", "started", {
+    proxyEnabled: proxyOptions?.connectionProxyEnabled === true,
+    strictProxy: proxyOptions?.strictProxy === true,
+    inferenceCredentialsChanged: false,
+  });
+  try {
+    const jwt = credentials?.providerSpecificData?.zcodeJwtToken;
+    if (typeof jwt !== "string" || !jwt.trim()) throw new Error("ZCode OAuth login is required");
+    await enrollZcodeProject(credentials, proxyOptions, fetchImpl, diagnostics);
+    const result = await verifyOriginalStartPlan(jwt, proxyOptions, fetchImpl, diagnostics);
+    diagnostics.event("preparation", "verified", { planId: result.planId, inferenceCredentialsChanged: false });
+    return result;
+  } catch (error) {
+    diagnostics.event("preparation", "failed", { reason: summarizePlanError(error) });
+    throw error;
+  }
 }
 
 export async function claimZaiPlan(
