@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   connections: [],
   pools: {},
+  coordinator: null,
   captchaManager: {
     invalidate: vi.fn(),
     setProxy: vi.fn(),
@@ -32,6 +33,18 @@ vi.mock("@/models", () => ({
   getProxyPoolById: vi.fn(async (id) => mocks.pools[id] || null),
 }));
 
+vi.mock("../../src/lib/zcode/planRequests.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, planRequestCoordinator: {
+    run: (...args) => mocks.coordinator.run(...args),
+    cooldown: () => mocks.coordinator.cooldown(),
+    assertReady: () => mocks.coordinator.assertReady(),
+    observeResponse: (...args) => mocks.coordinator.observeResponse(...args),
+  } };
+});
+
+const { createPlanRequestCoordinator } = await import("../../src/lib/zcode/planRequests.js");
+const { _clearPlanInspectionCacheForTests } = await import("../../src/lib/zcode/planInspections.js");
 const { inspectZaiPlans, claimZaiPlan } = await import("../../src/lib/zcode/plans.js");
 const { GET, POST } = await import("../../src/app/api/providers/[id]/zai-plans/route.js");
 
@@ -49,6 +62,8 @@ const activePlan = {
 };
 
 beforeEach(() => {
+  mocks.coordinator = createPlanRequestCoordinator({ intervalMs: 0 });
+  _clearPlanInspectionCacheForTests();
   mocks.fetch.mockReset();
   mocks.connections = [];
   mocks.pools = {};
@@ -387,6 +402,157 @@ describe("Z.AI plan management API", () => {
     expect(JSON.stringify(body)).not.toMatch(/permanent-jwt|business-token|five-hour-project-token|existing-key/);
     expect(mocks.fetch.mock.calls[3][1].headers.Authorization).toBe("Bearer permanent-jwt");
     expect(mocks.fetch.mock.calls.some(([url]) => url.includes("/billing/claim"))).toBe(false);
+  });
+
+  it("stops all page inspections after a non-JSON 429 and leaves plan status unknown", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.connections = ["one", "two", "three"].map((id) => ({
+      id, provider: "glm", providerSpecificData: { zcodeJwtToken: `jwt-${id}` },
+    }));
+    mocks.fetch.mockResolvedValue(new Response("<html>too many requests</html>", {
+      status: 429, headers: { "Retry-After": "90" },
+    }));
+    const request = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+      params: Promise.resolve({ id: "glm" }),
+    });
+    const body = await (await request()).json();
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(body.cooldownUntil).toBeGreaterThan(Date.now() + 85_000);
+    for (const account of body.accounts) {
+      expect(account).toMatchObject({ originalStartPlanActive: null, inspectionStatus: "unavailable", httpStatus: 429 });
+      expect(account.error).toContain("cooldown");
+      expect(account.error).not.toContain("Invalid provider response");
+    }
+    await request();
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the original balance when campaign inspection gets a 429", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "zcode-v3-start-plan-0817", status: "active" }], balances: [{ show_name: "GLM", remaining_units: 123 }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(new Response("wait", { status: 429 }));
+    const body = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+      params: Promise.resolve({ id: "glm" }),
+    })).json();
+    expect(body.accounts[0]).toMatchObject({ originalStartPlanActive: true, inspectionStatus: "partial", httpStatus: 429, balances: [{ name: "GLM", remaining: 123 }] });
+    expect(body.accounts[0].campaignError).toContain("cooldown");
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("deduplicates concurrent page refreshes and reuses recent per-account results", async () => {
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
+    mocks.fetch.mockImplementation(async (url) => response({ code: 0, data: url.includes("/marketing/touch") ? { deliveries: [] } : { plans: [], balances: [] } }));
+    const request = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+      params: Promise.resolve({ id: "glm" }),
+    });
+    await Promise.all([request(), request()]);
+    const cached = await (await request()).json();
+    expect(cached.accounts[0].cached).toBe(true);
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps an offer from seq0 when seq1 fails without claiming anything", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: { buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: "event" } } }] } }] } }))
+      .mockResolvedValueOnce(new Response("wait", { status: 429 }));
+    const result = await inspectZaiPlans("own-jwt", null, undefined, { includeCampaigns: true, coordinator: mocks.coordinator });
+    expect(result).toMatchObject({ offers: [{ planId: "event", claimable: true }], inspectionStatus: "partial", httpStatus: 429 });
+    expect(mocks.fetch.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
+  });
+
+  it("treats a malformed balance as unknown instead of an inactive original plan", async () => {
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
+    mocks.fetch.mockImplementation(async (url) => response({ code: 0, data:
+      url.includes("/marketing/touch") ? { deliveries: [] } : url.includes("/billing/preview") ? { plans: [] } : {} }));
+    const body = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+      params: Promise.resolve({ id: "glm" }),
+    })).json();
+    expect(body.accounts[0]).toMatchObject({ originalStartPlanActive: null, balanceStatus: "unavailable", inspectionStatus: "partial" });
+  });
+
+  it("invalidates the cached inspection after an explicit claim", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
+    let claimed = false;
+    mocks.fetch.mockImplementation(async (url) => {
+      if (url.includes("/billing/claim")) {
+        claimed = true;
+        return response({ code: 0, data: { plan: { plan_id: "event", status: "active" } } });
+      }
+      if (url.includes("/marketing/touch")) return response({ code: 0, data: { deliveries: [] } });
+      return response({ code: 0, data: { plans: url.includes("/billing/balance")
+        ? claimed ? [{ plan_id: "event", status: "active" }] : []
+        : claimed ? [] : [{ plan_id: "event" }] } });
+    });
+    const get = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), { params: Promise.resolve({ id: "glm" }) });
+    await get();
+    const result = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one"], planId: "event" }),
+    }), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(result.results[0].status).toBe("claimed");
+    const after = await (await get()).json();
+    expect(after.accounts[0]).toMatchObject({ cached: false, activePlans: [{ planId: "event", status: "active" }] });
+    expect(after.accounts[0].offers).toEqual([]);
+  });
+
+  it("does not replay a timed-out claim and marks the result uncertain", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "event" }] } }))
+      .mockRejectedValueOnce(new Error("timeout"));
+    const body = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one"], planId: "event" }),
+    }), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(body.results[0]).toMatchObject({ ok: false, status: "uncertain" });
+    expect(mocks.fetch.mock.calls.filter(([url]) => url.includes("/billing/claim"))).toHaveLength(1);
+    expect(mocks.captchaManager.getVerifyParam).not.toHaveBeenCalled();
+  });
+
+  it("does not send requests for remaining bulk accounts after a claim gets a 429", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.connections = ["one", "two", "three"].map((id) => ({ id, provider: "glm", providerSpecificData: { zcodeJwtToken: `jwt-${id}` } }));
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "event" }] } }))
+      .mockResolvedValueOnce(new Response("wait", { status: 429, headers: { "Retry-After": "60" } }));
+    const body = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one", "two", "three"], planId: "event" }),
+    }), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(body.results.map((entry) => entry.status)).toEqual(["failed", "not_attempted", "not_attempted"]);
+    expect(body).toMatchObject({ failed: 1, notAttempted: 2, uncertain: 0 });
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(body.cooldownUntil).toBeGreaterThan(Date.now());
+    expect(JSON.stringify(body)).not.toContain("jwt-");
+  });
+
+  it("honors a provisioning 429 before sending further preparation requests", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.connections = ["one", "two"].map((id) => ({
+      id, provider: "glm", accessToken: "business-secret", providerSpecificData: { zcodeJwtToken: `jwt-${id}` },
+    }));
+    mocks.fetch.mockResolvedValueOnce(new Response("upstream wait", { status: 429, headers: { "Retry-After": "75" } }));
+    const body = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one", "two"], action: "prepare_original_start_plan" }),
+    }), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(body.results.map((entry) => entry.status)).toEqual(["failed", "not_attempted"]);
+    expect(body.results[0]).toMatchObject({ httpStatus: 429 });
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(body)).not.toContain("business-secret");
   });
 
   it("rejects claiming a connection from another provider page", async () => {

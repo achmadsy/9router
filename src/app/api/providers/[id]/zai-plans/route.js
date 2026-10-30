@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { getProviderConnectionById, getProviderConnections } from "@/models";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { claimZaiPlan, hasActiveStartPlan, inspectZaiPlans, prepareOriginalStartPlan, summarizePlanError } from "@/lib/zcode/plans";
+import { claimZaiPlan, hasActiveStartPlan, inspectZaiPlans, invalidateZaiPlanInspection, prepareOriginalStartPlan, summarizePlanError } from "@/lib/zcode/plans";
+import { planCooldownError, planErrorDetails, planRequestCoordinator } from "@/lib/zcode/planRequests";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 export const runtime = "nodejs";
@@ -20,7 +21,7 @@ async function resolvePlanProxy(connection) {
   return resolveConnectionProxyConfig(connection.providerSpecificData, { excludeRelay: true });
 }
 
-async function inspectConnection(connection, index) {
+async function inspectConnection(connection, index, signal) {
   const base = {
     connectionId: connection.id,
     name: accountLabel(connection, index),
@@ -40,15 +41,25 @@ async function inspectConnection(connection, index) {
   }
 
   try {
-    const plans = await inspectZaiPlans(jwt, await resolvePlanProxy(connection), undefined, { includeCampaigns: true });
-    return { ...base, eligible: true, ...plans, originalStartPlanActive: hasActiveStartPlan(plans), error: null };
+    const plans = await inspectZaiPlans(jwt, await resolvePlanProxy(connection), undefined, {
+      includeCampaigns: true, coordinator: planRequestCoordinator,
+      cacheScope: `${connection.provider}:${connection.id}`, signal,
+    });
+    return { ...base, eligible: true, ...plans,
+      originalStartPlanActive: plans.balanceStatus === "available" ? hasActiveStartPlan(plans) : null,
+      error: plans.error || null };
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {
       ...base,
       eligible: true,
       activePlans: [],
       offers: [],
       balances: [],
+      inspectionStatus: "unavailable",
+      balanceStatus: "unavailable",
+      originalStartPlanActive: null,
+      ...planErrorDetails(error),
       error: summarizePlanError(error, "Failed to retrieve plans"),
     };
   }
@@ -87,12 +98,14 @@ export async function GET(_request, { params }) {
     const totalPages = Math.max(1, Math.ceil(connections.length / pageSize));
     const page = Math.min(totalPages, Math.max(1, Math.floor(requestedPage)));
     const visible = connections.slice((page - 1) * pageSize, page * pageSize);
-    const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, inspectConnection);
+    const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, (connection, index) =>
+      inspectConnection(connection, index, _request.signal));
     return NextResponse.json({
       providerId: id,
       totalAccounts: connections.length,
       eligibleAccounts: connections.filter((connection) => connection.providerSpecificData?.zcodeJwtToken?.trim()).length,
       page, pageSize, totalPages,
+      cooldownUntil: planRequestCoordinator.cooldown(),
       accounts,
     });
   } catch (error) {
@@ -155,15 +168,26 @@ export async function POST(request, { params }) {
         continue;
       }
 
+      const cooldownUntil = planRequestCoordinator.cooldown();
+      if (cooldownUntil) {
+        diagnostics.event("account", "skipped", { reason: "Upstream cooldown; no request sent", retryAt: cooldownUntil });
+        results.push({ connectionId, name: label, ok: false, status: "not_attempted", planId,
+          error: summarizePlanError(planCooldownError(cooldownUntil)), httpStatus: 429, retryAt: cooldownUntil });
+        continue;
+      }
+
+      let proxyOptions;
+      const cacheScope = `${connection.provider}:${connection.id}`;
       try {
         // CloakBrowser captcha solver must share the claim's egress IP.
-        const proxyOptions = await resolvePlanProxy(connection);
+        proxyOptions = await resolvePlanProxy(connection);
+        invalidateZaiPlanInspection(jwt, proxyOptions, cacheScope);
         const captchaProxyUrl = proxyOptions?.connectionProxyEnabled === true
           ? String(proxyOptions.connectionProxyUrl || "").trim()
           : "";
         const claimed = prepareOriginal
-          ? await prepareOriginalStartPlan(connection, proxyOptions)
-          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl, diagnostics);
+          ? await prepareOriginalStartPlan(connection, proxyOptions, undefined, { coordinator: planRequestCoordinator })
+          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl, diagnostics, { coordinator: planRequestCoordinator });
         diagnostics.event("account", "completed", { status: claimed.status });
         results.push({
           connectionId,
@@ -182,31 +206,43 @@ export async function POST(request, { params }) {
                   : "Plan claimed successfully",
         });
       } catch (error) {
-        diagnostics.event("account", "failed", { reason: summarizePlanError(error, "Plan claim failed") });
+        const message = error.uncertain
+          ? "Claim outcome is uncertain; no automatic retry was sent. Check the account balance before retrying."
+          : summarizePlanError(error, "Plan claim failed");
+        diagnostics.event("account", "failed", { reason: message, ...planErrorDetails(error) });
         results.push({
           connectionId,
           name: label,
           ok: false,
           planId,
-          error: summarizePlanError(error, "Plan claim failed"),
+          status: error.uncertain ? "uncertain" : error.httpStatus === 429 && !error.requestStarted ? "not_attempted" : "failed",
+          ...planErrorDetails(error),
+          error: message,
         });
+      } finally {
+        if (proxyOptions) invalidateZaiPlanInspection(jwt, proxyOptions, cacheScope);
       }
 
-      if (index < connectionIds.length - 1) {
+      if (!planRequestCoordinator.cooldown() && index < connectionIds.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, CLAIM_DELAY_MS));
       }
     }
 
-    log().event("batch", "completed", {
-      total: results.length,
-      claimed: results.filter((result) => result.status === "claimed" || result.status === "claimed_pending").length,
-      skipped: results.filter((result) => result.status === "already_active" || result.status === "already_present").length,
-      failed: results.filter((result) => !result.ok).length,
-    });
-    return NextResponse.json({
+    const summary = {
       total: results.length,
       succeeded: results.filter((result) => result.ok).length,
-      failed: results.filter((result) => !result.ok).length,
+      failed: results.filter((result) => !result.ok && !["not_attempted", "uncertain"].includes(result.status)).length,
+      notAttempted: results.filter((result) => result.status === "not_attempted").length,
+      uncertain: results.filter((result) => result.status === "uncertain").length,
+    };
+    log().event("batch", "completed", {
+      ...summary,
+      claimed: results.filter((result) => result.status === "claimed" || result.status === "claimed_pending").length,
+      skipped: results.filter((result) => result.status === "already_active" || result.status === "already_present").length,
+    });
+    return NextResponse.json({
+      ...summary,
+      cooldownUntil: planRequestCoordinator.cooldown(),
       results,
     });
   } catch (error) {

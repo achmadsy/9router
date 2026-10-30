@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { Badge, Button, Modal } from "@/shared/components";
 
@@ -20,24 +20,46 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
   const [results, setResults] = useState({});
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, totalAccounts: 0 });
+  const [cooldownUntil, setCooldownUntil] = useState(null);
+  const loadController = useRef(null);
+
+  useEffect(() => {
+    if (!cooldownUntil) return undefined;
+    let timer;
+    const checkExpiry = () => {
+      const remaining = cooldownUntil - Date.now();
+      if (remaining > 0) timer = setTimeout(checkExpiry, Math.min(remaining, 2_147_483_647));
+      else setCooldownUntil((current) => current === cooldownUntil ? null : current);
+    };
+    timer = setTimeout(checkExpiry, Math.min(Math.max(0, cooldownUntil - Date.now()), 2_147_483_647));
+    return () => clearTimeout(timer);
+  }, [cooldownUntil]);
 
   const loadAccounts = useCallback(async (signal) => {
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) controller.abort();
     setLoading(true);
     setError("");
     try {
       const response = await fetch(
         `/api/providers/${encodeURIComponent(providerId)}/zai-plans?page=${page}`,
-        { cache: "no-store", signal }
+        { cache: "no-store", signal: controller.signal }
       );
       const data = await response.json();
-      if (signal?.aborted) return;
+      if (controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.error || "Failed to retrieve account plans");
       setAccounts(data.accounts || []);
       setPagination({ page: data.page, totalPages: data.totalPages, totalAccounts: data.totalAccounts });
+      setCooldownUntil(data.cooldownUntil > Date.now() ? data.cooldownUntil : null);
     } catch (loadError) {
-      if (!signal?.aborted) setError(loadError.message || "Failed to retrieve account plans");
+      if (!controller.signal.aborted) setError(loadError.message || "Failed to retrieve account plans");
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      signal?.removeEventListener("abort", abort);
+      if (loadController.current === controller) setLoading(false);
     }
   }, [providerId, page]);
 
@@ -48,7 +70,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
       setResults({});
       loadAccounts(controller.signal);
     }, 0);
-    return () => { clearTimeout(timer); controller.abort(); };
+    return () => { clearTimeout(timer); controller.abort(); loadController.current?.abort(); };
   }, [isOpen, loadAccounts]);
 
   const planGroups = useMemo(() => {
@@ -64,7 +86,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
   }, [accounts]);
 
   const claim = async (connectionIds, planId, key, action) => {
-    if (claimingKey) return;
+    if (claimingKey || cooldownUntil) return;
     setClaimingKey(key);
     setError("");
     // API caps one batch at 50 connections; split larger groups client-side.
@@ -81,11 +103,13 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
         );
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Plan claim failed");
+        setCooldownUntil(data.cooldownUntil || null);
         setResults((current) => {
           const next = { ...current };
           for (const result of data.results || []) next[result.connectionId] = result;
           return next;
         });
+        if (data.cooldownUntil || data.results?.some((result) => result.status === "uncertain")) break;
       }
       await loadAccounts();
     } catch (claimError) {
@@ -97,26 +121,37 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
 
   const handleClose = () => {
     if (claimingKey) return;
+    loadController.current?.abort();
     onClose();
   };
+
+  const waiting = cooldownUntil !== null;
+  const actionsDisabled = loading || !!claimingKey || waiting;
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Z.AI Plan Management">
       <div className="flex max-h-[75vh] flex-col gap-4 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-text-muted">
-            Offers are retrieved independently for each OAuth account under this provider.
+            Checks use each account&apos;s credentials. Recent results are reused for up to one minute; claims are always checked again.
           </p>
           <Button
             size="sm"
             variant="secondary"
             icon="refresh"
             onClick={() => loadAccounts()}
-            disabled={loading || !!claimingKey}
+            disabled={actionsDisabled}
           >
             Refresh
           </Button>
         </div>
+
+        {waiting && (
+          <div role="status" className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
+            Z.AI requested a cooldown (HTTP 429). Plan checks and claims are paused until {new Date(cooldownUntil).toLocaleString()}.
+            {" "}Any results shown below were checked earlier; unavailable checks do not mean an account has no offers.
+          </div>
+        )}
 
         {planGroups.length > 0 && (
           <div className="space-y-2 rounded-lg border border-border bg-surface-secondary p-3">
@@ -133,7 +168,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                   size="sm"
                   icon="redeem"
                   onClick={() => claim(connectionIds, offer.planId, `bulk:${offer.planId}`)}
-                  disabled={loading || !!claimingKey}
+                  disabled={actionsDisabled}
                 >
                   {claimingKey === `bulk:${offer.planId}` ? "Claiming..." : "Claim Eligible on This Page"}
                 </Button>
@@ -168,6 +203,9 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                       {!account.eligible && <Badge variant="warning">OAuth required</Badge>}
                     </div>
                     {account.email && <p className="truncate text-xs text-text-muted">{account.email}</p>}
+                    {account.checkedAt && <p className="text-xs text-text-muted">
+                      {account.cached ? "Cached check" : "Checked"}: {new Date(account.checkedAt).toLocaleTimeString()}
+                    </p>}
                   </div>
                 </div>
 
@@ -208,7 +246,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                             variant="secondary"
                             icon="redeem"
                             onClick={() => claim([account.connectionId], offer.planId, key)}
-                            disabled={loading || !!claimingKey}
+                            disabled={actionsDisabled}
                           >
                             {claimingKey === key ? "Claiming..." : "Claim"}
                           </Button>
@@ -218,7 +256,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                   </div>
                 )}
 
-                {account.eligible && !account.originalStartPlanActive && (
+                {account.eligible && account.originalStartPlanActive === false && (
                   <div className="mt-3 space-y-2">
                     <p className="text-xs text-text-muted">
                       Original daily Start Plan (0817) is not active. Preparation enrolls the native project, then checks balance; it does not claim promotions or guarantee a grant.
@@ -227,18 +265,21 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                       size="sm"
                       variant="secondary"
                       onClick={() => claim([account.connectionId], undefined, `original:${account.connectionId}`, "prepare_original_start_plan")}
-                      disabled={loading || !!claimingKey}
+                      disabled={actionsDisabled}
                     >
                       {claimingKey === `original:${account.connectionId}` ? "Adding..." : "Add Start Plan"}
                     </Button>
                   </div>
                 )}
 
-                {account.eligible && claimableOffers.length === 0 && !account.error && !account.campaignError && (
-                  <p className="mt-3 text-xs text-text-muted">No claimable offers for this account.</p>
+                {account.eligible && account.originalStartPlanActive === null && (
+                  <p className="mt-3 text-xs text-warning">Original Start Plan status is unavailable; activation has not been checked.</p>
+                )}
+                {account.eligible && account.inspectionStatus === "complete" && claimableOffers.length === 0 && !account.error && !account.campaignError && (
+                  <p className="mt-3 text-xs text-text-muted">No claimable offers returned by this check. This does not establish campaign ineligibility.</p>
                 )}
                 {account.error && <p className="mt-3 text-xs text-warning">{account.error}</p>}
-                {account.campaignError && <p className="mt-3 text-xs text-warning">Campaign discovery failed: {account.campaignError}</p>}
+                {account.campaignError && account.campaignError !== account.error && <p className="mt-3 text-xs text-warning">Campaign discovery failed: {account.campaignError}</p>}
                 {result && (
                   <p className={`mt-3 text-xs ${result.ok ? "text-success" : "text-error"}`}>
                     {result.ok ? result.message : result.error}
@@ -261,7 +302,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           </Button>
         </div>
 
-        <Button variant="secondary" onClick={handleClose} fullWidth disabled={loading || !!claimingKey}>
+        <Button variant="secondary" onClick={handleClose} fullWidth disabled={!!claimingKey}>
           Close
         </Button>
       </div>

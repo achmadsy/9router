@@ -11,7 +11,8 @@ async function requestBusiness(url, options, proxyOptions, fetchImpl, diagnostic
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     }, proxyOptions);
-  } catch {
+  } catch (error) {
+    if (error?.httpStatus === 429) throw error;
     diagnostics?.event(step, "failed", { endpoint, durationMs: Date.now() - started, reason: "Network request failed or timed out" });
     throw new Error("ZCode provisioning network request failed");
   }
