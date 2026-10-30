@@ -151,7 +151,7 @@ export function zcodeDeviceMidForAccount(jwt, seed = ensureZcodeDeviceMid()) {
     b.slice(0, 8).join(""),
     b.slice(8, 12).join(""),
     `4${b.slice(13, 16).join("")}`,
-    `${(parseInt(b[16], 16) & 0x3) | 0x8}${b.slice(17, 20).join("")}`,
+    `${((parseInt(b[16], 16) & 0x3) | 0x8).toString(16)}${b.slice(17, 20).join("")}`,
     b.slice(20, 32).join(""),
   ].join("-");
 }
