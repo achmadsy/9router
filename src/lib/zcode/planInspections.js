@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import config from "./config.js";
-import { readZcodeDeviceMid } from "./headers.js";
+import { readZcodeDeviceMid, zcodeDeviceMidForAccount } from "./headers.js";
 
 const CACHE_TTL_MS = 60_000;
 const PARTIAL_TTL_MS = 10_000;
@@ -11,7 +11,7 @@ const entries = globalThis[STATE_KEY] ||= new Map();
 export function planInspectionKey(jwt, proxyOptions, accountScope = "") {
   // Never retain raw tokens or proxy credentials in cache keys or diagnostics.
   return createHash("sha256").update(JSON.stringify([
-    accountScope, jwt, readZcodeDeviceMid() || null,
+    accountScope, jwt, zcodeDeviceMidForAccount(jwt, readZcodeDeviceMid() || ensureZcodeDeviceMid()) || null,
     config.appVersion, config.userAgent, config.startPlanBalanceUrl,
     config.startPlanPreviewUrl, config.marketingTouchUrl,
     ...["proxyPoolId", "connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy", "strictProxy", "enabled", "url", "noProxy", "vercelRelayUrl"]

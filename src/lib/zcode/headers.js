@@ -132,6 +132,30 @@ export function buildZcodeAnthropicMetadataUserId(credentials) {
   });
 }
 
+/**
+ * Per-account device id for plan/billing traffic: stable UUID derived from the
+ * machine deviceMid + account JWT, so every account presents its own device
+ * instead of the shared machine one.
+ */
+export function zcodeDeviceMidForAccount(jwt, seed = ensureZcodeDeviceMid()) {
+  if (!seed) return undefined;
+  const token = typeof jwt === "string" ? jwt.trim() : "";
+  if (!token || token === seed) return seed;
+  const digest = crypto
+    .createHash("sha256")
+    .update(`${seed}:${token}`)
+    .digest("hex")
+    .slice(0, 32);
+  const b = digest.split("");
+  return [
+    b.slice(0, 8).join(""),
+    b.slice(8, 12).join(""),
+    `4${b.slice(13, 16).join("")}`,
+    `${(parseInt(b[16], 16) & 0x3) | 0x8}${b.slice(17, 20).join("")}`,
+    b.slice(20, 32).join(""),
+  ].join("-");
+}
+
 function normalizePrintableHeaderValue(value) {
   const normalized = value?.trim();
   return normalized && /^[\x20-\x7e]+$/.test(normalized) ? normalized : undefined;
@@ -238,8 +262,12 @@ export function buildZcodeGuiRequestHeaders(extraHeaders = {}, endpoint) {
 
 /** Native Start Plan billing requests: GUI headers plus the ZCode JWT. */
 export function buildZcodeBillingHeaders(jwt, endpoint = zcodeConfig.startPlanBalanceUrl) {
+  const deviceMid = zcodeDeviceMidForAccount(jwt);
   return buildZcodeGuiRequestHeaders(
-    { Authorization: `Bearer ${jwt}` },
+    {
+      Authorization: `Bearer ${jwt}`,
+      ...(deviceMid ? { "X-Device-Mid": deviceMid } : {}),
+    },
     endpoint
   );
 }
