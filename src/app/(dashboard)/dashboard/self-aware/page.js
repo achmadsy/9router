@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import CooldownTimer from "@/shared/components/CooldownTimer";
+import { activeCooldowns, groupCooldownProviders, filterProviderCooldowns } from "./providerGroups";
 
 const UNITS = { s: 1000, m: 60 * 1000, h: 3600 * 1000, d: 24 * 3600 * 1000 };
 
@@ -60,6 +61,7 @@ function sourceBadge(source) {
 
 export default function SelfAwarePage() {
   const [tab, setTab] = useState("board"); // board | policies
+  const [selectedProvider, setSelectedProvider] = useState(null);
   // Lazy initializer — Date.now() must not run during render body on every pass
   const [now, setNow] = useState(() => Date.now());
 
@@ -336,7 +338,13 @@ export default function SelfAwarePage() {
     return options.sort((a, b) => a.label.localeCompare(b.label));
   }, [providerNodes]);
 
-  const activeCount = cooldowns.filter((c) => (c.expiresAtMs || new Date(c.expiresAt).getTime()) > now).length;
+  const activeRows = useMemo(() => activeCooldowns(cooldowns, now), [cooldowns, now]);
+  const activeProviders = useMemo(() => groupCooldownProviders(activeRows), [activeRows]);
+  const visibleCooldowns = useMemo(
+    () => filterProviderCooldowns(activeRows, selectedProvider),
+    [activeRows, selectedProvider],
+  );
+  const activeCount = activeRows.length;
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
@@ -367,11 +375,13 @@ export default function SelfAwarePage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-400">
-              {boardLoading && cooldowns.length === 0 ? "Loading…" : `${cooldowns.length} active`}
+              {boardLoading && cooldowns.length === 0 ? "Loading…" : selectedProvider
+                ? `${providerLabel(selectedProvider)}: ${visibleCooldowns.length} active cooldowns`
+                : `${activeProviders.length} providers with active cooldowns`}
             </span>
             <button
               onClick={() => (confirmResetAll ? handleResetAll() : setConfirmResetAll(true))}
-              disabled={cooldowns.length === 0 || resetAllPending}
+              disabled={activeCount === 0 || resetAllPending}
               className={`px-3 py-1.5 rounded text-sm border ${
                 confirmResetAll
                   ? "border-red-500 bg-red-500/20 text-red-400"
@@ -379,15 +389,15 @@ export default function SelfAwarePage() {
               }`}
             >
               {confirmResetAll
-                ? `Confirm reset all (${cooldowns.length})?`
+                ? `Confirm reset all providers (${activeCount})?`
                 : resetAllPending
                   ? "Resetting…"
-                  : "Reset All"}
+                  : "Reset All Providers"}
             </button>
           </div>
           {confirmResetAll && (
             <div className="text-xs text-red-400">
-              Clears {cooldowns.length} cooldown(s). Click again to confirm or{" "}
+              Clears cooldowns across all providers, not only this view ({activeCount} active). Click again to confirm or{" "}
               <button className="underline" onClick={() => setConfirmResetAll(false)}>cancel</button>.
             </div>
           )}
@@ -396,12 +406,39 @@ export default function SelfAwarePage() {
               {boardError}
             </div>
           )}
-          {!boardError && cooldowns.length === 0 && !boardLoading && (
-            <div className="text-sm text-gray-500 bg-white/5 rounded p-6 text-center">
-              No active cooldowns
+          {selectedProvider && (
+            <button
+              onClick={() => { setSelectedProvider(null); setConfirmResetAll(false); }}
+              className="text-sm text-gray-300 hover:text-white underline underline-offset-4"
+            >
+              Back to providers
+            </button>
+          )}
+          {!selectedProvider && activeProviders.length > 0 && (
+            <div className="overflow-hidden rounded border border-white/10 divide-y divide-white/10">
+              {activeProviders.map((group) => (
+                <button
+                  key={group.provider}
+                  onClick={() => { setSelectedProvider(group.provider); setConfirmResetAll(false); }}
+                  className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-white">{providerLabel(group.provider)}</span>
+                    <span className="block text-xs text-gray-500">{group.provider}</span>
+                  </span>
+                  <span className="text-sm text-gray-400 whitespace-nowrap">
+                    {group.count} active cooldown{group.count === 1 ? "" : "s"}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
-          {cooldowns.length > 0 && (
+          {!boardError && !boardLoading && (selectedProvider ? visibleCooldowns.length === 0 : activeCount === 0) && (
+            <div className="text-sm text-gray-500 bg-white/5 rounded p-6 text-center">
+              {selectedProvider ? `No active cooldowns for ${providerLabel(selectedProvider)}` : "No active cooldowns"}
+            </div>
+          )}
+          {selectedProvider && visibleCooldowns.length > 0 && (
             <div className="overflow-x-auto rounded border border-white/10">
               <table className="w-full text-sm">
                 <thead>
@@ -417,7 +454,7 @@ export default function SelfAwarePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {cooldowns.map((c) => {
+                  {visibleCooldowns.map((c) => {
                     const expMs = c.expiresAtMs || new Date(c.expiresAt).getTime();
                     const key = c.id || `${c.provider}|${c.model}|${c.scopeType}|${c.scopeId}`;
                     const isPending = pendingReset === key;
