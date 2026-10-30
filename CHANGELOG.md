@@ -9,6 +9,7 @@
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 
 ## Fixes
+- **ZCode quota**: read balances with the existing login JWT and static Coding Plan API key instead of requiring auxiliary Z.AI OAuth refresh first; preserve normal refresh handling for other providers and surface actual upstream balance failures without changing stored credentials.
 - **Plan Management**: discover manual campaign offers from each account's marketing actions as well as billing preview, without hardcoded event names or OAuth promo auto-claims. Skip already-present plans, use each account's JWT and resolved proxy for claims/captcha, and paginate upstream inspection in pages of 10 with page-scoped bulk claims.
 - **Probe Runs**: retry transient task failures up to five times with exponential backoff, and keep all GLM/Z.AI concurrency-limit variants eligible instead of cooling the account.
 - **Quota Tracker**: normalize grouped GLM Coding and Start Plan balances so combined and account-unique rows calculate the correct remaining percentage.

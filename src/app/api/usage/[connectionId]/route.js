@@ -8,6 +8,15 @@ import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { isUsageApiKeyProvider } from "@/shared/constants/providers";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
+
+// ZCode balance uses the login JWT; Coding Plan monitoring uses the static
+// API key. Neither is renewed by refreshing the separate Z.AI OAuth token.
+function hasIndependentZcodeQuotaCredentials(connection) {
+  return resolveRuntimeProviderId(connection.provider) === "glm" &&
+    typeof connection.providerSpecificData?.zcodeJwtToken === "string" &&
+    !!connection.providerSpecificData.zcodeJwtToken.trim();
+}
 
 // Detect auth-expired messages returned by usage providers instead of throwing
 const AUTH_EXPIRED_PATTERNS = ["expired", "authentication", "unauthorized", "401", "re-authorize"];
@@ -178,8 +187,10 @@ export async function GET(request, { params }) {
       strictProxy: false,
     };
 
-    // Refresh credentials only for OAuth connections (apikey has no token refresh)
-    if (isOAuth) {
+    // Quota reads must not rotate an unrelated OAuth token or reject a usable
+    // login JWT just because the auxiliary OAuth refresh grant was revoked.
+    const canRefreshQuotaCredentials = isOAuth && !hasIndependentZcodeQuotaCredentials(connection);
+    if (canRefreshQuotaCredentials) {
       try {
         const result = await refreshAndUpdateCredentials(connection, false, proxyOptions);
         connection = result.connection;
@@ -196,7 +207,7 @@ export async function GET(request, { params }) {
 
     // If provider returned an auth-expired message instead of throwing,
     // force-refresh token and retry once (OAuth only)
-    if (isOAuth && isAuthExpiredMessage(usage) && connection.refreshToken) {
+    if (canRefreshQuotaCredentials && isAuthExpiredMessage(usage) && connection.refreshToken) {
       try {
         const retryResult = await refreshAndUpdateCredentials(connection, true, proxyOptions);
         connection = retryResult.connection;
