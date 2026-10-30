@@ -6,6 +6,7 @@
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import zcodeConfig from "../../../src/lib/zcode/config.js";
 import { buildZcodeBalanceHeaders } from "../../../src/lib/zcode/headers.js";
+import { ZCODE_ORIGINAL_START_PLAN_ID } from "../../../src/lib/zcode/constants.js";
 import { U } from "./shared.js";
 
 // GLM quota endpoints (region-aware) — url from registry transport.usage
@@ -24,22 +25,12 @@ function getStartPlanJwt(providerSpecificData) {
   return typeof raw === "string" ? raw.trim() : "";
 }
 
-/** Native ZCode: active plan has status "active" and start-plan identity (or empty id/name). */
-function isStartPlanIdentity(value) {
-  if (!value) return false;
-  const id = value.trim().toLowerCase();
-  return id.includes("start-plan") || id.includes("start plan");
-}
-
+/** Only the original daily entitlement counts as Start Plan activation. */
 function hasActiveStartPlan(plans) {
-  if (!Array.isArray(plans)) return false;
-  return plans.some((plan) => {
-    const status = plan?.status?.trim().toLowerCase();
-    const planId = plan?.plan_id?.trim().toLowerCase();
-    const name = plan?.name?.trim().toLowerCase();
-    const identity = (!planId && !name) || isStartPlanIdentity(planId) || isStartPlanIdentity(name);
-    return status === "active" && identity;
-  });
+  return Array.isArray(plans) && plans.some((plan) =>
+    plan?.status?.trim().toLowerCase() === "active" &&
+    plan?.plan_id === ZCODE_ORIGINAL_START_PLAN_ID
+  );
 }
 
 function parseNumberOrNull(value) {

@@ -10,6 +10,9 @@ export const ZCODE_ZAI_TOKEN_URL =
 /** Z.AI OAuth access_token lifetime when poll omits expires_in (~1h). */
 export const ZCODE_ZAI_DEFAULT_EXPIRES_IN = 3600;
 
+/** Original daily GLM-5.3 / Flash entitlement, not the 1029 one-time promotion. */
+export const ZCODE_ORIGINAL_START_PLAN_ID = "zcode-v3-start-plan-0817";
+
 /** Upstream model IDs for Coding Plan (case-sensitive). */
 export const GLM_CODING_PLAN_MODEL_MAP = {
   "glm-5.3": "GLM-5.3",

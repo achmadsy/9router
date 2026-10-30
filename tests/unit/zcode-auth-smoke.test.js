@@ -13,6 +13,20 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 const { ZaiAuthFlow } = await import("../../src/lib/zcode/auth.js");
 const { createZaiSession, getZaiSession, deleteZaiSession } = await import("../../src/lib/zcode/sessions.js");
 
+const credentials = {
+  apiKey: "existing-api-key.secret",
+  accessToken: "business-token",
+  providerSpecificData: { zcodeJwtToken: "zcode-jwt" },
+};
+
+function mockEnrollment() {
+  const reply = (data) => ({ ok: true, status: 200, json: async () => ({ code: 200, data }) });
+  mocks.proxyFetch
+    .mockResolvedValueOnce(reply({ organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] }))
+    .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "key-id", usageScene: -1 }]))
+    .mockResolvedValueOnce(reply({ enabled: true, accessToken: "expiring-project-token", expiresIn: 18000 }));
+}
+
 describe("zcode CLI poll oauth (zcode-api method)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -122,144 +136,49 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     expect(flow.nextPollDelayMs).toBe(1000);
   });
 
-  it("claims the official Start Plan and verifies the active entitlement", async () => {
+  it("enrolls natively then verifies 0817 with the unchanged login JWT", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const activePlan = {
-      plan_id: "zcode-v3-start-plan-1029",
-      name: "Start Plan",
-      status: "active",
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ code: 0, data: { plans: [] } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({
-          code: 0,
-          data: { plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "Start Plan" }] },
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ code: 0, data: { plan: activePlan } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ code: 0, data: { plans: [activePlan] } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ code: 0, data: { plans: [] } }),
+    const before = structuredClone(credentials);
+    mockEnrollment();
+    mocks.proxyFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ code: 0, data: {
+        plans: [{ plan_id: "zcode-v3-start-plan-0817", name: "ZCode Start Plan", status: "active" }],
+      } }),
+    });
+
+    await expect(new ZaiAuthFlow().initializeStartPlan(credentials)).resolves.toEqual({
+      status: "already_active", planId: "zcode-v3-start-plan-0817",
+    });
+    expect(credentials).toEqual(before);
+    expect(mocks.proxyFetch).toHaveBeenCalledTimes(4);
+    expect(mocks.proxyFetch.mock.calls[2][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.16.3" }));
+    expect(mocks.proxyFetch.mock.calls[3][0]).toContain("/billing/balance?");
+    expect(mocks.proxyFetch.mock.calls[3][1].headers.Authorization).toBe("Bearer zcode-jwt");
+    expect(mocks.proxyFetch.mock.calls.some(([url]) => /claim|preview|marketing/.test(url))).toBe(false);
+    const logs = JSON.stringify(infoSpy.mock.calls);
+    expect(logs).toContain("Original daily plan verified active");
+    expect(logs).not.toContain("zcode-jwt");
+    expect(logs).not.toContain("expiring-project-token");
+  });
+
+  it.each([[], [{ plan_id: "zcode-v3-start-plan-1029", name: "ZCODE GLOBAL BUILD", status: "active" }]])(
+    "does not call empty balance or promo-only balance a successful original plan: %j", async (plans) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockEnrollment();
+      mocks.proxyFetch.mockResolvedValueOnce({
+        ok: true, status: 200,
+        text: async () => JSON.stringify({ code: 0, data: { plans } }),
       });
-    vi.stubGlobal("fetch", fetchMock);
-    mocks.proxyFetch.mockImplementation(fetchMock);
-
-    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).resolves.toMatchObject({
-      status: "claimed",
-      planId: "zcode-v3-start-plan-1029",
-    });
-
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.16.3",
-      "https://zcode.z.ai/api/v1/zcode-plan/billing/preview?app_version=3.16.3&platform=linux-x64",
-      "https://zcode.z.ai/api/v1/zcode-plan/billing/claim",
-      "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.16.3",
-      "https://zcode.z.ai/api/v1/zcode-plan/billing/preview?app_version=3.16.3&platform=linux-x64",
-    ]);
-    expect(fetchMock.mock.calls[2][1]).toMatchObject({
-      method: "POST",
-      body: JSON.stringify({ plan_id: "zcode-v3-start-plan-1029" }),
-      headers: {
-        Authorization: "Bearer zcode-jwt",
-        "Content-Type": "application/json",
-        "User-Agent": "ZCode/3.16.3",
-        "X-ZCode-App-Version": "3.16.3",
-        "X-Platform": "linux-x64",
-      },
-    });
-    expect(infoSpy).toHaveBeenCalledWith(
-      "[Start Plan] Created and verified",
-      expect.objectContaining({
-        provider: "zai",
-        planId: "zcode-v3-start-plan-1029",
-        status: "claimed",
-      })
-    );
-    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("zcode-jwt");
-  });
-
-  it("does not claim when an active Start Plan already exists", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({
-        code: 0,
-        data: {
-          plans: [{ plan_id: "zcode-v3-start-plan", name: "Start Plan", status: "active" }],
-        },
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    mocks.proxyFetch.mockImplementation(fetchMock);
-
-    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).resolves.toMatchObject({
-      status: "already_active",
-      planId: "zcode-v3-start-plan",
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/billing/claim"))).toBe(false);
-    expect(infoSpy).toHaveBeenCalledWith(
-      "[Start Plan] Active trial already present",
-      expect.objectContaining({ status: "already_active" })
-    );
-  });
-
-  it("rejects accounts without the official Start Plan preview", async () => {
-    vi.useFakeTimers();
-    try {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const fetchMock = vi.fn().mockImplementation(async (url) => ({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(
-          url.includes("/billing/preview")
-            ? { code: 0, data: { plans: [{ plan_id: "weekend-build", name: "Weekend Build" }] } }
-            : { code: 0, data: { plans: [] } }
-        ),
-      }));
-      vi.stubGlobal("fetch", fetchMock);
-      mocks.proxyFetch.mockImplementation(fetchMock);
-
-      const assertion = expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
-        "No Start Plan is currently offered to this account"
-      );
-      await vi.advanceTimersByTimeAsync(31 * 1000);
-      await assertion;
-
-      // 1 initial inspection + 6 activation retries, never a claim
-      expect(fetchMock).toHaveBeenCalledTimes(14);
-      expect(fetchMock.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[Start Plan] Creation failed",
-        expect.objectContaining({ reason: expect.stringContaining("No Start Plan is currently offered") })
-      );
-    } finally {
-      vi.useRealTimers();
+      await expect(new ZaiAuthFlow().initializeStartPlan(credentials)).rejects.toThrow("Original daily Start Plan (0817) is not active");
+      expect(mocks.proxyFetch).toHaveBeenCalledTimes(4);
+      expect(mocks.proxyFetch.mock.calls.some(([url]) => /claim|preview|marketing/.test(url))).toBe(false);
     }
-  });
+  );
 
   it("redacts provider errors while creating Start Plan", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockEnrollment();
     mocks.proxyFetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -270,7 +189,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
       }),
     });
 
-    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow("failed");
+    await expect(new ZaiAuthFlow().initializeStartPlan(credentials)).rejects.toThrow("failed");
 
     const logs = JSON.stringify(warnSpy.mock.calls);
     expect(logs).toContain("[Start Plan] Creation failed");
@@ -282,13 +201,14 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
 
   it("does not expose malformed Start Plan response bodies", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockEnrollment();
     mocks.proxyFetch.mockResolvedValue({
       ok: false,
       status: 502,
       text: async () => "Bearer malformed-secret-token eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.signature",
     });
 
-    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
+    await expect(new ZaiAuthFlow().initializeStartPlan(credentials)).rejects.toThrow(
       "Invalid provider response"
     );
 
@@ -299,11 +219,12 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
 
   it("logs a safe reason when the Start Plan request fails before a response", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockEnrollment();
     mocks.proxyFetch.mockRejectedValue(
       new Error("network failure with bearer network-secret-token")
     );
 
-    await expect(new ZaiAuthFlow().initializeStartPlan("zcode-jwt")).rejects.toThrow(
+    await expect(new ZaiAuthFlow().initializeStartPlan(credentials)).rejects.toThrow(
       "network failure"
     );
 

@@ -2,6 +2,8 @@ import zcodeConfig from "./config.js";
 import { buildZcodeBillingHeaders } from "./headers.js";
 import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
 import { getCaptchaManager, getZcodeCaptchaPort } from "./captcha-service.js";
+import { enrollZcodeProject } from "./provisioning.js";
+import { ZCODE_ORIGINAL_START_PLAN_ID } from "./constants.js";
 
 // Mirrors GlmExecutor's lazy captcha loop: claim first without the Aliyun
 // headers; when Z.AI demands the security verification, mint a verify param
@@ -38,17 +40,10 @@ function billingUrl(baseUrl, { includePlatform = false } = {}) {
   return url;
 }
 
-// Z.AI serves the Start Plan as rotating dated campaign variants
-// ("zcode-v3-start-plan-1029"), not the static id. Match the campaign family
-// like the official client's hasActiveStartPlan does — never one exact id.
+// The captured original daily plan is 0817. Other dated ids (notably the
+// one-time 1029 Flash promotion) are not interchangeable with this entitlement.
 function isStartPlanIdentity(plan) {
-  const id = (plan?.planId || plan?.plan_id || "").toLowerCase();
-  const name = (plan?.name || "").toLowerCase();
-  return (
-    id.startsWith("zcode-v3-start-plan") ||
-    /start[-_ ]?plan/.test(id) ||
-    /start[-_ ]?plan/.test(name)
-  );
+  return (plan?.planId || plan?.plan_id) === ZCODE_ORIGINAL_START_PLAN_ID;
 }
 
 function friendlyBillingError(code, message) {
@@ -59,9 +54,6 @@ function friendlyBillingError(code, message) {
     code === 3007
   ) {
     return "Z.AI requires captcha verification for this claim — claim once from the official ZCode app, then refresh here";
-  }
-  if (code === 3001) {
-    return "ZCode session expired — re-authenticate this account and retry";
   }
   return typeof message === "string" && message.trim() ? message : null;
 }
@@ -162,7 +154,29 @@ function normalizeBalance(balance) {
   };
 }
 
-export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch) {
+async function inspectCampaignOffers(jwt, proxyOptions, fetchImpl, activePlanIds) {
+  const url = new URL(zcodeConfig.marketingTouchUrl);
+  url.searchParams.set("seq", "0");
+  const json = await requestBilling(jwt, url, { method: "GET" }, proxyOptions, fetchImpl);
+  const offers = new Map();
+  for (const delivery of Array.isArray(json.data?.deliveries) ? json.data.deliveries : []) {
+    for (const button of Array.isArray(delivery?.banner?.buttons) ? delivery.banner.buttons : []) {
+      const action = button?.action;
+      if (action?.type !== "claim_zcode_plan") continue;
+      const planId = typeof action.args?.plan_id === "string" ? action.args.plan_id.trim() : "";
+      if (!planId) continue;
+      // Some native banners are image-only and supply no textual title.
+      // Never invent a campaign name or assume a dated id identifies an event.
+      const title = [action.args?.plan_name, delivery.banner.title, delivery.title]
+        .find((value) => typeof value === "string" && value.trim());
+      const offer = normalizeOffer({ plan_id: planId, name: title || planId }, activePlanIds);
+      offers.set(planId, { ...offer, source: "campaign" });
+    }
+  }
+  return [...offers.values()];
+}
+
+export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch, { includeCampaigns = false } = {}) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
 
@@ -196,7 +210,25 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
     .map(normalizeBalance)
     .filter(Boolean);
 
-  return { activePlans, offers, balances };
+  let campaignError;
+  if (includeCampaigns) {
+    // A one-time campaign already present in balance must not be offered again,
+    // even if its status is no longer active or campaign discovery fails.
+    const ownedPlanIds = new Set(activePlans.map((plan) => plan.planId));
+    for (const offer of offers) offer.claimable = offer.claimable && !ownedPlanIds.has(offer.planId);
+    try {
+      const campaigns = await inspectCampaignOffers(token, proxyOptions, fetchImpl, ownedPlanIds);
+      const byId = new Map(campaigns.map((offer) => [offer.planId, offer]));
+      for (const offer of offers) {
+        byId.set(offer.planId, { ...byId.get(offer.planId), ...offer,
+          claimable: offer.claimable && !ownedPlanIds.has(offer.planId) });
+      }
+      offers.splice(0, offers.length, ...byId.values());
+    } catch (error) {
+      campaignError = summarizePlanError(error, "Campaign offers could not be retrieved");
+    }
+  }
+  return { activePlans, offers, balances, ...(campaignError ? { campaignError } : {}) };
 }
 
 export function hasActiveStartPlan(inspection) {
@@ -205,13 +237,26 @@ export function hasActiveStartPlan(inspection) {
   );
 }
 
-// Newest campaign variant wins: dated suffixes ("…-1029") sort above the
-// generic id, so a fresh campaign is claimed rather than a stale one.
-export function selectClaimableStartPlan(inspection) {
-  const claimable = (inspection?.offers || [])
-    .filter((offer) => offer.claimable && isStartPlanIdentity(offer))
-    .sort((a, b) => b.planId.localeCompare(a.planId));
-  return claimable[0] || null;
+/** Verify the login JWT's balance, as in the successful native login capture. */
+export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch) {
+  const token = typeof jwt === "string" ? jwt.trim() : "";
+  if (!token) throw new Error("ZCode OAuth login is required");
+  const balance = await requestBilling(token, billingUrl(zcodeConfig.startPlanBalanceUrl),
+    { method: "GET" }, proxyOptions, fetchImpl);
+  const plan = (Array.isArray(balance.data?.plans) ? balance.data.plans : [])
+    .map(normalizePlan)
+    .find((entry) => entry?.status === "active" && isStartPlanIdentity(entry));
+  if (!plan) {
+    throw new Error("Original daily Start Plan (0817) is not active in the upstream balance; no promotional plan was claimed");
+  }
+  return { status: "already_active", planId: plan.planId };
+}
+
+export async function prepareOriginalStartPlan(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch) {
+  const jwt = credentials?.providerSpecificData?.zcodeJwtToken;
+  if (typeof jwt !== "string" || !jwt.trim()) throw new Error("ZCode OAuth login is required");
+  await enrollZcodeProject(credentials, proxyOptions, fetchImpl);
+  return verifyOriginalStartPlan(jwt, proxyOptions, fetchImpl);
 }
 
 export async function claimZaiPlan(
@@ -219,59 +264,31 @@ export async function claimZaiPlan(
   planId,
   proxyOptions = null,
   fetchImpl = proxyAwareFetch,
-  captchaProxyUrl = "",
-  { activationRetries = 0, activationDelayMs = 5000 } = {}
+  captchaProxyUrl = ""
 ) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   const requestedPlanId = typeof planId === "string" ? planId.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
 
-  // Empty or generic id → auto-select the Start Plan campaign the account is
-  // actually offered (dated variants like zcode-v3-start-plan-1029).
-  const autoSelect = !requestedPlanId || requestedPlanId === zcodeConfig.startPlanId;
-
-  let before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
-  if (autoSelect) {
-    if (hasActiveStartPlan(before)) {
-      const active = before.activePlans.find(
-        (plan) => plan.status === "active" && isStartPlanIdentity(plan)
-      );
-      return { status: "already_active", planId: active.planId, plans: before };
-    }
-  } else if (before.activePlans.some((plan) => plan.planId === requestedPlanId && plan.status === "active")) {
-    return { status: "already_active", planId: requestedPlanId, plans: before };
+  // Generic requests verify only the original daily plan. Promotions require
+  // an explicit offer id selected by the user, never an automatic fallback.
+  if (!requestedPlanId || requestedPlanId === "zcode-v3-start-plan") {
+    return verifyOriginalStartPlan(token, proxyOptions, fetchImpl);
   }
-
-  // Z.AI activates the trial asynchronously after login (observed ~3h lag),
-  // so the offer may not be visible yet — re-inspect before giving up.
-  const target = autoSelect
-    ? selectClaimableStartPlan(before)
-    : before.offers.find((offer) => offer.planId === requestedPlanId && offer.claimable) || null;
-  if (!target) {
-    for (let attempt = 0; attempt < activationRetries; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, activationDelayMs));
-      before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
-      const found = autoSelect
-        ? selectClaimableStartPlan(before)
-        : before.offers.find((offer) => offer.planId === requestedPlanId && offer.claimable) || null;
-      if (found) {
-        // Re-enter with the original planId so the fresh inspection decides.
-        return claimZaiPlan(jwt, requestedPlanId, proxyOptions, fetchImpl, captchaProxyUrl);
-      }
-      if (autoSelect && hasActiveStartPlan(before)) {
-        const active = before.activePlans.find(
-          (plan) => plan.status === "active" && isStartPlanIdentity(plan)
-        );
-        return { status: "already_active", planId: active.planId, plans: before };
-      }
-    }
-    throw new Error(
-      autoSelect
-        ? "No Start Plan is currently offered to this account (Z.AI activates the trial asynchronously — try again in a few minutes)"
-        : "This plan is not currently offered to the account"
-    );
+  const before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
+  const ownedPlan = before.activePlans.find((plan) => plan.planId === requestedPlanId);
+  if (ownedPlan) {
+    return { status: ownedPlan.status === "active" ? "already_active" : "already_present", planId: requestedPlanId, plans: before };
   }
-  const claimPlanId = target.planId;
+  let claimPlanId = before.offers.find(
+    (offer) => offer.planId === requestedPlanId && offer.claimable
+  )?.planId;
+  if (!claimPlanId) {
+    const campaigns = await inspectCampaignOffers(token, proxyOptions, fetchImpl,
+      new Set(before.activePlans.map((plan) => plan.planId)));
+    claimPlanId = campaigns.find((offer) => offer.planId === requestedPlanId && offer.claimable)?.planId;
+  }
+  if (!claimPlanId) throw new Error("This plan is not currently offered to the account");
 
   let verifyParam = null;
   const captchaManager = getCaptchaManager();

@@ -55,6 +55,10 @@ const zcodeConfig = {
   startPlanBalanceUrl:
     process.env.ZAI_START_PLAN_BALANCE_URL ||
     `${apiBaseUrl.replace(/\/+$/, "")}/zcode-plan/billing/balance`,
+  /** Manual Plan Management campaign discovery; never an OAuth fallback. */
+  marketingTouchUrl:
+    process.env.ZCODE_MARKETING_TOUCH_URL ||
+    `${apiBaseUrl.replace(/\/+$/, "")}/marketing/touch`,
   apiKeyFallbackUrl:
     process.env.ZAI_FALLBACK_URL || "https://api.z.ai/api/anthropic/v1/messages",
   /** OpenAI-format coding-plan / API-key endpoint (registry multi-transport). */

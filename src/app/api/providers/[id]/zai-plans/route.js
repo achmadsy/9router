@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProviderConnectionById, getProviderConnections } from "@/models";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { claimZaiPlan, inspectZaiPlans, summarizePlanError } from "@/lib/zcode/plans";
+import { claimZaiPlan, hasActiveStartPlan, inspectZaiPlans, prepareOriginalStartPlan, summarizePlanError } from "@/lib/zcode/plans";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 export const runtime = "nodejs";
@@ -39,8 +39,8 @@ async function inspectConnection(connection, index) {
   }
 
   try {
-    const plans = await inspectZaiPlans(jwt, await resolvePlanProxy(connection));
-    return { ...base, eligible: true, ...plans, error: null };
+    const plans = await inspectZaiPlans(jwt, await resolvePlanProxy(connection), undefined, { includeCampaigns: true });
+    return { ...base, eligible: true, ...plans, originalStartPlanActive: hasActiveStartPlan(plans), error: null };
   } catch (error) {
     return {
       ...base,
@@ -78,12 +78,20 @@ export async function GET(_request, { params }) {
       return NextResponse.json({ error: "Plan management is only available for Z.AI GLM providers" }, { status: 400 });
     }
 
+    const url = new URL(_request.url);
+    const pageSize = 10;
+    const requestedPage = Number(url.searchParams.get("page")) || 1;
     const connections = await getProviderConnections({ provider: id });
-    const accounts = await mapConcurrent(connections, INSPECTION_CONCURRENCY, inspectConnection);
+    connections.sort((a, b) => ((a.priority || 999) - (b.priority || 999)) || a.id.localeCompare(b.id));
+    const totalPages = Math.max(1, Math.ceil(connections.length / pageSize));
+    const page = Math.min(totalPages, Math.max(1, Math.floor(requestedPage)));
+    const visible = connections.slice((page - 1) * pageSize, page * pageSize);
+    const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, inspectConnection);
     return NextResponse.json({
       providerId: id,
-      totalAccounts: accounts.length,
-      eligibleAccounts: accounts.filter((account) => account.eligible).length,
+      totalAccounts: connections.length,
+      eligibleAccounts: connections.filter((connection) => connection.providerSpecificData?.zcodeJwtToken?.trim()).length,
+      page, pageSize, totalPages,
       accounts,
     });
   } catch (error) {
@@ -109,8 +117,9 @@ export async function POST(request, { params }) {
         : [];
     const planId = typeof body.planId === "string" ? body.planId.trim() : "";
 
-    if (!planId || connectionIds.length === 0) {
-      return NextResponse.json({ error: "planId and connectionIds are required" }, { status: 400 });
+    const prepareOriginal = body.action === "prepare_original_start_plan";
+    if ((!planId && !prepareOriginal) || connectionIds.length === 0) {
+      return NextResponse.json({ error: "planId or an original-plan preparation action, and connectionIds are required" }, { status: 400 });
     }
     if (connectionIds.length > MAX_BATCH_SIZE) {
       return NextResponse.json({ error: `At most ${MAX_BATCH_SIZE} accounts can be claimed at once` }, { status: 400 });
@@ -135,30 +144,28 @@ export async function POST(request, { params }) {
 
       try {
         // CloakBrowser captcha solver must share the claim's egress IP.
-        const psd = connection.providerSpecificData || {};
-        const captchaProxyUrl =
-          psd.connectionProxyEnabled === true && psd.connectionProxyUrl
-            ? String(psd.connectionProxyUrl).trim()
-            : "";
-        const claimed = await claimZaiPlan(
-          jwt,
-          planId,
-          await resolvePlanProxy(connection),
-          undefined,
-          captchaProxyUrl
-        );
+        const proxyOptions = await resolvePlanProxy(connection);
+        const captchaProxyUrl = proxyOptions?.connectionProxyEnabled === true
+          ? String(proxyOptions.connectionProxyUrl || "").trim()
+          : "";
+        const claimed = prepareOriginal
+          ? await prepareOriginalStartPlan(connection, proxyOptions)
+          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl);
         results.push({
           connectionId,
           name: label,
           ok: true,
-          planId,
+          planId: claimed.planId,
           status: claimed.status,
-          message:
-            claimed.status === "already_active"
+          message: prepareOriginal
+            ? "Original daily Start Plan verified active"
+            : claimed.status === "already_active"
               ? "Plan is already active"
-              : claimed.status === "claimed_pending"
-                ? "Plan claimed; balance update is pending"
-                : "Plan claimed successfully",
+              : claimed.status === "already_present"
+                ? "Plan is already present; no claim sent"
+                : claimed.status === "claimed_pending"
+                  ? "Plan claimed; balance update is pending"
+                  : "Plan claimed successfully",
         });
       } catch (error) {
         results.push({

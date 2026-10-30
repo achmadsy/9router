@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import config from "./config.js";
 import { buildZcodeGuiRequestHeaders } from "./headers.js";
-import { claimZaiPlan } from "./plans.js";
+import { prepareOriginalStartPlan } from "./plans.js";
 import { ZCODE_ZAI_DEFAULT_EXPIRES_IN } from "./constants.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -20,11 +20,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  */
 const ZCODE_API_BASE = process.env.ZCODE_API_BASE_URL || config.apiBaseUrl;
 const MAX_POLL_DURATION_MS = 300 * 1000;
-// Z.AI provisions the trial asynchronously after login. Poll the preview endpoint
-// up to 6 times at 5s intervals (~30s total) within the poll route's single call
-// before declaring the claim delayed.
-const START_PLAN_ACTIVATION_RETRIES = 6;
-const START_PLAN_ACTIVATION_DELAY_MS = 5000;
 
 function decodeJwtPayload(jwt) {
   try {
@@ -318,23 +313,11 @@ export class ZaiAuthFlow {
     return { status: "pending" };
   }
 
-  /** Claim the official ZCode Start Plan trial, then verify the entitlement. */
-  async initializeStartPlan(zcodeJwtToken) {
+  /** Match native enrollment, then verify only the original daily entitlement. */
+  async initializeStartPlan(credentials, proxyOptions = null) {
     try {
-      // null → auto-select the dated Start Plan campaign the account is offered.
-      // Z.AI provisions the trial asynchronously after login (observed ~3h lag),
-      // so poll the preview for a while before declaring failure.
-      const result = await claimZaiPlan(zcodeJwtToken, null, null, undefined, "", {
-        activationRetries: START_PLAN_ACTIVATION_RETRIES,
-        activationDelayMs: START_PLAN_ACTIVATION_DELAY_MS,
-      });
-      const message =
-        result.status === "already_active"
-          ? "[Start Plan] Active trial already present"
-          : result.status === "claimed_pending"
-            ? "[Start Plan] Claim succeeded; balance update pending"
-            : "[Start Plan] Created and verified";
-      console.info(message, {
+      const result = await prepareOriginalStartPlan(credentials, proxyOptions);
+      console.info("[Start Plan] Original daily plan verified active", {
         provider: "zai",
         planId: result.planId,
         status: result.status,
@@ -440,7 +423,7 @@ export class ZaiAuthFlow {
   async _getOrgAndProject(bizToken) {
     const infoRes = await fetch("https://api.z.ai/api/biz/customer/getCustomerInfo", {
       method: "GET",
-      headers: { Authorization: `Bearer ${bizToken}` },
+      headers: { Authorization: bizToken },
     });
     if (!infoRes.ok) throw new Error("Failed to fetch organization info");
     const infoJson = await infoRes.json();
@@ -487,7 +470,7 @@ export class ZaiAuthFlow {
           Authorization: `Bearer ${bizToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name: "zcode-api-key" }),
+        body: JSON.stringify({ name: "zcode-api-key", usageScene: 1 }),
       });
       if (!createRes.ok) throw new Error("Failed to create API Key");
       const createJson = await createRes.json();

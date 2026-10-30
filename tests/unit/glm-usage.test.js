@@ -83,7 +83,7 @@ const SAMPLE_START_PLAN_BALANCE = {
     plans: [
       {
         name: "GLM Start Plan",
-        plan_id: "zai-start-plan",
+        plan_id: "zcode-v3-start-plan-0817",
         status: "active",
       },
     ],
@@ -91,7 +91,7 @@ const SAMPLE_START_PLAN_BALANCE = {
       {
         entitlement_id: "ent-1",
         show_name: "GLM-5.3",
-        plan_id: "zai-start-plan",
+        plan_id: "zcode-v3-start-plan-0817",
         total_units: 1000,
         used_units: 250,
         remaining_units: 750,
@@ -104,7 +104,7 @@ const SAMPLE_START_PLAN_BALANCE = {
       {
         entitlement_id: "ent-2",
         show_name: "GLM-5.3-Flash",
-        plan_id: "zai-start-plan",
+        plan_id: "zcode-v3-start-plan-0817",
         total_units: 500,
         used_units: 0,
         remaining_units: 500,
@@ -288,6 +288,30 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
     });
   });
 
+  it("does not label the 1029 promotion as the original daily Start Plan", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(jsonResponse({
+      code: 0, data: {
+        plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "ZCODE GLOBAL BUILD", status: "active" }],
+        balances: [{ show_name: "Flash promotion", total_units: 300000000, remaining_units: 300000000 }],
+      },
+    }));
+    const usage = await getGlmUsage(undefined, "glm", null, { zcodeJwtToken: "promo-jwt" });
+    expect(usage.message).toBe("GLM Start Plan not active.");
+    expect(usage.quotas).toBeUndefined();
+  });
+
+  it("manual force bypasses a cached not-active balance", async () => {
+    proxyAwareFetch
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { plans: [], balances: [] } }))
+      .mockResolvedValueOnce(jsonResponse(SAMPLE_START_PLAN_BALANCE));
+    const credentials = { zcodeJwtToken: "cache-test-jwt" };
+    expect((await getGlmUsage(undefined, "glm", null, credentials)).message).toBe("GLM Start Plan not active.");
+    expect((await getGlmUsage(undefined, "glm", null, credentials)).message).toBe("GLM Start Plan not active.");
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
+    expect((await getGlmUsage(undefined, "glm", null, credentials, { force: true })).plan).toBe("Start");
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("JWT + apiKey merges Start Plan with Coding Plan quotas", async () => {
     proxyAwareFetch.mockImplementation(async (url) =>
       jsonResponse(
@@ -313,7 +337,7 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
         return jsonResponse({
           code: 0,
           data: {
-            plans: [{ name: "old", plan_id: "zai-start-plan", status: "expired" }],
+            plans: [{ name: "old", plan_id: "zcode-v3-start-plan-0817", status: "expired" }],
             balances: [],
           },
         });
@@ -362,7 +386,7 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
       jsonResponse({
         code: 0,
         data: {
-          plans: [{ plan_id: "zai-start-plan", status: "active" }],
+          plans: [{ plan_id: "zcode-v3-start-plan-0817", status: "active" }],
           balances: [
             { entitlement_id: "empty", total_units: null, used_units: null, remaining_units: null },
             {

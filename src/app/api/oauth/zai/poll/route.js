@@ -86,7 +86,7 @@ export async function POST(request) {
     let startPlanWarning;
     if (session.initializeStartPlan) {
       try {
-        await flow.initializeStartPlan(zcodeJwtToken);
+        await flow.initializeStartPlan(tokenData);
       } catch (err) {
         startPlanWarning = err.message || "Start Plan initialization failed";
       }
