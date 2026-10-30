@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { getProviderConnectionById, getProviderConnections } from "@/models";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { claimZaiPlan, hasActiveStartPlan, inspectZaiPlans, prepareOriginalStartPlan, summarizePlanError } from "@/lib/zcode/plans";
@@ -125,19 +126,31 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: `At most ${MAX_BATCH_SIZE} accounts can be claimed at once` }, { status: 400 });
     }
 
+    const batchId = randomUUID();
+    const log = (connectionId = null) => ({
+      event(step, outcome, details = {}) {
+        const write = outcome === "failed" ? console.warn : console.info;
+        write(`[Plan Management] ${step}: ${outcome}`, { batchId, ...(connectionId ? { connectionId } : {}), ...details });
+      },
+    });
+    log().event("batch", "started", { provider: id, accounts: connectionIds.length, operation: prepareOriginal ? "original-preparation" : "explicit-claim" });
     const results = [];
     for (let index = 0; index < connectionIds.length; index += 1) {
       const connectionId = connectionIds[index];
+      const diagnostics = log(connectionId);
+      diagnostics.event("account", "started", { position: index + 1, total: connectionIds.length });
       const connection = await getProviderConnectionById(connectionId);
       const label = connection ? accountLabel(connection, index) : `Account ${index + 1}`;
 
       if (!connection || connection.provider !== id) {
+        diagnostics.event("account", "failed", { reason: "Connection not found for this provider" });
         results.push({ connectionId, name: label, ok: false, error: "Connection not found for this provider" });
         continue;
       }
 
       const jwt = connection.providerSpecificData?.zcodeJwtToken?.trim();
       if (!jwt) {
+        diagnostics.event("account", "failed", { reason: "ZCode OAuth login is required" });
         results.push({ connectionId, name: label, ok: false, error: "ZCode OAuth login is required" });
         continue;
       }
@@ -150,7 +163,8 @@ export async function POST(request, { params }) {
           : "";
         const claimed = prepareOriginal
           ? await prepareOriginalStartPlan(connection, proxyOptions)
-          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl);
+          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl, diagnostics);
+        diagnostics.event("account", "completed", { status: claimed.status });
         results.push({
           connectionId,
           name: label,
@@ -168,6 +182,7 @@ export async function POST(request, { params }) {
                   : "Plan claimed successfully",
         });
       } catch (error) {
+        diagnostics.event("account", "failed", { reason: summarizePlanError(error, "Plan claim failed") });
         results.push({
           connectionId,
           name: label,
@@ -182,6 +197,12 @@ export async function POST(request, { params }) {
       }
     }
 
+    log().event("batch", "completed", {
+      total: results.length,
+      claimed: results.filter((result) => result.status === "claimed" || result.status === "claimed_pending").length,
+      skipped: results.filter((result) => result.status === "already_active" || result.status === "already_present").length,
+      failed: results.filter((result) => !result.ok).length,
+    });
     return NextResponse.json({
       total: results.length,
       succeeded: results.filter((result) => result.ok).length,

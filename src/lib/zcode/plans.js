@@ -65,11 +65,12 @@ async function requestBilling(
   options = {},
   proxyOptions = null,
   fetchImpl = proxyAwareFetch,
-  diagnostics = null
+  diagnostics = null,
+  step = "balance"
 ) {
   const started = Date.now();
   const endpoint = `${url.origin}${url.pathname}`;
-  diagnostics?.event("balance", "request", { method: options.method || "GET", endpoint, appVersion: zcodeConfig.appVersion });
+  diagnostics?.event(step, "request", { method: options.method || "GET", endpoint, appVersion: zcodeConfig.appVersion });
   let response;
   try {
     response = await fetchImpl(
@@ -85,7 +86,7 @@ async function requestBilling(
       proxyOptions
     );
   } catch (error) {
-    diagnostics?.event("balance", "failed", { endpoint, durationMs: Date.now() - started, reason: "Network request failed or timed out" });
+    diagnostics?.event(step, "failed", { endpoint, durationMs: Date.now() - started, reason: "Network request failed or timed out" });
     throw new Error(safeReason(error?.message, "Plan network request failed"));
   }
 
@@ -99,7 +100,7 @@ async function requestBilling(
   const envelopeOk =
     json?.success !== false &&
     (code === undefined || code === null || code === 0 || code === 200);
-  diagnostics?.event("balance", response.ok && json && envelopeOk ? "response" : "failed", {
+  diagnostics?.event(step, response.ok && json && envelopeOk ? "response" : "failed", {
     endpoint, httpStatus: response.status, providerCode: Number.isFinite(code) ? code : null,
     validJson: !!json, durationMs: Date.now() - started,
   });
@@ -164,23 +165,28 @@ function normalizeBalance(balance) {
   };
 }
 
-async function inspectCampaignOffers(jwt, proxyOptions, fetchImpl, activePlanIds) {
-  const url = new URL(zcodeConfig.marketingTouchUrl);
-  url.searchParams.set("seq", "0");
-  const json = await requestBilling(jwt, url, { method: "GET" }, proxyOptions, fetchImpl);
+async function inspectCampaignOffers(jwt, proxyOptions, fetchImpl, activePlanIds, diagnostics = null) {
   const offers = new Map();
-  for (const delivery of Array.isArray(json.data?.deliveries) ? json.data.deliveries : []) {
-    for (const button of Array.isArray(delivery?.banner?.buttons) ? delivery.banner.buttons : []) {
-      const action = button?.action;
-      if (action?.type !== "claim_zcode_plan") continue;
-      const planId = typeof action.args?.plan_id === "string" ? action.args.plan_id.trim() : "";
-      if (!planId) continue;
-      // Some native banners are image-only and supply no textual title.
-      // Never invent a campaign name or assume a dated id identifies an event.
-      const title = [action.args?.plan_name, delivery.banner.title, delivery.title]
-        .find((value) => typeof value === "string" && value.trim());
-      const offer = normalizeOffer({ plan_id: planId, name: title || planId }, activePlanIds);
-      offers.set(planId, { ...offer, source: "campaign" });
+  // Native login can return no delivery at seq=0 and an offer at seq=1.
+  // Keep both responses: an empty second delivery must not erase the first.
+  for (const seq of [0, 1]) {
+    const url = new URL(zcodeConfig.marketingTouchUrl);
+    url.searchParams.set("seq", String(seq));
+    const json = await requestBilling(jwt, url, { method: "GET" }, proxyOptions, fetchImpl, diagnostics, `campaign-seq-${seq}`);
+    diagnostics?.event("campaign", "result", { seq, deliveryCount: Array.isArray(json.data?.deliveries) ? json.data.deliveries.length : 0 });
+    for (const delivery of Array.isArray(json.data?.deliveries) ? json.data.deliveries : []) {
+      for (const button of Array.isArray(delivery?.banner?.buttons) ? delivery.banner.buttons : []) {
+        const action = button?.action;
+        if (action?.type !== "claim_zcode_plan") continue;
+        const planId = typeof action.args?.plan_id === "string" ? action.args.plan_id.trim() : "";
+        if (!planId) continue;
+        // Some native banners are image-only and supply no textual title.
+        // Never invent a campaign name or assume a dated id identifies an event.
+        const title = [action.args?.plan_name, delivery.banner.title, delivery.title]
+          .find((value) => typeof value === "string" && value.trim());
+        const offer = normalizeOffer({ plan_id: planId, name: title || planId }, activePlanIds);
+        offers.set(planId, { ...offer, source: "campaign" });
+      }
     }
   }
   return [...offers.values()];
@@ -294,7 +300,8 @@ export async function claimZaiPlan(
   planId,
   proxyOptions = null,
   fetchImpl = proxyAwareFetch,
-  captchaProxyUrl = ""
+  captchaProxyUrl = "",
+  diagnostics = null
 ) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   const requestedPlanId = typeof planId === "string" ? planId.trim() : "";
@@ -308,6 +315,7 @@ export async function claimZaiPlan(
   const before = await inspectZaiPlans(token, proxyOptions, fetchImpl);
   const ownedPlan = before.activePlans.find((plan) => plan.planId === requestedPlanId);
   if (ownedPlan) {
+    diagnostics?.event("ownership", "skipped", { reason: "Plan already present; no claim sent" });
     return { status: ownedPlan.status === "active" ? "already_active" : "already_present", planId: requestedPlanId, plans: before };
   }
   let claimPlanId = before.offers.find(
@@ -315,10 +323,14 @@ export async function claimZaiPlan(
   )?.planId;
   if (!claimPlanId) {
     const campaigns = await inspectCampaignOffers(token, proxyOptions, fetchImpl,
-      new Set(before.activePlans.map((plan) => plan.planId)));
+      new Set(before.activePlans.map((plan) => plan.planId)), diagnostics);
     claimPlanId = campaigns.find((offer) => offer.planId === requestedPlanId && offer.claimable)?.planId;
   }
-  if (!claimPlanId) throw new Error("This plan is not currently offered to the account");
+  if (!claimPlanId) {
+    diagnostics?.event("eligibility", "failed", { reason: "Requested plan absent from preview and both campaign responses; claim not sent" });
+    throw new Error("This plan is not currently offered to the account");
+  }
+  diagnostics?.event("eligibility", "verified", { source: before.offers.some((offer) => offer.planId === claimPlanId) ? "preview" : "campaign" });
 
   let verifyParam = null;
   const captchaManager = getCaptchaManager();
@@ -342,12 +354,15 @@ export async function claimZaiPlan(
         body: JSON.stringify({ plan_id: claimPlanId }),
       },
       proxyOptions,
-      fetchImpl
+      fetchImpl,
+      diagnostics,
+      "claim-api"
     );
 
   let claim;
   for (let attempt = 0; ; attempt += 1) {
     try {
+      diagnostics?.event("claim-attempt", "started", { attemptNumber: attempt + 1, captchaAttached: !!verifyParam });
       claim = await claimOnce();
       break;
     } catch (error) {
@@ -361,6 +376,10 @@ export async function claimZaiPlan(
   }
 
   const claimedPlan = normalizePlan(claim.data?.plan);
+  diagnostics?.event("claim-api", "result", {
+    requestedPlanMatches: claimedPlan?.planId === claimPlanId,
+    activePlanReturned: claimedPlan?.status === "active",
+  });
   if (!claimedPlan || claimedPlan.planId !== claimPlanId || claimedPlan.status !== "active") {
     throw new Error(
       safeReason(

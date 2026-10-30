@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+afterEach(() => vi.restoreAllMocks());
 
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -118,12 +120,13 @@ describe("Z.AI plan operations", () => {
     mocks.fetch
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [], balances: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
 
     await expect(claimZaiPlan("jwt-secret", "unknown-plan")).rejects.toThrow(
       "not currently offered"
     );
-    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
   });
 
   it.each(["future-event-plan-2040", "zcode-v3-start-plan-1029"])("discovers dynamic campaign %s separately from original-plan preparation", async (planId) => {
@@ -132,7 +135,8 @@ describe("Z.AI plan operations", () => {
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: {
         title: "Upstream Event Name", buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: planId } } }],
-      } }] } }));
+      } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
     const result = await inspectZaiPlans("own-jwt", null, undefined, { includeCampaigns: true });
     expect(result.offers).toEqual([expect.objectContaining({ planId, name: "Upstream Event Name", claimable: true })]);
     expect(mocks.fetch.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
@@ -146,7 +150,8 @@ describe("Z.AI plan operations", () => {
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: {
         buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: planId } } }],
-      } }] } }));
+      } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
     const result = await inspectZaiPlans("own-jwt", null, undefined, { includeCampaigns: true });
     expect(result.offers[0]).toMatchObject({ planId, name: planId, claimable: false });
   });
@@ -160,15 +165,39 @@ describe("Z.AI plan operations", () => {
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: {
         buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: planId } } }],
       } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plan: { plan_id: planId, status: "active" } } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: planId, status: "active" }] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }));
     expect((await claimZaiPlan("selected-jwt", planId, proxy)).status).toBe("claimed");
-    expect(mocks.fetch.mock.calls[3][1].body).toBe(JSON.stringify({ plan_id: planId }));
+    expect(mocks.fetch.mock.calls[4][1].body).toBe(JSON.stringify({ plan_id: planId }));
     for (const [, options, actualProxy] of mocks.fetch.mock.calls) {
       expect(options.headers.Authorization).toBe("Bearer selected-jwt");
       expect(actualProxy).toBe(proxy);
     }
+  });
+
+  it("finds an offer only on seq=1 with sequential calls using the same JWT and proxy", async () => {
+    const proxy = { connectionProxyEnabled: true, connectionProxyUrl: "http://selected.proxy.test" };
+    let completedZero = false;
+    mocks.fetch.mockImplementation(async (url, options, actualProxy) => {
+      expect(options.headers.Authorization).toBe("Bearer exact-account-jwt");
+      expect(actualProxy).toBe(proxy);
+      expect(options.method).toBe("GET");
+      if (!url.includes("/marketing/touch")) return response({ code: 0, data: { plans: [] } });
+      const seq = new URL(url).searchParams.get("seq");
+      if (seq === "0") { completedZero = true; return response({ code: 0, data: { deliveries: [] } }); }
+      expect(completedZero).toBe(true);
+      expect(seq).toBe("1");
+      return response({ code: 0, data: { deliveries: [{ banner: { buttons: [
+        { action: { type: "claim_zcode_plan", args: { plan_id: "new-weekend-event" } } },
+        { action: { type: "claim_zcode_plan", args: { plan_id: "new-weekend-event" } } },
+      ] } }] } });
+    });
+    const result = await inspectZaiPlans("exact-account-jwt", proxy, undefined, { includeCampaigns: true });
+    expect(result.offers).toHaveLength(1);
+    expect(result.offers[0]).toMatchObject({ planId: "new-weekend-event", claimable: true });
+    expect(mocks.fetch.mock.calls.filter(([url]) => url.includes("/marketing/touch")).map(([url]) => new URL(url).searchParams.get("seq"))).toEqual(["0", "1"]);
   });
 
   it("skips re-claiming plans already in balance before checking campaign or captcha", async () => {
@@ -255,6 +284,7 @@ describe("Z.AI plan management API", () => {
     mocks.fetch
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [activePlan], balances: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
 
     const apiResponse = await GET(
@@ -289,11 +319,13 @@ describe("Z.AI plan management API", () => {
     expect(body).toMatchObject({ page: 3, pageSize: 10, totalPages: 3, totalAccounts: 23 });
     expect(body.accounts.map((account) => account.connectionId)).toEqual(["account-20", "account-21", "account-22"]);
     expect([...inspected].sort()).toEqual(["Bearer private-jwt-20", "Bearer private-jwt-21", "Bearer private-jwt-22"]);
-    expect(mocks.fetch).toHaveBeenCalledTimes(9);
+    expect(mocks.fetch).toHaveBeenCalledTimes(12);
     expect(JSON.stringify(body)).not.toContain("private-jwt");
   });
 
   it("bulk-claims with each account's JWT and pool, skipping already-owned plans", async () => {
+    const infoLog = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.pools = {
       first: { id: "first", isActive: true, type: "http", strictProxy: true, proxyUrl: "http://first.proxy.test" },
       second: { id: "second", isActive: true, type: "http", strictProxy: true, proxyUrl: "http://second.proxy.test" },
@@ -326,6 +358,11 @@ describe("Z.AI plan management API", () => {
     expect(body.results.map((entry) => entry.status)).toEqual(["already_active", "claimed"]);
     expect(mocks.captchaManager.setProxy).toHaveBeenCalledWith("http://second.proxy.test");
     expect(JSON.stringify(body)).not.toMatch(/jwt-first|jwt-second|proxy.test/);
+    expect(infoLog).toHaveBeenCalledWith("[Plan Management] batch: completed", expect.objectContaining({ total: 2, claimed: 1, skipped: 1, failed: 0 }));
+    expect(infoLog).toHaveBeenCalledWith("[Plan Management] campaign: result", expect.objectContaining({ connectionId: "second", seq: 1, deliveryCount: 1 }));
+    expect(warnLog).toHaveBeenCalledWith("[Plan Management] claim-api: failed", expect.objectContaining({ connectionId: "second", httpStatus: 400, providerCode: 3007 }));
+    expect(new Set([...infoLog.mock.calls, ...warnLog.mock.calls].map(([, context]) => context.batchId)).size).toBe(1);
+    expect(JSON.stringify([...infoLog.mock.calls, ...warnLog.mock.calls])).not.toMatch(/jwt-first|jwt-second|proxy.test|captcha-verify-param/);
   });
 
   it("prepares the original plan per account without persisting or returning the project token", async () => {

@@ -10,6 +10,7 @@
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 
 ## Fixes
+- **Campaign discovery**: query native marketing sequences `0` then `1` per account and merge offers for both Refresh and explicit claim rechecks. Add correlated per-account bulk logs for campaign responses, ownership skips, claim HTTP/provider results, and batch totals without credential values.
 - **Start Plan diagnostics**: log correlated preparation API stages, endpoint templates, HTTP/provider codes, project-token metadata and original-plan balance checks without credential values or raw upstream response bodies.
 - **ZCode quota**: read balances with the existing login JWT and static Coding Plan API key instead of requiring auxiliary Z.AI OAuth refresh first; preserve normal refresh handling for other providers and surface actual upstream balance failures without changing stored credentials.
 - **Plan Management**: discover manual campaign offers from each account's marketing actions as well as billing preview, without hardcoded event names or OAuth promo auto-claims. Skip already-present plans, use each account's JWT and resolved proxy for claims/captcha, and paginate upstream inspection in pages of 10 with page-scoped bulk claims.
