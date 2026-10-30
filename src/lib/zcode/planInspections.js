@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import config from "./config.js";
-import { readZcodeDeviceMid, zcodeDeviceMidForAccount } from "./headers.js";
+import { ensureZcodeDeviceMid, readZcodeDeviceMid, zcodeDeviceMidForAccount } from "./headers.js";
 
 const CACHE_TTL_MS = 60_000;
 const PARTIAL_TTL_MS = 10_000;

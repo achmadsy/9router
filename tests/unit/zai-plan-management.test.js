@@ -109,6 +109,28 @@ describe("Z.AI plan operations", () => {
     expect(JSON.stringify(result)).not.toContain("jwt-secret");
   });
 
+  it.each([{}, { plans: null }])("accepts a native empty preview %j while keeping campaign offers separate", async (preview) => {
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: preview }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: { buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: "campaign-event" } } }] } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
+    const result = await inspectZaiPlans("own-jwt", null, undefined, { includeCampaigns: true, coordinator: mocks.coordinator });
+    expect(result).toMatchObject({ inspectionStatus: "complete", balanceStatus: "available", offers: [{ planId: "campaign-event", source: "campaign" }] });
+    expect(result.error).toBeUndefined();
+  });
+
+  it.each([null, [], { plans: {} }, { plans: "invalid" }])("keeps a genuinely malformed preview %j as a source-specific error", async (preview) => {
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: preview }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: { buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: "campaign-event" } } }] } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
+    const result = await inspectZaiPlans("own-jwt", null, undefined, { includeCampaigns: true, coordinator: mocks.coordinator });
+    expect(result).toMatchObject({ inspectionStatus: "partial", errorSource: "preview", offers: [{ planId: "campaign-event", source: "campaign" }] });
+    expect(result.error).toContain("Invalid plan preview");
+  });
+
   it("claims only a plan that preview offered to the account", async () => {
     mocks.fetch
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [], balances: [] } }))
@@ -500,6 +522,77 @@ describe("Z.AI plan management API", () => {
     const after = await (await get()).json();
     expect(after.accounts[0]).toMatchObject({ cached: false, activePlans: [{ planId: "event", status: "active" }] });
     expect(after.accounts[0].offers).toEqual([]);
+  });
+
+  it.each([{}, { plans: "malformed" }])("claims a freshly verified campaign with preview %j and logs its result", async (preview) => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt-canary" } }];
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: preview }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: { buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: "event" } } }] } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plan: { plan_id: "event", status: "active" } } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "event", status: "active" }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: {} }));
+    const body = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one"], planId: "event" }),
+    }), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(body.results[0]).toMatchObject({ ok: true, status: "claimed" });
+    expect(info).toHaveBeenCalledWith("[Plan Management] eligibility: verified", expect.objectContaining({ source: "campaign" }));
+    expect(info).toHaveBeenCalledWith("[Plan Management] account: completed", expect.objectContaining({ connectionId: "one", status: "claimed" }));
+    expect(JSON.stringify([...info.mock.calls, ...warn.mock.calls])).not.toContain("own-jwt-canary");
+  });
+
+  it("returns and logs the upstream claim rejection after an empty preview", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: {} }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: { buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: "event" } } }] } }] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }))
+      .mockResolvedValueOnce(response({ code: 1004, data: { message: "Not eligible for this campaign" } }));
+    const body = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one"], planId: "event" }),
+    }), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(body.results[0]).toMatchObject({ ok: false, status: "failed", error: "Not eligible for this campaign" });
+    expect(warn).toHaveBeenCalledWith("[Plan Management] account: failed", expect.objectContaining({ connectionId: "one", reason: "Not eligible for this campaign" }));
+    expect(warn).toHaveBeenCalledWith("[Plan Management] claim-api: failed", expect.objectContaining({ providerCode: 1004 }));
+  });
+
+  it("does not treat preview unavailability plus empty campaigns as verified ineligibility", async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: {} } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
+    await expect(claimZaiPlan("own-jwt", "event", null, undefined, "", null, { coordinator: mocks.coordinator })).rejects.toThrow("Could not verify this offer");
+    expect(mocks.fetch.mock.calls.some(([url]) => url.includes("/billing/claim"))).toBe(false);
+  });
+
+  it.each([401, 403, 429])("does not continue to campaign discovery or claim after preview HTTP %s", async (status) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
+      .mockResolvedValueOnce(response({ code: status, msg: "Preview rejected" }, status));
+    await expect(claimZaiPlan("own-jwt", "event", null, undefined, "", null, { coordinator: mocks.coordinator }))
+      .rejects.toMatchObject({ httpStatus: status });
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    expect(mocks.fetch.mock.calls.some(([url]) => url.includes("/marketing/touch") || url.includes("/billing/claim"))).toBe(false);
+  });
+
+  it("does not claim when ownership is unknown even if preview could offer the plan", async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 0, data: {} }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "event" }] } }));
+    await expect(claimZaiPlan("own-jwt", "event", null, undefined, "", null, { coordinator: mocks.coordinator }))
+      .rejects.toThrow("Invalid plan balance response");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("does not replay a timed-out claim and marks the result uncertain", async () => {

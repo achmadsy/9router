@@ -108,6 +108,17 @@ describe("account-scoped plan inspection reuse", () => {
     expect(planInspectionKey("jwt", null, "glm:one")).not.toBe(before);
   });
 
+  it("initializes the cache context when no device is readable without changing an existing device", () => {
+    const readDevice = vi.spyOn(zcodeHeaders, "readZcodeDeviceMid").mockReturnValue(undefined);
+    const ensureDevice = vi.spyOn(zcodeHeaders, "ensureZcodeDeviceMid").mockReturnValue("fallback-device");
+    const first = planInspectionKey("jwt", null, "glm:one");
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(ensureDevice).toHaveBeenCalledTimes(1);
+    readDevice.mockReturnValue("fallback-device");
+    expect(planInspectionKey("jwt", null, "glm:one")).toBe(first);
+    expect(ensureDevice).toHaveBeenCalledTimes(1);
+  });
+
   it("does not cache an interrupted inspection and lets reopening start a new check", async () => {
     const controller = new AbortController();
     let abortFirst;
@@ -186,10 +197,11 @@ describe("account-scoped plan inspection reuse", () => {
     expect(sharedSignal.aborted).toBe(true);
   });
 
-  it("shows unknown balance explicitly instead of offering original-plan preparation", () => {
+  it("keeps original-plan preparation available without calling an unknown balance inactive", () => {
     const source = readFileSync(new URL("../../src/app/(dashboard)/dashboard/providers/[id]/ZaiPlanManagementModal.js", import.meta.url), "utf8");
     expect(source).toContain("account.originalStartPlanActive === false");
-    expect(source).toContain("account.originalStartPlanActive === null");
+    expect(source).toContain("account.originalStartPlanActive !== true");
+    expect(source).toContain("You can still run preparation.");
     expect(source).toContain('account.inspectionStatus === "complete"');
     expect(source).toContain("loadController.current?.abort()");
     expect(source).toContain("cooldown (HTTP 429)");

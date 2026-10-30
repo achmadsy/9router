@@ -18,6 +18,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
   const [error, setError] = useState("");
   const [claimingKey, setClaimingKey] = useState("");
   const [results, setResults] = useState({});
+  const [operationMessage, setOperationMessage] = useState("");
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, totalAccounts: 0 });
   const [cooldownUntil, setCooldownUntil] = useState(null);
@@ -68,6 +69,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
     const controller = new AbortController();
     const timer = setTimeout(() => {
       setResults({});
+      setOperationMessage("");
       loadAccounts(controller.signal);
     }, 0);
     return () => { clearTimeout(timer); controller.abort(); loadController.current?.abort(); };
@@ -86,11 +88,27 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
   }, [accounts]);
 
   const claim = async (connectionIds, planId, key, action) => {
-    if (claimingKey || cooldownUntil) return;
+    if (claimingKey) {
+      setOperationMessage("Another plan action is still running. Wait for its result before retrying.");
+      return;
+    }
+    if (cooldownUntil) {
+      setError("Z.AI requested a cooldown. No claim was sent; wait until the displayed retry time.");
+      return;
+    }
     setClaimingKey(key);
     setError("");
+    setOperationMessage(action === "prepare_original_start_plan"
+      ? "Preparing the original Start Plan and checking its balance…"
+      : `Checking the selected offer for ${connectionIds.length} account(s)…`);
+    setResults((current) => {
+      const next = { ...current };
+      for (const connectionId of connectionIds) next[connectionId] = { status: "pending", message: "Request queued; checking the account before submitting." };
+      return next;
+    });
     // API caps one batch at 50 connections; split larger groups client-side.
     const BATCH_SIZE = 50;
+    const completed = [];
     try {
       for (let i = 0; i < connectionIds.length; i += BATCH_SIZE) {
         const response = await fetch(
@@ -102,18 +120,49 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           }
         );
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Plan claim failed");
+        if (!response.ok) throw new Error(data.error || "Plan request failed");
+        const expectedIds = connectionIds.slice(i, i + BATCH_SIZE);
+        const returnedResults = Array.isArray(data.results) ? data.results : [];
+        if (expectedIds.some((connectionId) => !returnedResults.some((result) => result.connectionId === connectionId))) {
+          throw new Error("The server did not return a result for every selected account; check the account balance before retrying");
+        }
+        completed.push(...returnedResults);
         setCooldownUntil(data.cooldownUntil || null);
         setResults((current) => {
           const next = { ...current };
-          for (const result of data.results || []) next[result.connectionId] = result;
+          for (const result of returnedResults) next[result.connectionId] = result;
           return next;
         });
         if (data.cooldownUntil || data.results?.some((result) => result.status === "uncertain")) break;
       }
+      const succeeded = completed.filter((result) => result.ok).length;
+      const notAttempted = completed.filter((result) => result.status === "not_attempted").length;
+      const uncertain = completed.filter((result) => result.status === "uncertain").length;
+      const failed = completed.length - succeeded - notAttempted - uncertain;
+      setOperationMessage(`Finished: ${succeeded} succeeded · ${failed} failed · ${notAttempted} not attempted · ${uncertain} uncertain.`);
+      setResults((current) => {
+        const next = { ...current };
+        for (const connectionId of connectionIds) {
+          if (next[connectionId]?.status === "pending") next[connectionId] = {
+            status: "not_attempted", ok: false, error: "Not attempted: the batch stopped before this account was submitted.",
+          };
+        }
+        return next;
+      });
       await loadAccounts();
     } catch (claimError) {
-      setError(claimError.message || "Plan claim failed");
+      const reason = claimError.message || "Plan request failed";
+      setError(reason);
+      setOperationMessage("Plan action stopped. No automatic retry was sent; see the result below.");
+      setResults((current) => {
+        const next = { ...current };
+        for (const connectionId of connectionIds) {
+          if (next[connectionId]?.status === "pending") next[connectionId] = {
+            ok: false, status: "unavailable", error: reason,
+          };
+        }
+        return next;
+      });
     } finally {
       setClaimingKey("");
     }
@@ -153,6 +202,12 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           </div>
         )}
 
+        {operationMessage && (
+          <p role="status" aria-live="polite" className="rounded-lg border border-border bg-surface-secondary p-3 text-sm text-text-primary">
+            {operationMessage}
+          </p>
+        )}
+
         {planGroups.length > 0 && (
           <div className="space-y-2 rounded-lg border border-border bg-surface-secondary p-3">
             <p className="text-xs font-medium text-text-primary">Bulk claim by offer</p>
@@ -170,7 +225,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                   onClick={() => claim(connectionIds, offer.planId, `bulk:${offer.planId}`)}
                   disabled={actionsDisabled}
                 >
-                  {claimingKey === `bulk:${offer.planId}` ? "Claiming..." : "Claim Eligible on This Page"}
+                  {claimingKey === `bulk:${offer.planId}` ? "Checking / claiming..." : "Claim Eligible on This Page"}
                 </Button>
               </div>
             ))}
@@ -239,6 +294,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                           <div className="min-w-0">
                             <p className="truncate text-sm text-text-primary">{offer.name}</p>
                             <p className="text-xs text-text-muted">{offer.planId}</p>
+                            <p className="text-xs text-text-muted">Source: {offer.source === "campaign" ? "Campaign delivery" : "Billing preview"} · eligibility is rechecked when claiming.</p>
                             {offer.description && <p className="text-xs text-text-muted">{offer.description}</p>}
                           </div>
                           <Button
@@ -248,7 +304,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                             onClick={() => claim([account.connectionId], offer.planId, key)}
                             disabled={actionsDisabled}
                           >
-                            {claimingKey === key ? "Claiming..." : "Claim"}
+                            {claimingKey === key ? "Checking / claiming..." : "Claim"}
                           </Button>
                         </div>
                       );
@@ -256,10 +312,13 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                   </div>
                 )}
 
-                {account.eligible && account.originalStartPlanActive === false && (
+                {account.eligible && account.originalStartPlanActive !== true && (
                   <div className="mt-3 space-y-2">
                     <p className="text-xs text-text-muted">
-                      Original daily Start Plan (0817) is not active. Preparation enrolls the native project, then checks balance; it does not claim promotions or guarantee a grant.
+                      {account.originalStartPlanActive === false
+                        ? "Original daily Start Plan (0817) is not active. "
+                        : "Original Start Plan status could not be verified. You can still run preparation. "}
+                      Preparation enrolls the native project, then checks balance; it does not claim promotions or guarantee a grant.
                     </p>
                     <Button
                       size="sm"
@@ -272,17 +331,18 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                   </div>
                 )}
 
-                {account.eligible && account.originalStartPlanActive === null && (
-                  <p className="mt-3 text-xs text-warning">Original Start Plan status is unavailable; activation has not been checked.</p>
-                )}
                 {account.eligible && account.inspectionStatus === "complete" && claimableOffers.length === 0 && !account.error && !account.campaignError && (
                   <p className="mt-3 text-xs text-text-muted">No claimable offers returned by this check. This does not establish campaign ineligibility.</p>
                 )}
-                {account.error && <p className="mt-3 text-xs text-warning">{account.error}</p>}
+                {account.error && <p className="mt-3 text-xs text-warning">
+                  {account.errorSource === "preview" ? "Billing preview unavailable: " : account.errorSource === "balance" ? "Balance check failed: " : account.errorSource === "campaign" ? "Campaign discovery failed: " : "Plan check failed: "}
+                  {account.error}
+                  {account.errorSource === "preview" && claimableOffers.some((offer) => offer.source === "campaign") && " The offer above came from a separate campaign delivery; claiming will verify it again."}
+                </p>}
                 {account.campaignError && account.campaignError !== account.error && <p className="mt-3 text-xs text-warning">Campaign discovery failed: {account.campaignError}</p>}
                 {result && (
-                  <p className={`mt-3 text-xs ${result.ok ? "text-success" : "text-error"}`}>
-                    {result.ok ? result.message : result.error}
+                  <p role="status" className={`mt-3 rounded border border-border p-2 text-sm ${result.status === "pending" ? "text-text-muted" : result.ok ? "text-success" : "text-error"}`}>
+                    {result.status === "pending" ? result.message : result.ok ? result.message : `Action ${result.status === "not_attempted" ? "not attempted" : result.status === "uncertain" ? "uncertain" : "failed"}: ${result.error}`}
                   </p>
                 )}
               </section>

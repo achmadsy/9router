@@ -246,8 +246,10 @@ export async function POST(request, { params }) {
       results,
     });
   } catch (error) {
+    const reason = summarizePlanError(error, "Failed to claim plans");
+    console.warn("[Plan Management] request: failed", { reason, ...planErrorDetails(error) });
     return NextResponse.json(
-      { error: summarizePlanError(error, "Failed to claim plans") },
+      { error: reason },
       { status: 500 }
     );
   }

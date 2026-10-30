@@ -224,6 +224,7 @@ async function inspectCampaignOffers(jwt, proxyOptions, fetchImpl, activePlanIds
 
 export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch, {
   includeCampaigns = false, coordinator = null, signal, cacheScope = null, diagnostics = null,
+  allowPreviewFailure = false,
 } = {}) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
@@ -240,10 +241,20 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
   const read = async (url, step) => {
     try {
       const result = await requestBilling(token, url, { method: "GET", signal }, proxyOptions, fetchImpl, diagnostics, step, coordinator);
-      if (!Array.isArray(result.data?.plans)) throw new Error(`Invalid plan ${step} response; status is unavailable`);
-      return result;
+      const data = result.data;
+      const validData = data && typeof data === "object" && !Array.isArray(data);
+      // Native preview uses data.plans ?? []; balance still requires a plan list.
+      const validPlans = Array.isArray(data?.plans) || (step === "preview" && data?.plans == null);
+      if (!validData || !validPlans) {
+        const error = new Error(`Invalid plan ${step} response; status is unavailable`);
+        diagnostics?.event(step, "failed", { reason: error.message });
+        throw error;
+      }
+      return step === "preview" ? { ...result, data: { ...data, plans: data.plans ?? [] } } : result;
     } catch (error) {
-      if (!coordinator || !includeCampaigns || error?.name === "AbortError") throw error;
+      error.step = step;
+      const toleratePreview = allowPreviewFailure && step === "preview" && ![401, 403, 429].includes(error.httpStatus);
+      if (error?.name === "AbortError" || (!(coordinator && includeCampaigns) && !toleratePreview)) throw error;
       errors.push(error);
       return null;
     }
@@ -257,7 +268,8 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
   const ownedPlanIds = new Set(activePlans.map((plan) => plan.planId));
   const offers = (Array.isArray(preview?.data?.plans) ? preview.data.plans : [])
     .map((plan) => normalizeOffer(plan, ownedPlanIds))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((offer) => ({ ...offer, source: "preview" }));
   const balances = (Array.isArray(balance?.data?.balances) ? balance.data.balances : [])
     .map(normalizeBalance)
     .filter(Boolean);
@@ -266,6 +278,7 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
   if (includeCampaigns) {
     const onError = (error) => {
       campaignError = summarizePlanError(error, "Campaign offers could not be retrieved");
+      error.step = "campaign";
       errors.push(error);
     };
     const campaigns = await inspectCampaignOffers(token, proxyOptions, fetchImpl, ownedPlanIds, diagnostics, {
@@ -284,7 +297,7 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
     activePlans, offers, balances,
     balanceStatus: balance ? "available" : "unavailable",
     inspectionStatus: errors.length ? (balance || preview ? "partial" : "unavailable") : "complete",
-    ...(primaryError ? { error: summarizePlanError(primaryError), ...planErrorDetails(primaryError) } : {}),
+    ...(primaryError ? { error: summarizePlanError(primaryError), errorSource: primaryError.step, ...planErrorDetails(primaryError) } : {}),
     ...(campaignError ? { campaignError } : {}),
   };
 }
@@ -370,7 +383,7 @@ export async function claimZaiPlan(
   if (!requestedPlanId || requestedPlanId === "zcode-v3-start-plan") {
     return verifyOriginalStartPlan(token, proxyOptions, fetchImpl, diagnostics, { coordinator });
   }
-  const before = await inspectZaiPlans(token, proxyOptions, fetchImpl, { coordinator, diagnostics });
+  const before = await inspectZaiPlans(token, proxyOptions, fetchImpl, { coordinator, diagnostics, allowPreviewFailure: true });
   const ownedPlan = before.activePlans.find((plan) => plan.planId === requestedPlanId);
   if (ownedPlan) {
     diagnostics?.event("ownership", "skipped", { reason: "Plan already present; no claim sent" });
@@ -385,8 +398,13 @@ export async function claimZaiPlan(
     claimPlanId = campaigns.find((offer) => offer.planId === requestedPlanId && offer.claimable)?.planId;
   }
   if (!claimPlanId) {
-    diagnostics?.event("eligibility", "failed", { reason: "Requested plan absent from preview and both campaign responses; claim not sent" });
-    throw new Error("This plan is not currently offered to the account");
+    const reason = before.error
+      ? "Preview unavailable and requested plan absent from campaign responses; claim not sent"
+      : "Requested plan absent from preview and both campaign responses; claim not sent";
+    diagnostics?.event("eligibility", "failed", { reason });
+    throw new Error(before.error
+      ? "Could not verify this offer: preview is unavailable and the campaign did not return the selected plan; no claim was sent"
+      : "This plan is not currently offered to the account");
   }
   diagnostics?.event("eligibility", "verified", { source: before.offers.some((offer) => offer.planId === claimPlanId) ? "preview" : "campaign" });
 
