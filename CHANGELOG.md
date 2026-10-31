@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Features
+- **Z.AI Plan Management**: search all provider accounts by name/email and navigate numbered pages with First/Last controls. List accounts without automatic upstream checks; add explicit Check This Page and per-account Check Account buttons, preserving account-scoped credentials, shared cooldowns, and page-scoped claims.
 - **Self-Aware**: open active cooldowns with a distinct provider list, then show the existing cooldown table filtered to the selected provider with back navigation; explicitly label global reset scope.
 - **Z.AI GLM**: add a provider-page Force Max Thinking toggle that overrides lower or disabled request effort, plus account-scoped plan management for retrieving and claiming offers individually or across all eligible OAuth accounts.
 - **Probe parity**: run and display the exact ordered 86-check BazaarLink suite (Identity 29, Sub-model ID 29, Security 16, Integrity 12), with server-authoritative membership and English catalog metadata.

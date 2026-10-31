@@ -201,7 +201,7 @@ describe("account-scoped plan inspection reuse", () => {
     const source = readFileSync(new URL("../../src/app/(dashboard)/dashboard/providers/[id]/ZaiPlanManagementModal.js", import.meta.url), "utf8");
     expect(source).toContain("account.originalStartPlanActive === false");
     expect(source).toContain("account.originalStartPlanActive !== true");
-    expect(source).toContain("You can still run preparation.");
+    expect(source).toContain("You can check this account or run preparation.");
     expect(source).toContain('account.inspectionStatus === "complete"');
     expect(source).toContain("loadController.current?.abort()");
     expect(source).toContain("cooldown (HTTP 429)");

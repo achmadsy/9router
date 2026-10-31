@@ -9,6 +9,8 @@ export default function Pagination({
   totalItems,
   onPageChange,
   onPageSizeChange,
+  disabled = false,
+  showBoundaryButtons = false,
   className,
 }) {
   const totalPages = Math.ceil(totalItems / pageSize);
@@ -57,6 +59,7 @@ export default function Pagination({
             <span className="text-sm text-text-muted">Rows:</span>
             <select
               value={pageSize}
+              disabled={disabled}
               onChange={(e) => onPageSizeChange(Number(e.target.value))}
               className={cn(
                 "h-9 rounded-lg border border-black/10 dark:border-white/10 bg-surface",
@@ -75,15 +78,21 @@ export default function Pagination({
         )}
 
         {totalPages > 1 && (
-          <div className="flex items-center gap-1">
+          <nav aria-label="Pagination" className="flex flex-wrap items-center justify-center gap-1">
+            {showBoundaryButtons && (
+              <Button variant="outline" size="sm" onClick={() => onPageChange(1)} disabled={disabled || currentPage === 1}>
+                First
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
               onClick={() => onPageChange(currentPage - 1)}
-              disabled={currentPage === 1}
-              className="w-9 px-0"
+              disabled={disabled || currentPage === 1}
+              aria-label="Previous page"
+              className={showBoundaryButtons ? "" : "w-9 px-0"}
             >
-              <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+              {showBoundaryButtons ? "Previous" : <span aria-hidden="true" className="pointer-events-none overflow-hidden material-symbols-outlined text-[18px]">chevron_left</span>}
             </Button>
 
             {pageNumbers[0] > 1 && (
@@ -92,6 +101,8 @@ export default function Pagination({
                   variant="ghost"
                   size="sm"
                   onClick={() => onPageChange(1)}
+                  disabled={disabled}
+                  aria-label="Page 1"
                   className="w-9 px-0 hidden sm:inline-flex"
                 >
                   1
@@ -108,9 +119,12 @@ export default function Pagination({
                 variant={currentPage === page ? "primary" : "ghost"}
                 size="sm"
                 onClick={() => onPageChange(page)}
+                disabled={disabled}
+                aria-label={`Page ${page}`}
+                aria-current={currentPage === page ? "page" : undefined}
                 className={cn(
                   "w-9 px-0",
-                  currentPage === page ? "inline-flex" : "hidden sm:inline-flex"
+                  showBoundaryButtons || currentPage === page ? "inline-flex" : "hidden sm:inline-flex"
                 )}
               >
                 {page}
@@ -126,6 +140,8 @@ export default function Pagination({
                   variant="ghost"
                   size="sm"
                   onClick={() => onPageChange(totalPages)}
+                  disabled={disabled}
+                  aria-label={`Page ${totalPages}`}
                   className="w-9 px-0 hidden sm:inline-flex"
                 >
                   {totalPages}
@@ -137,12 +153,18 @@ export default function Pagination({
               variant="outline"
               size="sm"
               onClick={() => onPageChange(currentPage + 1)}
-              disabled={currentPage === totalPages}
-              className="w-9 px-0"
+              disabled={disabled || currentPage === totalPages}
+              aria-label="Next page"
+              className={showBoundaryButtons ? "" : "w-9 px-0"}
             >
-              <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+              {showBoundaryButtons ? "Next" : <span aria-hidden="true" className="pointer-events-none overflow-hidden material-symbols-outlined text-[18px]">chevron_right</span>}
             </Button>
-          </div>
+            {showBoundaryButtons && (
+              <Button variant="outline" size="sm" onClick={() => onPageChange(totalPages)} disabled={disabled || currentPage === totalPages}>
+                Last
+              </Button>
+            )}
+          </nav>
         )}
       </div>
     </div>

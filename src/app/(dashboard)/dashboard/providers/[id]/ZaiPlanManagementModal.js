@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { Badge, Button, Modal } from "@/shared/components";
+import Pagination from "@/shared/components/Pagination";
 
 function accountClaimableOffers(account) {
   return (account.offers || []).filter((offer) => offer.claimable);
@@ -20,7 +21,9 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
   const [results, setResults] = useState({});
   const [operationMessage, setOperationMessage] = useState("");
   const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, totalAccounts: 0 });
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 10, totalPages: 1, totalAccounts: 0, matchedAccounts: 0 });
   const [cooldownUntil, setCooldownUntil] = useState(null);
   const loadController = useRef(null);
 
@@ -36,7 +39,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
     return () => clearTimeout(timer);
   }, [cooldownUntil]);
 
-  const loadAccounts = useCallback(async (signal) => {
+  const loadAccounts = useCallback(async (signal, inspect = false, connectionId = "") => {
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
@@ -47,14 +50,17 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
     setError("");
     try {
       const response = await fetch(
-        `/api/providers/${encodeURIComponent(providerId)}/zai-plans?page=${page}`,
+        `/api/providers/${encodeURIComponent(providerId)}/zai-plans?${new URLSearchParams({ page: String(page), search, inspect: String(inspect), ...(connectionId ? { connectionId } : {}) })}`,
         { cache: "no-store", signal: controller.signal }
       );
       const data = await response.json();
       if (controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.error || "Failed to retrieve account plans");
-      setAccounts(data.accounts || []);
-      setPagination({ page: data.page, totalPages: data.totalPages, totalAccounts: data.totalAccounts });
+      setAccounts((current) => connectionId
+        ? (data.accounts || []).map((account) => account.connectionId === connectionId
+          ? account : current.find((previous) => previous.connectionId === account.connectionId) || account)
+        : data.accounts || []);
+      setPagination({ page: data.page, pageSize: data.pageSize, totalPages: data.totalPages, totalAccounts: data.totalAccounts, matchedAccounts: data.matchedAccounts ?? data.totalAccounts });
       setCooldownUntil(data.cooldownUntil > Date.now() ? data.cooldownUntil : null);
     } catch (loadError) {
       if (!controller.signal.aborted) setError(loadError.message || "Failed to retrieve account plans");
@@ -62,7 +68,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
       signal?.removeEventListener("abort", abort);
       if (loadController.current === controller) setLoading(false);
     }
-  }, [providerId, page]);
+  }, [providerId, page, search]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -175,25 +181,60 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
   };
 
   const waiting = cooldownUntil !== null;
-  const actionsDisabled = loading || !!claimingKey || waiting;
+  const navigationDisabled = loading || !!claimingKey;
+  const actionsDisabled = navigationDisabled || waiting;
+  const changePage = (nextPage) => {
+    if (navigationDisabled || nextPage === pagination.page) return;
+    setAccounts([]);
+    setPage(nextPage);
+  };
+  const applySearch = (value) => {
+    const nextSearch = value.trim();
+    if (navigationDisabled || (nextSearch === search && pagination.page === 1)) return;
+    setAccounts([]);
+    setSearch(nextSearch);
+    setPage(1);
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Z.AI Plan Management">
       <div className="flex max-h-[75vh] flex-col gap-4 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-text-muted">
-            Checks use each account&apos;s credentials. Recent results are reused for up to one minute; claims are always checked again.
+            Browsing and searching do not check plans. Use Check This Page or Check Account. Recent checks are reused for up to one minute; claims are always checked again.
           </p>
           <Button
             size="sm"
             variant="secondary"
             icon="refresh"
-            onClick={() => loadAccounts()}
-            disabled={actionsDisabled}
+            onClick={() => loadAccounts(undefined, true)}
+            disabled={actionsDisabled || accounts.length === 0}
           >
-            Refresh
+            Check This Page
           </Button>
         </div>
+
+        <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); applySearch(searchInput); }}>
+          <label className="min-w-0 flex-1 text-xs text-text-muted">
+            Search accounts
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Name or email"
+              maxLength={200}
+              disabled={navigationDisabled}
+              className="mt-1 block w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </label>
+          <Button type="submit" size="sm" variant="secondary" disabled={navigationDisabled}>Search</Button>
+          {(searchInput || search) && (
+            <Button type="button" size="sm" variant="ghost" disabled={navigationDisabled}
+              onClick={() => { setSearchInput(""); applySearch(""); }}>
+              Clear
+            </Button>
+          )}
+        </form>
 
         {waiting && (
           <div role="status" className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
@@ -242,7 +283,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           {loading && accounts.length === 0 ? (
             <p className="py-8 text-center text-sm text-text-muted">Retrieving account plans...</p>
           ) : accounts.length === 0 ? (
-            <p className="py-8 text-center text-sm text-text-muted">No accounts found.</p>
+            <p className="py-8 text-center text-sm text-text-muted">{search ? "No accounts match your search." : "No accounts found."}</p>
           ) : accounts.map((account) => {
             const claimableOffers = accountClaimableOffers(account);
             const showAccountError = account.error && !(account.errorSource === "preview" && account.errorReasonCode === "preview_missing_data");
@@ -262,7 +303,14 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                     {account.checkedAt && <p className="text-xs text-text-muted">
                       {account.cached ? "Cached check" : "Checked"}: {new Date(account.checkedAt).toLocaleTimeString()}
                     </p>}
+                    {account.inspectionStatus === "unchecked" && (
+                      <p className="mt-1 text-xs text-text-muted">Not checked yet.</p>
+                    )}
                   </div>
+                  <Button size="sm" variant="secondary" className="shrink-0 whitespace-nowrap" disabled={actionsDisabled || !account.eligible}
+                    onClick={() => loadAccounts(undefined, true, account.connectionId)}>
+                    Check Account
+                  </Button>
                 </div>
 
                 {account.balanceStatus === "stale" && (
@@ -321,7 +369,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                     <p className="text-xs text-text-muted">
                       {account.originalStartPlanActive === false
                         ? "Original daily Start Plan (0817) is not active. "
-                        : "Original Start Plan status could not be verified. You can still run preparation. "}
+                        : "Original Start Plan status has not been verified. You can check this account or run preparation. "}
                       Preparation enrolls the native project, then checks balance; it does not claim promotions or guarantee a grant.
                     </p>
                     <Button
@@ -354,16 +402,13 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           })}
         </div>
 
-        <div className="flex items-center justify-between gap-2 text-xs text-text-muted">
-          <Button size="sm" variant="secondary" disabled={loading || !!claimingKey || pagination.page <= 1}
-            onClick={() => { setAccounts([]); setPage(pagination.page - 1); }}>
-            Previous
-          </Button>
-          <span>Page {pagination.page} of {pagination.totalPages} · {pagination.totalAccounts} accounts</span>
-          <Button size="sm" variant="secondary" disabled={loading || !!claimingKey || pagination.page >= pagination.totalPages}
-            onClick={() => { setAccounts([]); setPage(pagination.page + 1); }}>
-            Next
-          </Button>
+        <div className="shrink-0 border-t border-border pt-2">
+          <p className="text-center text-xs text-text-muted">
+            Page {pagination.page} of {pagination.totalPages} · {pagination.matchedAccounts} {search ? `matching of ${pagination.totalAccounts}` : ""} accounts
+          </p>
+          <Pagination currentPage={pagination.page} pageSize={pagination.pageSize}
+            totalItems={pagination.matchedAccounts} onPageChange={changePage}
+            disabled={navigationDisabled} showBoundaryButtons className="gap-2 py-2" />
         </div>
 
         <Button variant="secondary" onClick={handleClose} fullWidth disabled={!!claimingKey}>

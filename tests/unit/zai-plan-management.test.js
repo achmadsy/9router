@@ -146,7 +146,7 @@ describe("Z.AI plan operations", () => {
       .mockResolvedValueOnce(response(preview))
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [{ banner: { buttons: [{ action: { type: "claim_zcode_plan", args: { plan_id: "event" } } }] } }] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
-    const get = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), { params: Promise.resolve({ id: "glm" }) });
+    const get = () => GET(new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"), { params: Promise.resolve({ id: "glm" }) });
     const body = await (await get()).json();
     expect(body.accounts[0]).toMatchObject({
       balanceStatus: "available", originalStartPlanActive: true,
@@ -364,7 +364,7 @@ describe("Z.AI plan management API", () => {
       .mockResolvedValueOnce(response({ code: 0, data: { deliveries: [] } }));
 
     const apiResponse = await GET(
-      new Request("http://localhost/api/providers/glm/zai-plans"),
+      new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"),
       { params: Promise.resolve({ id: "glm" }) }
     );
     const body = await apiResponse.json();
@@ -388,7 +388,7 @@ describe("Z.AI plan management API", () => {
       inspected.add(options.headers.Authorization);
       return response({ code: 0, data: url.includes("/marketing/touch") ? { deliveries: [] } : { plans: [], balances: [] } });
     });
-    const result = await GET(new Request("http://localhost/api/providers/glm/zai-plans?page=99"), {
+    const result = await GET(new Request("http://localhost/api/providers/glm/zai-plans?page=99&inspect=true"), {
       params: Promise.resolve({ id: "glm" }),
     });
     const body = await result.json();
@@ -397,6 +397,54 @@ describe("Z.AI plan management API", () => {
     expect([...inspected].sort()).toEqual(["Bearer private-jwt-20", "Bearer private-jwt-21", "Bearer private-jwt-22"]);
     expect(mocks.fetch).toHaveBeenCalledTimes(12);
     expect(JSON.stringify(body)).not.toContain("private-jwt");
+  });
+
+  it("lists and searches across all provider accounts without any upstream checks", async () => {
+    mocks.connections = Array.from({ length: 23 }, (_, index) => ({
+      id: `account-${String(index).padStart(2, "0")}`, provider: "glm", priority: index + 1,
+      name: index >= 10 ? `Target ${index}` : `Other ${index}`,
+      email: `user${index}@example.test`,
+      providerSpecificData: { zcodeJwtToken: `private-jwt-${index}` },
+    }));
+    mocks.connections.push({ id: "clone", provider: "glm-clone-test", name: "Target clone" });
+    const get = async (query = "") => (await GET(new Request(`http://localhost/api/providers/glm/zai-plans${query}`), {
+      params: Promise.resolve({ id: "glm" }),
+    })).json();
+    const initial = await get();
+    expect(initial).toMatchObject({ totalAccounts: 23, matchedAccounts: 23, totalPages: 3, page: 1 });
+    expect(initial.accounts).toHaveLength(10);
+    expect(initial.accounts.every((account) => account.inspectionStatus === "unchecked")).toBe(true);
+    const filtered = await get("?search=%20TaRgEt%20&page=99");
+    expect(filtered).toMatchObject({ totalAccounts: 23, matchedAccounts: 13, totalPages: 2, page: 2 });
+    expect(filtered.accounts.map((account) => account.connectionId)).toEqual(["account-20", "account-21", "account-22"]);
+    const email = await get("?search=USER22%40EXAMPLE.TEST&page=-5");
+    expect(email).toMatchObject({ matchedAccounts: 1, page: 1, totalPages: 1 });
+    expect(email.accounts[0].connectionId).toBe("account-22");
+    const empty = await get("?search=no-match&inspect=true");
+    expect(empty).toMatchObject({ matchedAccounts: 0, page: 1, totalPages: 1, accounts: [] });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(JSON.stringify(initial)).not.toMatch(/private-jwt|zcodeJwtToken/);
+  });
+
+  it("checks only the selected visible account and never a different provider or page", async () => {
+    mocks.connections = Array.from({ length: 11 }, (_, index) => ({
+      id: `account-${String(index).padStart(2, "0")}`, provider: "glm", priority: index + 1,
+      providerSpecificData: { zcodeJwtToken: `private-jwt-${index}` },
+    }));
+    mocks.connections.push({ id: "clone", provider: "glm-clone-test", providerSpecificData: { zcodeJwtToken: "clone-secret" } });
+    mocks.fetch.mockImplementation(async (url) => response({ code: 0, data: url.includes("/marketing/touch") ? { deliveries: [] } : { plans: [], balances: [] } }));
+    const get = async (connectionId) => (await GET(new Request(`http://localhost/api/providers/glm/zai-plans?inspect=true&connectionId=${connectionId}`), {
+      params: Promise.resolve({ id: "glm" }),
+    })).json();
+    const body = await get("account-03");
+    expect(body.accounts.find((account) => account.connectionId === "account-03").inspectionStatus).toBe("complete");
+    expect(body.accounts.filter((account) => account.inspectionStatus === "unchecked")).toHaveLength(9);
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+    expect(mocks.fetch.mock.calls.every(([, options]) => options.headers.Authorization === "Bearer private-jwt-3")).toBe(true);
+    mocks.fetch.mockClear();
+    await get("account-10");
+    await get("clone");
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it("bulk-claims with each account's JWT and pool, skipping already-owned plans", async () => {
@@ -473,7 +521,7 @@ describe("Z.AI plan management API", () => {
     mocks.fetch.mockResolvedValue(new Response("<html>too many requests</html>", {
       status: 429, headers: { "Retry-After": "90" },
     }));
-    const request = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+    const request = () => GET(new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"), {
       params: Promise.resolve({ id: "glm" }),
     });
     const body = await (await request()).json();
@@ -495,7 +543,7 @@ describe("Z.AI plan management API", () => {
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "zcode-v3-start-plan-0817", status: "active" }], balances: [{ show_name: "GLM", remaining_units: 123 }] } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [] } }))
       .mockResolvedValueOnce(new Response("wait", { status: 429 }));
-    const body = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+    const body = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"), {
       params: Promise.resolve({ id: "glm" }),
     })).json();
     expect(body.accounts[0]).toMatchObject({ originalStartPlanActive: true, inspectionStatus: "partial", httpStatus: 429, balances: [{ name: "GLM", remaining: 123 }] });
@@ -506,7 +554,7 @@ describe("Z.AI plan management API", () => {
   it("deduplicates concurrent page refreshes and reuses recent per-account results", async () => {
     mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
     mocks.fetch.mockImplementation(async (url) => response({ code: 0, data: url.includes("/marketing/touch") ? { deliveries: [] } : { plans: [], balances: [] } }));
-    const request = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+    const request = () => GET(new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"), {
       params: Promise.resolve({ id: "glm" }),
     });
     await Promise.all([request(), request()]);
@@ -531,7 +579,7 @@ describe("Z.AI plan management API", () => {
     mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "own-jwt" } }];
     mocks.fetch.mockImplementation(async (url) => response({ code: 0, data:
       url.includes("/marketing/touch") ? { deliveries: [] } : url.includes("/billing/preview") ? { plans: [] } : {} }));
-    const body = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans"), {
+    const body = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"), {
       params: Promise.resolve({ id: "glm" }),
     })).json();
     expect(body.accounts[0]).toMatchObject({ originalStartPlanActive: null, balanceStatus: "unavailable", inspectionStatus: "partial" });
@@ -551,7 +599,7 @@ describe("Z.AI plan management API", () => {
         ? claimed ? [{ plan_id: "event", status: "active" }] : []
         : claimed ? [] : [{ plan_id: "event" }] } });
     });
-    const get = () => GET(new Request("http://localhost/api/providers/glm/zai-plans"), { params: Promise.resolve({ id: "glm" }) });
+    const get = () => GET(new Request("http://localhost/api/providers/glm/zai-plans?inspect=true"), { params: Promise.resolve({ id: "glm" }) });
     await get();
     const result = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
       method: "POST", headers: { "Content-Type": "application/json" },

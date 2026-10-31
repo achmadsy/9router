@@ -110,17 +110,34 @@ export async function GET(_request, { params }) {
     const url = new URL(_request.url);
     const pageSize = 10;
     const requestedPage = Number(url.searchParams.get("page")) || 1;
+    const search = (url.searchParams.get("search") || "").trim().slice(0, 200).toLowerCase();
     const connections = await getProviderConnections({ provider: id });
-    connections.sort((a, b) => ((a.priority || 999) - (b.priority || 999)) || a.id.localeCompare(b.id));
-    const totalPages = Math.max(1, Math.ceil(connections.length / pageSize));
+    const matching = search ? connections.filter((connection) =>
+      [connection.name, connection.email].some((value) =>
+        typeof value === "string" && value.toLowerCase().includes(search))) : connections;
+    matching.sort((a, b) => ((a.priority || 999) - (b.priority || 999)) || a.id.localeCompare(b.id));
+    const totalPages = Math.max(1, Math.ceil(matching.length / pageSize));
     const page = Math.min(totalPages, Math.max(1, Math.floor(requestedPage)));
-    const visible = connections.slice((page - 1) * pageSize, page * pageSize);
+    const visible = matching.slice((page - 1) * pageSize, page * pageSize);
     const inspectionId = randomUUID();
+    const inspect = url.searchParams.get("inspect") === "true";
+    const connectionId = url.searchParams.get("connectionId");
     const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, (connection, index) =>
-      inspectConnection(connection, index, _request.signal, inspectionId));
+      inspect && (!connectionId || connection.id === connectionId)
+        ? inspectConnection(connection, index, _request.signal, inspectionId)
+        : ({
+        connectionId: connection.id,
+        name: accountLabel(connection, index),
+        email: connection.email || null,
+        isActive: connection.isActive !== false,
+        eligible: !!connection.providerSpecificData?.zcodeJwtToken?.trim(),
+        inspectionStatus: "unchecked",
+        activePlans: [], offers: [], balances: [],
+      }));
     return NextResponse.json({
       providerId: id,
       totalAccounts: connections.length,
+      matchedAccounts: matching.length,
       eligibleAccounts: connections.filter((connection) => connection.providerSpecificData?.zcodeJwtToken?.trim()).length,
       page, pageSize, totalPages,
       cooldownUntil: planRequestCoordinator.cooldown(),
