@@ -153,6 +153,19 @@ describe("grouped quota provider cards", () => {
     expect(result.failedConnections[0].connection.id).toBe("bad");
   });
 
+  it("keeps every account in group totals and refresh input when management rows are paginated", () => {
+    const connections = Array.from({ length: 26 }, (_, index) => connection(`glm-${index}`, "glm"));
+    const [group] = groupQuotaConnections(connections);
+    const quotaData = Object.fromEntries(connections.map(({ id }) => [id, {
+      quotas: [{ name: "Start: Flash", used: 1_000_000, total: 5_000_000 }],
+    }]));
+    expect(group.connections).toHaveLength(26);
+    expect(aggregateProviderQuotas(group.connections, quotaData).quotas[0]).toMatchObject({
+      total: 130_000_000, used: 26_000_000, accountCount: 26,
+    });
+    expect(group.connections.map(({ id }) => id)).toEqual(connections.map(({ id }) => id));
+  });
+
   it("marks missing quota data as unavailable instead of silently treating it as zero", () => {
     const connections = [connection("good", "glm"), connection("missing", "glm")];
     const quotaData = {

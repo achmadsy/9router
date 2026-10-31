@@ -91,7 +91,9 @@ describe("provider-specific clone authentication", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ startPlanInitialized: true });
-    expect(mocks.initializeStartPlan).toHaveBeenCalledWith("fake-jwt");
+    expect(mocks.initializeStartPlan).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: "fake-key", providerSpecificData: expect.objectContaining({ zcodeJwtToken: "fake-jwt" }),
+    }));
   });
 
   it("saves GLM credentials when Start Plan initialization fails", async () => {

@@ -32,8 +32,18 @@ async function requestBusiness(url, options, proxyOptions, fetchImpl, diagnostic
 
 /** Native Coding Plan enrollment. The expiring project token is never persisted or returned. */
 export async function enrollZcodeProject(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
-  const businessToken = credentials?.accessToken?.trim();
-  if (!businessToken) throw new Error("ZCode business login is required for provisioning");
+  const oauthToken = credentials?.providerSpecificData?.zaiAccessToken?.trim();
+  if (!oauthToken) throw new Error("Z.AI OAuth token is required for fresh business login; reconnect this account");
+  const loginEndpoint = "https://api.z.ai/api/auth/z/login";
+  const login = await requestBusiness(loginEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: oauthToken }),
+  }, proxyOptions, fetchImpl, diagnostics, "business-login", loginEndpoint);
+  const businessToken = (typeof login?.access_token === "string" ? login.access_token.trim() : "")
+    || (typeof login?.accessToken === "string" ? login.accessToken.trim() : "");
+  if (!businessToken) throw new Error("Z.AI business login response is missing access_token");
+  diagnostics?.event("business-login", "result", { tokenReturned: true, persisted: false });
 
   const info = await requestBusiness("https://api.z.ai/api/biz/customer/getCustomerInfo", {
     method: "GET",

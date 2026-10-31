@@ -11,7 +11,7 @@ const reply = (data, code = 200) => new Response(JSON.stringify({ code, data }),
 const info = { organizations: [{ organizationId: "org/id", projects: [{ projectId: "project/id" }] }] };
 const credentials = {
   apiKey: "existing-key.secret", accessToken: "business-token",
-  providerSpecificData: { zcodeJwtToken: "permanent-login-jwt" },
+  providerSpecificData: { zcodeJwtToken: "permanent-login-jwt", zaiAccessToken: "account-oauth-token" },
 };
 
 afterEach(() => {
@@ -25,31 +25,38 @@ describe("native ZCode provisioning credential boundaries", () => {
     const snapshot = structuredClone(credentials);
     const proxy = { connectionProxyEnabled: true, connectionProxyUrl: "http://proxy.test", strictProxy: true };
     mocks.fetch
+      .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
       .mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([]))
       .mockResolvedValueOnce(reply({ name: "zcode-api-key", apiKey: "native/key" }))
       .mockResolvedValueOnce(reply({ enabled: true, accessToken: "ephemeral-project-token", expiresIn: 18000 }));
     expect(await enrollZcodeProject(credentials, proxy)).toEqual({ enrolled: true });
     expect(credentials).toEqual(snapshot);
-    expect(mocks.fetch.mock.calls[2][1].body).toBe(JSON.stringify({ name: "zcode-api-key", usageScene: 1 }));
-    expect(mocks.fetch.mock.calls[3][0]).toContain("/org%2Fid/projects/project%2Fid/api_keys/native%2Fkey/access_tokens");
-    expect(mocks.fetch.mock.calls[3][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.16.3" }));
+    expect(mocks.fetch.mock.calls[0][0]).toBe("https://api.z.ai/api/auth/z/login");
+    expect(mocks.fetch.mock.calls[0][1]).toMatchObject({ method: "POST", body: JSON.stringify({ token: "account-oauth-token" }) });
+    expect(mocks.fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
+    expect(mocks.fetch.mock.calls[1][1].headers.Authorization).toBe("fresh-business-token");
+    expect(mocks.fetch.mock.calls[3][1].body).toBe(JSON.stringify({ name: "zcode-api-key", usageScene: 1 }));
+    expect(mocks.fetch.mock.calls[4][0]).toContain("/org%2Fid/projects/project%2Fid/api_keys/native%2Fkey/access_tokens");
+    expect(mocks.fetch.mock.calls[4][1].headers.Authorization).toBe("Bearer fresh-business-token");
+    expect(mocks.fetch.mock.calls[4][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.16.3" }));
     for (const [, options, actualProxy] of mocks.fetch.mock.calls) {
       expect(actualProxy).toBe(proxy);
       expect(options.redirect).toBe("error");
-      expect(options.headers.Authorization).not.toContain("ephemeral-project-token");
+      expect(options.headers.Authorization || "").not.toContain("ephemeral-project-token");
     }
   });
 
   it("reuses a generic same-name key without deleting or replacing it", async () => {
     mocks.fetch
+      .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
       .mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "generic-key", usageScene: -1 }]))
       .mockResolvedValueOnce(reply({ enabled: true, accessToken: "ephemeral-project-token" }));
     await enrollZcodeProject(credentials);
-    expect(mocks.fetch).toHaveBeenCalledTimes(3);
-    expect(mocks.fetch.mock.calls[2][0]).toContain("/generic-key/access_tokens");
-    expect(mocks.fetch.mock.calls.filter(([, options]) => options.method === "POST")).toHaveLength(1);
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+    expect(mocks.fetch.mock.calls[3][0]).toContain("/generic-key/access_tokens");
+    expect(mocks.fetch.mock.calls.filter(([, options]) => options.method === "POST")).toHaveLength(2);
   });
 
   it("never exposes credential endpoint error bodies or transport details", async () => {
@@ -57,6 +64,38 @@ describe("native ZCode provisioning credential boundaries", () => {
     await expect(enrollZcodeProject(credentials)).rejects.toThrow("code 3001");
     mocks.fetch.mockRejectedValueOnce(new Error("https://user:secret-canary@proxy.test"));
     await expect(enrollZcodeProject(credentials)).rejects.toThrow(/^ZCode provisioning network request failed$/);
+  });
+
+  it("requires the account OAuth token rather than falling back to its stored business token", async () => {
+    await expect(enrollZcodeProject({ ...credentials, providerSpecificData: { zcodeJwtToken: "login" } }))
+      .rejects.toThrow("OAuth token is required");
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { access_token: "" }, { access_token: 123 }, { accessToken: {} }])("stops on a missing fresh business token (%j)", async (data) => {
+    mocks.fetch.mockResolvedValueOnce(reply(data));
+    await expect(enrollZcodeProject(credentials)).rejects.toThrow("missing access_token");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates sequential account logins and accepts the accessToken response spelling", async () => {
+    for (const id of ["one", "two"]) {
+      mocks.fetch.mockResolvedValueOnce(reply({ accessToken: `fresh-${id}` }))
+        .mockResolvedValueOnce(reply(info))
+        .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: `key-${id}` }]))
+        .mockResolvedValueOnce(reply({ enabled: true, accessToken: "discarded-project-token" }));
+      await enrollZcodeProject({ ...credentials, providerSpecificData: { zaiAccessToken: `oauth-${id}` } });
+    }
+    expect(mocks.fetch.mock.calls[0][1].body).toBe(JSON.stringify({ token: "oauth-one" }));
+    expect(mocks.fetch.mock.calls[4][1].body).toBe(JSON.stringify({ token: "oauth-two" }));
+    expect(mocks.fetch.mock.calls[3][1].headers.Authorization).toBe("Bearer fresh-one");
+    expect(mocks.fetch.mock.calls[7][1].headers.Authorization).toBe("Bearer fresh-two");
+  });
+
+  it("does not proceed or retry when business login rejects the OAuth token", async () => {
+    mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ code: 401, data: { access_token: "secret-canary" } }), { status: 401 }));
+    await expect(enrollZcodeProject(credentials)).rejects.toThrow("HTTP 401");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the existing API-key, business-token and login-JWT exchange contract", async () => {
@@ -80,6 +119,7 @@ describe("native ZCode provisioning credential boundaries", () => {
     const infoLog = vi.spyOn(console, "info").mockImplementation(() => {});
     const warnLog = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.fetch
+      .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
       .mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "key-secret-canary", usageScene: -1 }]))
       .mockResolvedValueOnce(reply({ enabled: true, accessToken: "project-secret-canary", expiresIn: 18000 }))
@@ -93,7 +133,7 @@ describe("native ZCode provisioning credential boundaries", () => {
     expect(calls).toContainEqual(["[Start Plan] balance: result", expect.objectContaining({ planCount: 0, originalPlanActive: false })]);
     expect(warnLog).toHaveBeenCalledWith("[Start Plan] preparation: failed", expect.objectContaining({ reason: expect.stringContaining("not active") }));
     const serialized = JSON.stringify(calls);
-    for (const secret of ["key-secret-canary", "project-secret-canary", "business-token", "permanent-login-jwt", "existing-key.secret"]) expect(serialized).not.toContain(secret);
+    for (const secret of ["key-secret-canary", "project-secret-canary", "business-token", "fresh-business-token", "account-oauth-token", "permanent-login-jwt", "existing-key.secret"]) expect(serialized).not.toContain(secret);
   });
 
   it("logs the rejected endpoint and provider code without raw error body", async () => {
@@ -101,7 +141,7 @@ describe("native ZCode provisioning credential boundaries", () => {
     const warnLog = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.fetch.mockResolvedValueOnce(reply({ accessToken: "error-body-secret" }, 3001));
     await expect(prepareOriginalStartPlan(credentials)).rejects.toThrow("code 3001");
-    expect(warnLog).toHaveBeenCalledWith("[Start Plan] customer-info: failed", expect.objectContaining({ httpStatus: 200, providerCode: 3001 }));
+    expect(warnLog).toHaveBeenCalledWith("[Start Plan] business-login: failed", expect.objectContaining({ httpStatus: 200, providerCode: 3001 }));
     expect(JSON.stringify(warnLog.mock.calls)).not.toContain("error-body-secret");
   });
 

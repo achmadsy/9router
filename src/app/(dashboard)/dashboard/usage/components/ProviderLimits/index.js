@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import QuotaTable from "./QuotaTable";
+import PaginatedAccountList from "./PaginatedAccountList";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 import {
@@ -1409,8 +1410,8 @@ export default function ProviderLimits() {
                       <span>Manage {groupConnections.length} account{groupConnections.length === 1 ? "" : "s"}</span>
                       <span className="material-symbols-outlined text-[16px]">expand_more</span>
                     </summary>
-                    <div className="mt-1 space-y-px">
-                      {groupConnections.map((connection) => {
+                    <PaginatedAccountList connections={groupConnections}>
+                      {(connection) => {
                         const accountBusy = deletingId === connection.id || togglingId === connection.id;
                         const runtimeProvider = resolveRuntimeProviderId(connection.provider);
                         const accountError = errors[connection.id] || quotaData[connection.id]?.message || quotaData[connection.id]?.warnings?.join(" · ");
@@ -1491,8 +1492,8 @@ export default function ProviderLimits() {
                             />
                           </div>
                         );
-                      })}
-                    </div>
+                      }}
+                    </PaginatedAccountList>
                   </details>
                 </div>
               </Card>

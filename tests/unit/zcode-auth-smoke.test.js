@@ -16,12 +16,13 @@ const { createZaiSession, getZaiSession, deleteZaiSession } = await import("../.
 const credentials = {
   apiKey: "existing-api-key.secret",
   accessToken: "business-token",
-  providerSpecificData: { zcodeJwtToken: "zcode-jwt" },
+  providerSpecificData: { zcodeJwtToken: "zcode-jwt", zaiAccessToken: "account-oauth-token" },
 };
 
 function mockEnrollment() {
   const reply = (data) => ({ ok: true, status: 200, json: async () => ({ code: 200, data }) });
   mocks.proxyFetch
+    .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
     .mockResolvedValueOnce(reply({ organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] }))
     .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "key-id", usageScene: -1 }]))
     .mockResolvedValueOnce(reply({ enabled: true, accessToken: "expiring-project-token", expiresIn: 18000 }));
@@ -151,10 +152,10 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
       status: "already_active", planId: "zcode-v3-start-plan-0817",
     });
     expect(credentials).toEqual(before);
-    expect(mocks.proxyFetch).toHaveBeenCalledTimes(4);
-    expect(mocks.proxyFetch.mock.calls[2][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.16.3" }));
-    expect(mocks.proxyFetch.mock.calls[3][0]).toContain("/billing/balance?");
-    expect(mocks.proxyFetch.mock.calls[3][1].headers.Authorization).toBe("Bearer zcode-jwt");
+    expect(mocks.proxyFetch).toHaveBeenCalledTimes(5);
+    expect(mocks.proxyFetch.mock.calls[3][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.16.3" }));
+    expect(mocks.proxyFetch.mock.calls[4][0]).toContain("/billing/balance?");
+    expect(mocks.proxyFetch.mock.calls[4][1].headers.Authorization).toBe("Bearer zcode-jwt");
     expect(mocks.proxyFetch.mock.calls.some(([url]) => /claim|preview|marketing/.test(url))).toBe(false);
     const logs = JSON.stringify(infoSpy.mock.calls);
     expect(logs).toContain("Original daily plan verified active");
@@ -171,7 +172,7 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
         text: async () => JSON.stringify({ code: 0, data: { plans } }),
       });
       await expect(new ZaiAuthFlow().initializeStartPlan(credentials)).rejects.toThrow("Original daily Start Plan (0817) is not active");
-      expect(mocks.proxyFetch).toHaveBeenCalledTimes(4);
+      expect(mocks.proxyFetch).toHaveBeenCalledTimes(5);
       expect(mocks.proxyFetch.mock.calls.some(([url]) => /claim|preview|marketing/.test(url))).toBe(false);
     }
   );

@@ -492,11 +492,12 @@ describe("Z.AI plan management API", () => {
   it("prepares the original plan per account without persisting or returning the project token", async () => {
     const connection = {
       id: "glm-1", provider: "glm", accessToken: "business-token", apiKey: "existing-key.secret",
-      providerSpecificData: { zcodeJwtToken: "permanent-jwt" },
+      providerSpecificData: { zcodeJwtToken: "permanent-jwt", zaiAccessToken: "account-oauth-token" },
     };
     mocks.connections = [connection];
     const before = structuredClone(connection);
     mocks.fetch
+      .mockResolvedValueOnce(response({ code: 200, data: { access_token: "fresh-business-token" } }))
       .mockResolvedValueOnce(response({ code: 200, data: { organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] } }))
       .mockResolvedValueOnce(response({ code: 200, data: [{ name: "zcode-api-key", apiKey: "key" }] }))
       .mockResolvedValueOnce(response({ code: 200, data: { enabled: true, accessToken: "five-hour-project-token", expiresIn: 18000 } }))
@@ -509,7 +510,7 @@ describe("Z.AI plan management API", () => {
     expect(body.results[0]).toMatchObject({ ok: true, planId: "zcode-v3-start-plan-0817" });
     expect(connection).toEqual(before);
     expect(JSON.stringify(body)).not.toMatch(/permanent-jwt|business-token|five-hour-project-token|existing-key/);
-    expect(mocks.fetch.mock.calls[3][1].headers.Authorization).toBe("Bearer permanent-jwt");
+    expect(mocks.fetch.mock.calls[4][1].headers.Authorization).toBe("Bearer permanent-jwt");
     expect(mocks.fetch.mock.calls.some(([url]) => url.includes("/billing/claim"))).toBe(false);
   });
 
@@ -722,7 +723,7 @@ describe("Z.AI plan management API", () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.connections = ["one", "two"].map((id) => ({
-      id, provider: "glm", accessToken: "business-secret", providerSpecificData: { zcodeJwtToken: `jwt-${id}` },
+      id, provider: "glm", accessToken: "business-secret", providerSpecificData: { zcodeJwtToken: `jwt-${id}`, zaiAccessToken: `oauth-${id}` },
     }));
     mocks.fetch.mockResolvedValueOnce(new Response("upstream wait", { status: 429, headers: { "Retry-After": "75" } }));
     const body = await (await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
