@@ -324,7 +324,7 @@ export default function ProviderLimits() {
         return [];
       }
     },
-    [accountFilter, apiKeyFilter, expiringFirst, page, pageSize, providerFilter],
+    [accountFilter, apiKeyFilter, page, pageSize, providerFilter],
   );
 
   // Fetch quota for a specific connection
@@ -387,6 +387,7 @@ export default function ProviderLimits() {
         quotas: parsedQuotas,
         plan: data.plan || null,
         message: data.message || null,
+        warnings: data.warnings || [],
         raw: data,
       };
 
@@ -1372,6 +1373,17 @@ export default function ProviderLimits() {
                     </div>
                   )}
 
+                  {!isLoading && aggregated.partialConnections.length > 0 && (
+                    <p className="mx-1 mt-2 text-xs text-amber-700 dark:text-amber-300">
+                      {aggregated.partialConnections.length} account(s) have stale or unavailable balance checks. Totals may include last-known balances or omit unavailable grants; expand Manage accounts for details.
+                    </p>
+                  )}
+                  {resolveRuntimeProviderId(item.provider) === "glm" && aggregated.quotas.length > 0 && (
+                    <p className="mx-1 mt-2 text-xs text-text-muted">
+                      {aggregated.quotas.filter((quota) => quota.name.startsWith("Start:")).map((quota) => `${quota.name}: ${quota.accountCount}/${groupConnections.length} accounts`).join(" · ")}
+                    </p>
+                  )}
+
                   {hiddenQuotaRows.length > 0 && (
                     <div className="mt-2 flex min-w-0 items-center gap-1 border-t border-black/5 pt-2 text-[10px] text-text-muted dark:border-white/5">
                       <span className="material-symbols-outlined shrink-0 text-[14px]">visibility_off</span>
@@ -1401,7 +1413,7 @@ export default function ProviderLimits() {
                       {groupConnections.map((connection) => {
                         const accountBusy = deletingId === connection.id || togglingId === connection.id;
                         const runtimeProvider = resolveRuntimeProviderId(connection.provider);
-                        const accountError = errors[connection.id] || quotaData[connection.id]?.message;
+                        const accountError = errors[connection.id] || quotaData[connection.id]?.message || quotaData[connection.id]?.warnings?.join(" · ");
                         return (
                           <div
                             key={connection.id}

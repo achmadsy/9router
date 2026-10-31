@@ -45,6 +45,7 @@ vi.mock("../../src/lib/zcode/planRequests.js", async (importOriginal) => {
 
 const { createPlanRequestCoordinator } = await import("../../src/lib/zcode/planRequests.js");
 const { _clearPlanInspectionCacheForTests } = await import("../../src/lib/zcode/planInspections.js");
+const { _clearZcodeBalancesForTests } = await import("../../src/lib/zcode/balances.js");
 const { inspectZaiPlans, claimZaiPlan } = await import("../../src/lib/zcode/plans.js");
 const { GET, POST } = await import("../../src/app/api/providers/[id]/zai-plans/route.js");
 
@@ -64,6 +65,7 @@ const activePlan = {
 beforeEach(() => {
   mocks.coordinator = createPlanRequestCoordinator({ intervalMs: 0 });
   _clearPlanInspectionCacheForTests();
+  _clearZcodeBalancesForTests();
   mocks.fetch.mockReset();
   mocks.connections = [];
   mocks.pools = {};

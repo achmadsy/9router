@@ -56,6 +56,7 @@ export function aggregateProviderQuotas(connections = [], quotaData = {}, errors
   const buckets = new Map();
   let successfulAccounts = 0;
   const failedConnections = [];
+  const partialConnections = [];
 
   for (const connection of connections) {
     const quotaEntry = quotaData[connection.id];
@@ -71,6 +72,8 @@ export function aggregateProviderQuotas(connections = [], quotaData = {}, errors
     }
 
     successfulAccounts += 1;
+    const warnings = quotaEntry?.warnings || quotaEntry?.raw?.warnings || [];
+    if (warnings.length) partialConnections.push({ connection, message: warnings.join(" · ") });
     for (const quota of quotas) {
       const key = getQuotaVisibilityKey(quota);
       if (!key) continue;
@@ -134,6 +137,7 @@ export function aggregateProviderQuotas(connections = [], quotaData = {}, errors
     quotas: [...buckets.values()].map(({ _syntheticDepleted, ...quota }) => quota),
     successfulAccounts,
     failedConnections,
+    partialConnections,
   };
 }
 

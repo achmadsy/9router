@@ -162,8 +162,8 @@ describe("zcode CLI poll oauth (zcode-api method)", () => {
     expect(logs).not.toContain("expiring-project-token");
   });
 
-  it.each([[], [{ plan_id: "zcode-v3-start-plan-1029", name: "ZCODE GLOBAL BUILD", status: "active" }]])(
-    "does not call empty balance or promo-only balance a successful original plan: %j", async (plans) => {
+  it.each([{ plans: [] }, { plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "ZCODE GLOBAL BUILD", status: "active" }] }])(
+    "does not call empty balance or promo-only balance a successful original plan: %j", async ({ plans }) => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       mockEnrollment();
       mocks.proxyFetch.mockResolvedValueOnce({

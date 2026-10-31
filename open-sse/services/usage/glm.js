@@ -4,8 +4,8 @@
  */
 
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
-import zcodeConfig from "../../../src/lib/zcode/config.js";
-import { buildZcodeBalanceHeaders } from "../../../src/lib/zcode/headers.js";
+import { getZcodeBalance, _clearZcodeBalancesForTests } from "../../../src/lib/zcode/balances.js";
+import { planErrorDetails } from "../../../src/lib/zcode/planRequests.js";
 import { ZCODE_ORIGINAL_START_PLAN_ID } from "../../../src/lib/zcode/constants.js";
 import { U } from "./shared.js";
 
@@ -94,140 +94,26 @@ function mapStartPlanBalances(balances, quotas = {}) {
   return quotas;
 }
 
-// Native ZCode renderer reuses billing/balance snapshots younger than 60s,
-// dedupes concurrent fetches for the same auth, and backs off failures
-// 30s → 60s → 120s → 300s. Mirror all three so dashboard polling can't
-// hammer zcode.z.ai and trip its WAF. force=1 (manual refresh) bypasses.
-const START_PLAN_CACHE_TTL_MS = 60_000;
-const START_PLAN_FAILURE_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
-const startPlanCache = new Map(); // jwtKey → { result, fetchedAt, failureCount, nextAllowedAt }
-const startPlanInFlight = new Map(); // jwtKey → Promise
-
-function startPlanCacheKey(jwt) {
-  let hash = 0;
-  for (let i = 0; i < jwt.length; i += 1) hash = (hash * 31 + jwt.charCodeAt(i)) | 0;
-  return `${jwt.length}:${(hash >>> 0).toString(36)}`;
-}
-
-async function fetchStartPlanBalance(jwt, proxyOptions) {
-  const balanceUrl = new URL(zcodeConfig.startPlanBalanceUrl);
-  balanceUrl.searchParams.set("app_version", zcodeConfig.appVersion);
-
-  const doFetch = async () => {
-    try {
-      const response = await proxyAwareFetch(
-        balanceUrl.toString(),
-        {
-          method: "GET",
-          headers: buildZcodeBalanceHeaders(jwt),
-        },
-        proxyOptions,
-      );
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          return { message: "GLM Start Plan JWT invalid or expired." };
-        }
-        return { message: `GLM Start Plan quota API error (${response.status}).` };
-      }
-
-      let json;
-      try {
-        json = await response.json();
-      } catch {
-        return { message: "GLM Start Plan quota API returned invalid JSON." };
-      }
-
-      const code = json?.code;
-      const envelopeOk =
-        json?.success !== false &&
-        (code === undefined || code === null || code === 0 || code === 200);
-      if (!envelopeOk) {
-        return { message: json?.msg || "GLM Start Plan unavailable." };
-      }
-
-      const data = json?.data && typeof json.data === "object" ? json.data : {};
-      if (!hasActiveStartPlan(data.plans)) {
-        return { message: "GLM Start Plan not active." };
-      }
-
-      const quotas = mapStartPlanBalances(data.balances, {});
-      if (Object.keys(quotas).length === 0) {
-        return { message: "GLM Start Plan active but no balance buckets returned." };
-      }
-
-      return { plan: START_PLAN_LEVEL, quotas };
-    } catch (error) {
-      return { message: `GLM Start Plan error: ${error.message}` };
-    }
-  };
-
-  return doFetch();
-}
-
-// A transient failure (network error, 5xx, bad JSON) backs off like the
-// native app; a definitive business answer (401, no-plan, quota envelope)
-// is cached as a normal snapshot without backoff.
-function isTransientStartPlanResult(result) {
-  return (
-    typeof result?.message === "string" && result.message.startsWith("GLM Start Plan error:")
-  );
-}
-
-/**
- * Cached/deduped entry point mirroring native ZCode:
- *  - snapshot younger than 60s is reused
- *  - concurrent fetches for the same JWT share one request
- *  - transient failures back off 30s → 60s → 120s → 300s
- *  - force (manual refresh) bypasses cache and backoff
- */
-async function fetchStartPlanUsage(jwt, proxyOptions, force = false) {
-  const key = startPlanCacheKey(jwt);
-  const now = Date.now();
-
-  if (!force) {
-    const cached = startPlanCache.get(key);
-    if (cached && now - cached.fetchedAt < START_PLAN_CACHE_TTL_MS) {
-      return cached.result;
-    }
-    if (cached && cached.nextAllowedAt > now) {
-      return cached.result;
-    }
-    const inFlight = startPlanInFlight.get(key);
-    if (inFlight) return inFlight;
-  }
-
-  const promise = (async () => {
-    const result = await fetchStartPlanBalance(jwt, proxyOptions);
-    const prev = startPlanCache.get(key);
-    if (isTransientStartPlanResult(result)) {
-      const failureCount = (prev?.failureCount ?? 0) + 1;
-      const backoff =
-        START_PLAN_FAILURE_BACKOFF_MS[
-          Math.min(failureCount - 1, START_PLAN_FAILURE_BACKOFF_MS.length - 1)
-        ];
-      startPlanCache.set(key, {
-        result,
-        fetchedAt: Date.now(),
-        failureCount,
-        nextAllowedAt: Date.now() + backoff,
-      });
-    } else {
-      startPlanCache.set(key, {
-        result,
-        fetchedAt: Date.now(),
-        failureCount: 0,
-        nextAllowedAt: 0,
-      });
-    }
-    return result;
-  })();
-
-  startPlanInFlight.set(key, promise);
+async function fetchStartPlanUsage(jwt, proxyOptions, options) {
   try {
-    return await promise;
-  } finally {
-    if (startPlanInFlight.get(key) === promise) startPlanInFlight.delete(key);
+    const snapshot = await getZcodeBalance(jwt, proxyOptions, proxyAwareFetch, options);
+    const warning = snapshot.warning
+      ? `Balance is stale (last successful check: ${new Date(snapshot.checkedAt).toISOString()}). ${snapshot.warning}`
+      : null;
+    const metadata = { checkedAt: snapshot.checkedAt, stale: snapshot.stale, cached: snapshot.cached,
+      ...(warning ? { warning, ...planErrorDetails(snapshot) } : {}) };
+    if (!hasActiveStartPlan(snapshot.data.plans)) {
+      return { message: "GLM Start Plan not active.", balance: metadata };
+    }
+    const quotas = mapStartPlanBalances(snapshot.data.balances, {});
+    if (!Object.keys(quotas).length) return { message: "GLM Start Plan active but no balance buckets returned.", balance: metadata };
+    return { plan: START_PLAN_LEVEL, quotas, balance: metadata,
+      ...(warning ? { warnings: [warning] } : {}) };
+  } catch (error) {
+    const message = error.httpStatus === 401 ? "GLM Start Plan JWT invalid or expired."
+      : error.httpStatus === 429 ? error.message
+      : `GLM Start Plan balance unavailable: ${error.message}`;
+    return { message, warnings: [message], balance: { status: "unavailable", ...planErrorDetails(error) } };
   }
 }
 
@@ -280,9 +166,9 @@ export function parseGlmQuotaResponse(json) {
   return { plan, quotas };
 }
 
-export async function getGlmUsage(apiKey, provider, proxyOptions = null, providerSpecificData = null, { force = false } = {}) {
+export async function getGlmUsage(apiKey, provider, proxyOptions = null, providerSpecificData = null, { force = false, accountScope = "", coordinator } = {}) {
   const jwt = getStartPlanJwt(providerSpecificData);
-  const startPlan = jwt ? await fetchStartPlanUsage(jwt, proxyOptions, force) : null;
+  const startPlan = jwt ? await fetchStartPlanUsage(jwt, proxyOptions, { force, accountScope, ...(coordinator ? { coordinator } : {}) }) : null;
   if (!apiKey) {
     if (startPlan?.quotas) return startPlan;
     if (startPlan?.message) return startPlan;
@@ -327,7 +213,10 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null, provide
       return { message: startPlan?.message || "GLM quota unavailable." };
     }
 
-    return { plan: planLabel, quotas };
+    return { plan: planLabel, quotas,
+      ...(startPlan?.balance ? { balance: startPlan.balance } : {}),
+      ...(startPlan?.warnings ? { warnings: startPlan.warnings } : {}),
+    };
   } catch (error) {
     if (startPlan?.quotas) return startPlan;
     return { message: `GLM error: ${error.message}` };
@@ -335,5 +224,5 @@ export async function getGlmUsage(apiKey, provider, proxyOptions = null, provide
 }
 
 export function _clearStartPlanCacheForTests() {
-  startPlanCache.clear();
+  _clearZcodeBalancesForTests();
 }

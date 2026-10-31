@@ -199,8 +199,8 @@ export async function POST(request, { params }) {
           ? String(proxyOptions.connectionProxyUrl || "").trim()
           : "";
         const claimed = prepareOriginal
-          ? await prepareOriginalStartPlan(connection, proxyOptions, undefined, { coordinator: planRequestCoordinator })
-          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl, diagnostics, { coordinator: planRequestCoordinator });
+          ? await prepareOriginalStartPlan(connection, proxyOptions, undefined, { coordinator: planRequestCoordinator, accountScope: cacheScope })
+          : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl, diagnostics, { coordinator: planRequestCoordinator, accountScope: cacheScope });
         diagnostics.event("account", "completed", { status: claimed.status });
         results.push({
           connectionId,
@@ -232,8 +232,6 @@ export async function POST(request, { params }) {
           ...planErrorDetails(error),
           error: message,
         });
-      } finally {
-        if (proxyOptions) invalidateZaiPlanInspection(jwt, proxyOptions, cacheScope);
       }
 
       if (!planRequestCoordinator.cooldown() && index < connectionIds.length - 1) {

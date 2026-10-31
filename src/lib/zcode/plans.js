@@ -1,11 +1,13 @@
 import zcodeConfig from "./config.js";
 import { buildZcodeBillingHeaders } from "./headers.js";
+import { billingUrl, friendlyBillingError, requestBilling, responseValueType, safeReason } from "./billingRequest.js";
 import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
 import { getCaptchaManager, getZcodeCaptchaPort } from "./captcha-service.js";
 import { enrollZcodeProject } from "./provisioning.js";
 import { ZCODE_ORIGINAL_START_PLAN_ID } from "./constants.js";
 import { createStartPlanDiagnostics } from "./planDiagnostics.js";
 import { planErrorDetails } from "./planRequests.js";
+import { getZcodeBalance, invalidateZcodeBalance } from "./balances.js";
 import { cachedPlanInspection, invalidatePlanInspection, planInspectionKey } from "./planInspections.js";
 
 // Mirrors GlmExecutor's lazy captcha loop: claim first without the Aliyun
@@ -13,140 +15,10 @@ import { cachedPlanInspection, invalidatePlanInspection, planInspectionKey } fro
 // through the shared CloakBrowser manager and retry.
 const MAX_CLAIM_CAPTCHA_RETRIES = 2;
 
-function isCaptchaRejection(code, message) {
-  const text = String(message || "").toLowerCase();
-  return (
-    code === 3007 ||
-    text.includes("captcha") ||
-    text.includes("security_verification")
-  );
-}
-
-function safeReason(value, fallback = "Plan request failed") {
-  if (typeof value !== "string" || !value.trim()) return fallback;
-  return value
-    .trim()
-    .slice(0, 300)
-    .replace(/bearer\s+[^\s"',;\]}>]+/gi, "Bearer [REDACTED]")
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED_JWT]")
-    .replace(
-      /(["']?\b(?:access_token|refresh_token|id_token|jwt|authorization|cookie|secret|token)["']?\s*[:=]\s*["']?)([^"',\s;}>]{6,})([\"']?)/gi,
-      "$1[REDACTED]$3"
-    )
-    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[REDACTED]");
-}
-
-function responseValueType(value) {
-  return value === undefined ? "missing" : value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-}
-
-function billingUrl(baseUrl, { includePlatform = false } = {}) {
-  const url = new URL(baseUrl);
-  url.searchParams.set("app_version", zcodeConfig.appVersion);
-  if (includePlatform) url.searchParams.set("platform", `${process.platform}-${process.arch}`);
-  return url;
-}
-
 // The captured original daily plan is 0817. Other dated ids (notably the
 // one-time 1029 Flash promotion) are not interchangeable with this entitlement.
 function isStartPlanIdentity(plan) {
   return (plan?.planId || plan?.plan_id) === ZCODE_ORIGINAL_START_PLAN_ID;
-}
-
-function friendlyBillingError(code, message) {
-  const text = typeof message === "string" ? message.toLowerCase() : "";
-  if (
-    text.includes("captcha") ||
-    text.includes("security_verification") ||
-    code === 3007
-  ) {
-    return "Z.AI requires captcha verification for this claim — claim once from the official ZCode app, then refresh here";
-  }
-  return typeof message === "string" && message.trim() ? message : null;
-}
-
-async function requestBilling(
-  jwt,
-  url,
-  options = {},
-  proxyOptions = null,
-  fetchImpl = proxyAwareFetch,
-  diagnostics = null,
-  step = "balance",
-  coordinator = null
-) {
-  if (coordinator) {
-    return coordinator.run(() => requestBilling(jwt, url, {
-      ...options, _planCoordinator: coordinator,
-    }, proxyOptions, fetchImpl, diagnostics, step), { signal: options.signal });
-  }
-  const { _planCoordinator, ...requestOptions } = options;
-  const started = Date.now();
-  const endpoint = `${url.origin}${url.pathname}`;
-  diagnostics?.event(step, "request", { method: options.method || "GET", endpoint, appVersion: zcodeConfig.appVersion });
-  let response;
-  try {
-    response = await fetchImpl(
-      url.toString(),
-      {
-        ...requestOptions,
-        redirect: "error",
-        headers: {
-          ...buildZcodeBillingHeaders(jwt, url.toString()),
-          ...requestOptions.headers,
-        },
-        signal: requestOptions.signal
-          ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(15_000)])
-          : AbortSignal.timeout(15_000),
-      },
-      proxyOptions
-    );
-  } catch {
-    diagnostics?.event(step, "failed", { endpoint, durationMs: Date.now() - started, reason: "Network request failed or timed out" });
-    if (requestOptions.signal?.aborted) throw new DOMException("Plan inspection cancelled", "AbortError");
-    const failure = new Error("Plan network failure or timeout");
-    failure.uncertain = requestOptions.method === "POST";
-    throw failure;
-  }
-
-  if (response.status === 429 && _planCoordinator) {
-    diagnostics?.event(step, "failed", { endpoint, httpStatus: 429, durationMs: Date.now() - started });
-    void response.body?.cancel?.().catch(() => {});
-    _planCoordinator.observeResponse(response, endpoint);
-  }
-  const text = await response.text().catch(() => "");
-  let json = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {}
-
-  const code = json?.code;
-  const envelopeOk =
-    json?.success !== false &&
-    (code === undefined || code === null || code === 0 || code === 200);
-  diagnostics?.event(step, response.ok && json && envelopeOk ? "response" : "failed", {
-    endpoint, httpStatus: response.status, providerCode: Number.isFinite(code) ? code : null,
-    validJson: !!json, durationMs: Date.now() - started,
-    responseType: responseValueType(json), dataType: responseValueType(json?.data),
-    plansType: responseValueType(json?.data?.plans),
-  });
-  if (!response.ok || !json || !envelopeOk) {
-    const rawMessage = json?.data?.message || json?.msg;
-    const error = new Error(
-      safeReason(
-        friendlyBillingError(code, rawMessage) ||
-          (!json ? `Invalid provider response (${response.status})` : `Provider rejected request (${response.status})`),
-        "Plan request failed"
-      )
-    );
-    error.code = code;
-    error.httpStatus = response.status;
-    error.uncertain = requestOptions.method === "POST" && (response.status >= 500 || !json);
-    error.captchaRequired = !error.uncertain && response.status !== 429 && isCaptchaRejection(code, rawMessage);
-    throw error;
-  }
-
-  return json;
 }
 
 function normalizePlan(plan) {
@@ -230,97 +102,97 @@ async function inspectCampaignOffers(jwt, proxyOptions, fetchImpl, activePlanIds
 
 export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch, {
   includeCampaigns = false, coordinator = null, signal, cacheScope = null, diagnostics = null,
-  allowPreviewFailure = false,
+  allowPreviewFailure = false, forceBalance = false,
 } = {}) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
-  if (coordinator && includeCampaigns && cacheScope !== null) {
-    // Resolve the existing device context before keying a first inspection.
-    buildZcodeBillingHeaders(token);
-    const key = planInspectionKey(token, proxyOptions, cacheScope);
-    return cachedPlanInspection(key, (sharedSignal) => inspectZaiPlans(token, proxyOptions, fetchImpl, {
-      includeCampaigns, coordinator, signal: sharedSignal, diagnostics,
-    }), signal);
+  const errors = [];
+  let balance;
+  try {
+    balance = await getZcodeBalance(token, proxyOptions, fetchImpl, {
+      coordinator, diagnostics, signal, accountScope: cacheScope || "",
+      force: forceBalance, allowStale: includeCampaigns,
+    });
+    if (balance.stale) errors.push({ message: balance.warning, step: "balance", ...planErrorDetails(balance) });
+  } catch (error) {
+    if (error?.name === "AbortError" || !(coordinator && includeCampaigns)) throw error;
+    errors.push({ message: error.message, step: "balance", ...planErrorDetails(error) });
   }
 
-  const errors = [];
-  const read = async (url, step) => {
+  // Cache discovery independently: a cached offer must never pin an old balance.
+  const discover = async (discoverySignal) => {
+    const discoveryErrors = [];
+    let preview;
     try {
-      const result = await requestBilling(token, url, { method: "GET", signal }, proxyOptions, fetchImpl, diagnostics, step, coordinator);
-      const data = result.data;
-      const validData = data && typeof data === "object" && !Array.isArray(data);
-      // Native preview uses data.plans ?? []; balance still requires a plan list.
-      const validPlans = Array.isArray(data?.plans) || (step === "preview" && data?.plans == null);
-      if (!validData || !validPlans) {
-        const missingPreviewData = step === "preview" && data == null;
-        const error = new Error(missingPreviewData
+      preview = await requestBilling(token, billingUrl(zcodeConfig.startPlanPreviewUrl, { includePlatform: true }),
+        { method: "GET", signal: discoverySignal }, proxyOptions, fetchImpl, diagnostics, "preview", coordinator);
+      const data = preview.data;
+      if (!data || typeof data !== "object" || Array.isArray(data) || (data.plans != null && !Array.isArray(data.plans))) {
+        const missing = data == null;
+        const error = new Error(missing
           ? "Z.AI reported success but omitted preview data; billing preview is unavailable. Balance and campaign checks are separate."
-          : `Invalid plan ${step} response; status is unavailable`);
-        if (missingPreviewData) error.reasonCode = "preview_missing_data";
-        diagnostics?.event(step, "failed", { reason: error.message,
-          providerCode: Number.isFinite(result.code) ? result.code : null,
+          : "Invalid plan preview response; status is unavailable");
+        if (missing) error.reasonCode = "preview_missing_data";
+        diagnostics?.event("preview", "failed", { reason: error.message,
+          providerCode: Number.isFinite(preview.code) ? preview.code : null,
           dataType: responseValueType(data), plansType: responseValueType(data?.plans),
         });
         throw error;
       }
-      return step === "preview" ? { ...result, data: { ...data, plans: data.plans ?? [] } } : result;
     } catch (error) {
-      error.step = step;
-      const toleratePreview = allowPreviewFailure && step === "preview" && ![401, 403, 429].includes(error.httpStatus);
-      if (error?.name === "AbortError" || (!(coordinator && includeCampaigns) && !toleratePreview)) throw error;
-      errors.push(error);
-      return null;
+      const tolerate = allowPreviewFailure && ![401, 403, 429].includes(error.httpStatus);
+      if (error?.name === "AbortError" || (!(coordinator && includeCampaigns) && !tolerate)) throw error;
+      discoveryErrors.push({ message: error.message, step: "preview", reasonCode: error.reasonCode, ...planErrorDetails(error) });
+      preview = null;
     }
+    const offers = (preview?.data?.plans || []).map((plan) => normalizeOffer(plan, new Set()))
+      .filter(Boolean).map((offer) => ({ ...offer, source: "preview" }));
+    let campaignError;
+    if (includeCampaigns) {
+      const campaigns = await inspectCampaignOffers(token, proxyOptions, fetchImpl, new Set(), diagnostics, {
+        coordinator, signal: discoverySignal, onError(error) {
+          campaignError = summarizePlanError(error, "Campaign offers could not be retrieved");
+          discoveryErrors.push({ message: campaignError, step: "campaign", ...planErrorDetails(error) });
+        },
+      });
+      const byId = new Map(campaigns.map((offer) => [offer.planId, offer]));
+      for (const offer of offers) byId.set(offer.planId, { ...byId.get(offer.planId), ...offer });
+      offers.splice(0, offers.length, ...byId.values());
+    }
+    return { offers, errors: discoveryErrors, campaignError,
+      previewAvailable: !!preview, inspectionStatus: discoveryErrors.length ? "partial" : "complete" };
   };
-  // Sequential dispatch lets a 429 close the shared gate before another call.
-  const balance = await read(billingUrl(zcodeConfig.startPlanBalanceUrl), "balance");
-  const preview = await read(billingUrl(zcodeConfig.startPlanPreviewUrl, { includePlatform: true }), "preview");
-  const activePlans = (Array.isArray(balance?.data?.plans) ? balance.data.plans : [])
-    .map(normalizePlan)
-    .filter(Boolean);
-  const ownedPlanIds = new Set(activePlans.map((plan) => plan.planId));
-  const offers = (Array.isArray(preview?.data?.plans) ? preview.data.plans : [])
-    .map((plan) => normalizeOffer(plan, ownedPlanIds))
-    .filter(Boolean)
-    .map((offer) => ({ ...offer, source: "preview" }));
-  const balances = (Array.isArray(balance?.data?.balances) ? balance.data.balances : [])
-    .map(normalizeBalance)
-    .filter(Boolean);
-
-  let campaignError;
-  if (includeCampaigns) {
-    const onError = (error) => {
-      campaignError = summarizePlanError(error, "Campaign offers could not be retrieved");
-      error.step = "campaign";
-      errors.push(error);
-    };
-    const campaigns = await inspectCampaignOffers(token, proxyOptions, fetchImpl, ownedPlanIds, diagnostics, {
-      coordinator, signal, onError,
-    });
-    const byId = new Map(campaigns.map((offer) => [offer.planId, offer]));
-    for (const offer of offers) {
-      byId.set(offer.planId, { ...byId.get(offer.planId), ...offer });
-    }
-    offers.splice(0, offers.length, ...byId.values());
-  }
-  // Unknown ownership must never be presented as an independently claimable plan.
-  if (!balance) for (const offer of offers) offer.claimable = false;
+  buildZcodeBillingHeaders(token);
+  const discovery = coordinator && includeCampaigns && cacheScope !== null
+    ? await cachedPlanInspection(planInspectionKey(token, proxyOptions, cacheScope), discover, signal)
+    : await discover(signal);
+  errors.push(...discovery.errors);
+  const activePlans = (balance?.data.plans || []).map(normalizePlan).filter(Boolean);
+  const owned = new Set(activePlans.map((plan) => plan.planId));
+  const offers = discovery.offers.map((offer) => ({ ...offer,
+    claimable: !!balance && !balance.stale && !owned.has(offer.planId),
+  }));
   const primaryError = errors.find((error) => error.httpStatus === 429) || errors[0];
   return {
-    activePlans, offers, balances,
-    balanceStatus: balance ? "available" : "unavailable",
-    inspectionStatus: errors.length ? (balance || preview ? "partial" : "unavailable") : "complete",
+    activePlans, offers,
+    balances: (balance?.data.balances || []).map(normalizeBalance).filter(Boolean),
+    balanceStatus: balance ? (balance.stale ? "stale" : "available") : "unavailable",
+    balanceCheckedAt: balance?.checkedAt || null,
+    checkedAt: balance?.checkedAt || discovery.checkedAt || null,
+    cached: !!balance?.cached && discovery.cached === true,
+    inspectionStatus: errors.length ? (balance || discovery.previewAvailable ? "partial" : "unavailable") : "complete",
     ...(primaryError ? {
       error: summarizePlanError(primaryError), errorSource: primaryError.step,
       ...(primaryError.reasonCode ? { errorReasonCode: primaryError.reasonCode } : {}),
       ...planErrorDetails(primaryError),
     } : {}),
-    ...(campaignError ? { campaignError } : {}),
+    ...(discovery.campaignError ? { campaignError: discovery.campaignError } : {}),
   };
 }
 
 export function invalidateZaiPlanInspection(jwt, proxyOptions, cacheScope) {
   invalidatePlanInspection(planInspectionKey(jwt.trim(), proxyOptions, cacheScope));
+  invalidateZcodeBalance(jwt, proxyOptions, cacheScope || "");
 }
 
 export function hasActiveStartPlan(inspection) {
@@ -330,11 +202,12 @@ export function hasActiveStartPlan(inspection) {
 }
 
 /** Verify the login JWT's balance, as in the successful native login capture. */
-export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null, { coordinator = null } = {}) {
+export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null, { coordinator = null, accountScope = "" } = {}) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   if (!token) throw new Error("ZCode OAuth login is required");
-  const balance = await requestBilling(token, billingUrl(zcodeConfig.startPlanBalanceUrl),
-    { method: "GET" }, proxyOptions, fetchImpl, diagnostics, "balance", coordinator);
+  const balance = await getZcodeBalance(token, proxyOptions, fetchImpl, {
+    coordinator, diagnostics, force: true, allowStale: false, accountScope,
+  });
   const returnedPlans = Array.isArray(balance.data?.plans) ? balance.data.plans : [];
   diagnostics?.event("balance", "result", {
     planCount: returnedPlans.length,
@@ -351,7 +224,7 @@ export async function verifyOriginalStartPlan(jwt, proxyOptions = null, fetchImp
   return { status: "already_active", planId: plan.planId };
 }
 
-export async function prepareOriginalStartPlan(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, { coordinator = null } = {}) {
+export async function prepareOriginalStartPlan(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, { coordinator = null, accountScope = "" } = {}) {
   const diagnostics = createStartPlanDiagnostics(credentials);
   diagnostics.event("preparation", "started", {
     proxyEnabled: proxyOptions?.connectionProxyEnabled === true,
@@ -373,7 +246,8 @@ export async function prepareOriginalStartPlan(credentials, proxyOptions = null,
         })
       : fetchImpl;
     await enrollZcodeProject(credentials, proxyOptions, preparedFetch, diagnostics);
-    const result = await verifyOriginalStartPlan(jwt, proxyOptions, fetchImpl, diagnostics, { coordinator });
+    invalidateZcodeBalance(jwt, proxyOptions, accountScope);
+    const result = await verifyOriginalStartPlan(jwt, proxyOptions, fetchImpl, diagnostics, { coordinator, accountScope });
     diagnostics.event("preparation", "verified", { planId: result.planId, inferenceCredentialsChanged: false });
     return result;
   } catch (error) {
@@ -389,7 +263,7 @@ export async function claimZaiPlan(
   fetchImpl = proxyAwareFetch,
   captchaProxyUrl = "",
   diagnostics = null,
-  { coordinator = null } = {}
+  { coordinator = null, accountScope = "" } = {}
 ) {
   const token = typeof jwt === "string" ? jwt.trim() : "";
   const requestedPlanId = typeof planId === "string" ? planId.trim() : "";
@@ -398,9 +272,9 @@ export async function claimZaiPlan(
   // Generic requests verify only the original daily plan. Promotions require
   // an explicit offer id selected by the user, never an automatic fallback.
   if (!requestedPlanId || requestedPlanId === "zcode-v3-start-plan") {
-    return verifyOriginalStartPlan(token, proxyOptions, fetchImpl, diagnostics, { coordinator });
+    return verifyOriginalStartPlan(token, proxyOptions, fetchImpl, diagnostics, { coordinator, accountScope });
   }
-  const before = await inspectZaiPlans(token, proxyOptions, fetchImpl, { coordinator, diagnostics, allowPreviewFailure: true });
+  const before = await inspectZaiPlans(token, proxyOptions, fetchImpl, { coordinator, diagnostics, allowPreviewFailure: true, forceBalance: true, cacheScope: accountScope });
   const ownedPlan = before.activePlans.find((plan) => plan.planId === requestedPlanId);
   if (ownedPlan) {
     diagnostics?.event("ownership", "skipped", { reason: "Plan already present; no claim sent" });
@@ -425,6 +299,8 @@ export async function claimZaiPlan(
   }
   diagnostics?.event("eligibility", "verified", { source: before.offers.some((offer) => offer.planId === claimPlanId) ? "preview" : "campaign" });
 
+  // The pre-claim snapshot must not survive a write, including uncertain writes.
+  invalidateZcodeBalance(token, proxyOptions, accountScope);
   let verifyParam = null;
   const captchaManager = getCaptchaManager();
   const claimOnce = () =>
@@ -454,19 +330,24 @@ export async function claimZaiPlan(
     );
 
   let claim;
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      diagnostics?.event("claim-attempt", "started", { attemptNumber: attempt + 1, captchaAttached: !!verifyParam });
-      claim = await claimOnce();
-      break;
-    } catch (error) {
-      if (!error?.captchaRequired || attempt >= MAX_CLAIM_CAPTCHA_RETRIES || !captchaManager?.getVerifyParam) {
-        throw error;
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        diagnostics?.event("claim-attempt", "started", { attemptNumber: attempt + 1, captchaAttached: !!verifyParam });
+        claim = await claimOnce();
+        break;
+      } catch (error) {
+        if (!error?.captchaRequired || attempt >= MAX_CLAIM_CAPTCHA_RETRIES || !captchaManager?.getVerifyParam) {
+          throw error;
+        }
+        captchaManager.invalidate?.();
+        captchaManager.setProxy?.(captchaProxyUrl || "");
+        verifyParam = await captchaManager.getVerifyParam(getZcodeCaptchaPort());
       }
-      captchaManager.invalidate?.();
-      captchaManager.setProxy?.(captchaProxyUrl || "");
-      verifyParam = await captchaManager.getVerifyParam(getZcodeCaptchaPort());
     }
+  } finally {
+    // Discard reads that overlapped the write, even if its outcome is uncertain.
+    invalidateZcodeBalance(token, proxyOptions, accountScope);
   }
 
   const claimedPlan = normalizePlan(claim.data?.plan);
@@ -486,7 +367,8 @@ export async function claimZaiPlan(
     throw error;
   }
 
-  const after = await inspectZaiPlans(token, proxyOptions, fetchImpl, { coordinator, diagnostics }).catch(() => null);
+  invalidateZcodeBalance(token, proxyOptions, accountScope);
+  const after = await inspectZaiPlans(token, proxyOptions, fetchImpl, { coordinator, diagnostics, forceBalance: true, cacheScope: accountScope }).catch(() => null);
   return {
     status: after?.activePlans?.some(
       (plan) => plan.planId === claimPlanId && plan.status === "active"

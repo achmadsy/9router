@@ -1,6 +1,6 @@
 const REQUEST_INTERVAL_MS = 500;
 const DEFAULT_COOLDOWN_MS = 60_000;
-const MAX_QUEUE_SIZE = 20;
+const MAX_QUEUE_SIZE = 200;
 const STATE_KEY = Symbol.for("9router.zcode.planRequests");
 
 function abortError() {

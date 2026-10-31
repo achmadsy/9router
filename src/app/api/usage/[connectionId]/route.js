@@ -177,9 +177,10 @@ export async function GET(request, { params }) {
       return Response.json({ message: "Usage not available for this connection" });
     }
 
-    // Resolve connection proxy config; force strictProxy=false so quota/refresh fall back to direct on failure
-    const proxyConfig = await resolveConnectionProxyConfig(connection.providerSpecificData);
-    const proxyOptions = {
+    // ZCode balance shares the same strict proxy context as Plan Management.
+    const zcodeQuota = hasIndependentZcodeQuotaCredentials(connection);
+    const proxyConfig = await resolveConnectionProxyConfig(connection.providerSpecificData, { excludeRelay: zcodeQuota });
+    const proxyOptions = zcodeQuota ? proxyConfig : {
       connectionProxyEnabled: proxyConfig.connectionProxyEnabled === true,
       connectionProxyUrl: proxyConfig.connectionProxyUrl || "",
       connectionNoProxy: proxyConfig.connectionNoProxy || "",

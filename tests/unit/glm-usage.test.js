@@ -5,7 +5,10 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 }));
 
 vi.mock("../../src/lib/zcode/headers.js", () => ({
-  buildZcodeBalanceHeaders: vi.fn((jwt) => ({
+  ensureZcodeDeviceMid: () => "test-device-mid",
+  readZcodeDeviceMid: () => "test-device-mid",
+  zcodeDeviceMidForAccount: () => "test-device-mid",
+  buildZcodeBillingHeaders: vi.fn((jwt) => ({
     "User-Agent": "ZCode/3.11.2",
     "X-ZCode-App-Version": "3.11.2",
     "X-Device-Mid": "test-device-mid",
@@ -13,6 +16,11 @@ vi.mock("../../src/lib/zcode/headers.js", () => ({
     Authorization: `Bearer ${jwt}`,
   })),
 }));
+
+vi.mock("../../src/lib/zcode/planRequests.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, planRequestCoordinator: actual.createPlanRequestCoordinator({ intervalMs: 0 }) };
+});
 
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import { getUsageForProvider } from "../../open-sse/services/usage.js";
@@ -366,7 +374,7 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
     });
 
     expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
-    expect(usage.message).toBe("no plan");
+    expect(usage.message).toBe("GLM Start Plan balance unavailable: no plan");
     expect(usage.quotas).toBeUndefined();
   });
 

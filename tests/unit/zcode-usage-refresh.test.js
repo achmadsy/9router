@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   connection: null,
   getConnection: vi.fn(), update: vi.fn(), usage: vi.fn(),
-  needsRefresh: vi.fn(), refresh: vi.fn(),
+  needsRefresh: vi.fn(), refresh: vi.fn(), proxy: vi.fn(),
 }));
 vi.mock("open-sse/index.js", () => ({}));
 vi.mock("@/lib/localDb", () => ({
@@ -19,7 +19,7 @@ vi.mock("open-sse/services/tokenRefresh.js", () => ({
 vi.mock("open-sse/executors/index.js", () => ({
   getExecutor: () => ({ needsRefresh: mocks.needsRefresh, refreshCredentials: mocks.refresh }),
 }));
-vi.mock("@/lib/network/connectionProxy", () => ({ resolveConnectionProxyConfig: async () => ({}) }));
+vi.mock("@/lib/network/connectionProxy", () => ({ resolveConnectionProxyConfig: mocks.proxy }));
 const { GET } = await import("../../src/app/api/usage/[connectionId]/route.js");
 
 beforeEach(() => {
@@ -31,6 +31,7 @@ beforeEach(() => {
     providerSpecificData: { zcodeJwtToken: "existing-login-jwt" },
   };
   mocks.getConnection.mockImplementation(async () => mocks.connection);
+  mocks.proxy.mockResolvedValue({ proxyPoolId: "assigned", connectionProxyEnabled: true, connectionProxyUrl: "http://strict.proxy.test", connectionNoProxy: "", strictProxy: true });
   mocks.needsRefresh.mockReturnValue(true);
   mocks.refresh.mockResolvedValue({ error: "invalid_grant" });
   mocks.usage.mockResolvedValue({ plan: "Start", quotas: {} });
@@ -51,7 +52,8 @@ describe("ZCode quota credential independence", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.connection).toEqual(snapshot);
-    expect(mocks.usage).toHaveBeenCalledWith(mocks.connection, expect.any(Object), { force: true });
+    expect(mocks.proxy).toHaveBeenCalledWith(mocks.connection.providerSpecificData, { excludeRelay: true });
+    expect(mocks.usage).toHaveBeenCalledWith(mocks.connection, expect.objectContaining({ strictProxy: true, proxyPoolId: "assigned" }), { force: true });
   });
 
   it("returns actual JWT rejection without trying an unrelated OAuth refresh", async () => {

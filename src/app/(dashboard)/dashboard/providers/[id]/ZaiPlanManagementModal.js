@@ -265,6 +265,9 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                   </div>
                 </div>
 
+                {account.balanceStatus === "stale" && (
+                  <p className="mt-3 text-xs text-warning">Balance is stale (last successful check: {account.balanceCheckedAt ? new Date(account.balanceCheckedAt).toLocaleString() : "unknown"}). Claims require a fresh ownership check.</p>
+                )}
                 {(account.activePlans || []).length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {account.activePlans.map((plan) => (
