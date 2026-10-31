@@ -21,7 +21,17 @@ async function resolvePlanProxy(connection) {
   return resolveConnectionProxyConfig(connection.providerSpecificData, { excludeRelay: true });
 }
 
-async function inspectConnection(connection, index, signal) {
+function planDiagnostics(batchId, connectionId = null) {
+  return {
+    event(step, outcome, details = {}) {
+      const write = outcome === "failed" ? console.warn : console.info;
+      write(`[Plan Management] ${step}: ${outcome}`, { batchId, ...(connectionId ? { connectionId } : {}), ...details });
+    },
+  };
+}
+
+async function inspectConnection(connection, index, signal, inspectionId) {
+  const diagnostics = planDiagnostics(inspectionId, connection.id);
   const base = {
     connectionId: connection.id,
     name: accountLabel(connection, index),
@@ -30,6 +40,7 @@ async function inspectConnection(connection, index, signal) {
   };
   const jwt = connection.providerSpecificData?.zcodeJwtToken?.trim();
   if (!jwt) {
+    diagnostics.event("inspection", "skipped", { reason: "ZCode OAuth login is required" });
     return {
       ...base,
       eligible: false,
@@ -43,13 +54,19 @@ async function inspectConnection(connection, index, signal) {
   try {
     const plans = await inspectZaiPlans(jwt, await resolvePlanProxy(connection), undefined, {
       includeCampaigns: true, coordinator: planRequestCoordinator,
-      cacheScope: `${connection.provider}:${connection.id}`, signal,
+      cacheScope: `${connection.provider}:${connection.id}`, signal, diagnostics,
+    });
+    diagnostics.event("inspection", plans.error ? "failed" : "completed", {
+      status: plans.inspectionStatus, cached: plans.cached === true,
+      balanceStatus: plans.balanceStatus,
+      ...(plans.error ? { reason: plans.error, errorSource: plans.errorSource, ...planErrorDetails(plans) } : {}),
     });
     return { ...base, eligible: true, ...plans,
       originalStartPlanActive: plans.balanceStatus === "available" ? hasActiveStartPlan(plans) : null,
       error: plans.error || null };
   } catch (error) {
     if (error?.name === "AbortError") throw error;
+    diagnostics.event("inspection", "failed", { reason: summarizePlanError(error, "Failed to retrieve plans"), ...planErrorDetails(error) });
     return {
       ...base,
       eligible: true,
@@ -98,8 +115,9 @@ export async function GET(_request, { params }) {
     const totalPages = Math.max(1, Math.ceil(connections.length / pageSize));
     const page = Math.min(totalPages, Math.max(1, Math.floor(requestedPage)));
     const visible = connections.slice((page - 1) * pageSize, page * pageSize);
+    const inspectionId = randomUUID();
     const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, (connection, index) =>
-      inspectConnection(connection, index, _request.signal));
+      inspectConnection(connection, index, _request.signal, inspectionId));
     return NextResponse.json({
       providerId: id,
       totalAccounts: connections.length,
@@ -140,12 +158,7 @@ export async function POST(request, { params }) {
     }
 
     const batchId = randomUUID();
-    const log = (connectionId = null) => ({
-      event(step, outcome, details = {}) {
-        const write = outcome === "failed" ? console.warn : console.info;
-        write(`[Plan Management] ${step}: ${outcome}`, { batchId, ...(connectionId ? { connectionId } : {}), ...details });
-      },
-    });
+    const log = (connectionId = null) => planDiagnostics(batchId, connectionId);
     log().event("batch", "started", { provider: id, accounts: connectionIds.length, operation: prepareOriginal ? "original-preparation" : "explicit-claim" });
     const results = [];
     for (let index = 0; index < connectionIds.length; index += 1) {

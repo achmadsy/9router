@@ -245,6 +245,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
             <p className="py-8 text-center text-sm text-text-muted">No accounts found.</p>
           ) : accounts.map((account) => {
             const claimableOffers = accountClaimableOffers(account);
+            const showAccountError = account.error && !(account.errorSource === "preview" && account.errorReasonCode === "preview_missing_data");
             const result = results[account.connectionId];
             return (
               <section key={account.connectionId} className="rounded-lg border border-border p-3">
@@ -334,7 +335,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                 {account.eligible && account.inspectionStatus === "complete" && claimableOffers.length === 0 && !account.error && !account.campaignError && (
                   <p className="mt-3 text-xs text-text-muted">No claimable offers returned by this check. This does not establish campaign ineligibility.</p>
                 )}
-                {account.error && <p className="mt-3 text-xs text-warning">
+                {showAccountError && <p className="mt-3 text-xs text-warning">
                   {account.errorSource === "preview" ? "Billing preview unavailable: " : account.errorSource === "balance" ? "Balance check failed: " : account.errorSource === "campaign" ? "Campaign discovery failed: " : "Plan check failed: "}
                   {account.error}
                   {account.errorSource === "preview" && claimableOffers.some((offer) => offer.source === "campaign") && " The offer above came from a separate campaign delivery; claiming will verify it again."}

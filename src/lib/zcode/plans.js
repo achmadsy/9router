@@ -36,6 +36,10 @@ function safeReason(value, fallback = "Plan request failed") {
     .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[REDACTED]");
 }
 
+function responseValueType(value) {
+  return value === undefined ? "missing" : value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+}
+
 function billingUrl(baseUrl, { includePlatform = false } = {}) {
   const url = new URL(baseUrl);
   url.searchParams.set("app_version", zcodeConfig.appVersion);
@@ -123,6 +127,8 @@ async function requestBilling(
   diagnostics?.event(step, response.ok && json && envelopeOk ? "response" : "failed", {
     endpoint, httpStatus: response.status, providerCode: Number.isFinite(code) ? code : null,
     validJson: !!json, durationMs: Date.now() - started,
+    responseType: responseValueType(json), dataType: responseValueType(json?.data),
+    plansType: responseValueType(json?.data?.plans),
   });
   if (!response.ok || !json || !envelopeOk) {
     const rawMessage = json?.data?.message || json?.msg;
@@ -246,8 +252,15 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
       // Native preview uses data.plans ?? []; balance still requires a plan list.
       const validPlans = Array.isArray(data?.plans) || (step === "preview" && data?.plans == null);
       if (!validData || !validPlans) {
-        const error = new Error(`Invalid plan ${step} response; status is unavailable`);
-        diagnostics?.event(step, "failed", { reason: error.message });
+        const missingPreviewData = step === "preview" && data == null;
+        const error = new Error(missingPreviewData
+          ? "Z.AI reported success but omitted preview data; billing preview is unavailable. Balance and campaign checks are separate."
+          : `Invalid plan ${step} response; status is unavailable`);
+        if (missingPreviewData) error.reasonCode = "preview_missing_data";
+        diagnostics?.event(step, "failed", { reason: error.message,
+          providerCode: Number.isFinite(result.code) ? result.code : null,
+          dataType: responseValueType(data), plansType: responseValueType(data?.plans),
+        });
         throw error;
       }
       return step === "preview" ? { ...result, data: { ...data, plans: data.plans ?? [] } } : result;
@@ -297,7 +310,11 @@ export async function inspectZaiPlans(jwt, proxyOptions = null, fetchImpl = prox
     activePlans, offers, balances,
     balanceStatus: balance ? "available" : "unavailable",
     inspectionStatus: errors.length ? (balance || preview ? "partial" : "unavailable") : "complete",
-    ...(primaryError ? { error: summarizePlanError(primaryError), errorSource: primaryError.step, ...planErrorDetails(primaryError) } : {}),
+    ...(primaryError ? {
+      error: summarizePlanError(primaryError), errorSource: primaryError.step,
+      ...(primaryError.reasonCode ? { errorReasonCode: primaryError.reasonCode } : {}),
+      ...planErrorDetails(primaryError),
+    } : {}),
     ...(campaignError ? { campaignError } : {}),
   };
 }
