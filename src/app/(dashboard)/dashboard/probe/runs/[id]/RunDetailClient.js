@@ -149,6 +149,8 @@ export default function RunDetailClient({ runId }) {
   const [suiteVersion, setSuiteVersion] = useState(null);
   const [selectedProbeId, setSelectedProbeId] = useState(null);
   const [error, setError] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null);
 
   const fetchRun = useCallback(async () => {
     const res = await fetch(`/api/probe/runs/${encodeURIComponent(runId)}`, { cache: "no-store" });
@@ -199,6 +201,33 @@ export default function RunDetailClient({ runId }) {
   const isRunning = run?.status === "running";
   const completeResults = probes.filter((probe) => probe.status !== "pending" && probe.status !== "running");
 
+  const handleReplay = async (action, probeId) => {
+    if (pendingAction || isRunning) return;
+    setPendingAction(probeId ? `${action}:${probeId}` : action);
+    setActionError(null);
+    try {
+      const res = await fetch("/api/probe/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceRunId: runId, action, ...(probeId ? { probeId } : {}) }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Action failed with HTTP ${res.status}`);
+      }
+      const nextRunId = res.headers.get("x-probe-run-id");
+      // Persistence has its own SSE branch; release the browser branch before
+      // navigating. The original report remains an immutable comparison point.
+      void res.body?.cancel().catch(() => {});
+      if (!nextRunId) throw new Error("The engine did not return a run ID");
+      router.push(`/dashboard/probe/runs/${encodeURIComponent(nextRunId)}`);
+    } catch (err) {
+      setActionError(err.message || "Probe action failed");
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
   const handleCancel = async () => {
     await fetch("/api/probe/cancel", {
       method: "POST",
@@ -229,7 +258,15 @@ export default function RunDetailClient({ runId }) {
           <h1 className="text-2xl font-bold tracking-tight text-text-main">{run.targetModel || "Probe run"}</h1>
           <p className="text-xs text-text-muted font-mono mt-1">{run.id}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {!isRunning && <>
+            <button type="button" disabled={!run.canReplay || Boolean(pendingAction)} onClick={() => handleReplay("rerun")} className="text-xs font-semibold rounded-[8px] border border-primary px-3 py-1.5 text-primary hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed">
+              {pendingAction === "rerun" ? "Starting re-run…" : "Re-run all checks"}
+            </button>
+            <button type="button" disabled={!run.canReplay || Boolean(pendingAction) || !completeResults.length} onClick={() => handleReplay("rejudge")} className="text-xs font-semibold rounded-[8px] border border-border px-3 py-1.5 text-text-main hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed">
+              {pendingAction === "rejudge" ? "Starting re-judge…" : "Re-judge results"}
+            </button>
+          </>}
           <span className={`text-xs font-semibold rounded-full px-3 py-1.5 ${isRunning ? "bg-primary/10 text-primary" : run.status === "complete" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-bg-subtle text-text-muted"}`}>
             {run.status}
           </span>
@@ -238,6 +275,13 @@ export default function RunDetailClient({ runId }) {
           )}
         </div>
       </header>
+
+      {actionError && <div role="alert" className="rounded-[10px] border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-300">{actionError}</div>}
+      {!isRunning && <p className="text-xs text-text-muted">
+        {run.canReplay
+          ? "Actions create a new run and preserve this report. Retry sends only the selected check to the target. Re-judge recalculates text checks and identity from saved responses, using the original judge when configured. Transport checks stay unchanged; the target is not called. Replay settings expire after 24 hours."
+          : "Replay settings are unavailable for this older run or have expired. Start a new run from Probe configuration to enable retry and re-judging."}
+      </p>}
 
       {run.score !== null && run.score !== undefined && (
         <div className="rounded-[14px] bg-surface border border-border-subtle p-5 flex items-center gap-6">
@@ -293,7 +337,12 @@ export default function RunDetailClient({ runId }) {
           <ProbeResultPanel
             selectedProbe={selectedProbe}
             elapsedSec={0}
-            isRunning={false}
+            isRunning={isRunning}
+            onRetry={() => handleReplay("retry", selectedProbe.id)}
+            onRejudge={() => handleReplay("rejudge", selectedProbe.id)}
+            actionsDisabled={isRunning || !run.canReplay || Boolean(pendingAction)}
+            actionPending={pendingAction}
+            actionError={actionError}
             asDrawerContent
           />
         )}

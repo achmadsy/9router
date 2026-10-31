@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Features
+- **Probe replay**: add full re-run, individual-check retry, and saved-response re-judging from run details. Preserve original reports by creating a new run; retain encrypted replay settings for 24 hours, show task/judge errors inline, and require a replay-capable engine before selective operations. Re-judging recalculates text/identity results without target calls and preserves transport-only checks.
 - **Quota Tracker**: paginate each grouped provider's Manage accounts dropdown in pages of 10 with numbered and First/Previous/Next/Last controls. Keep combined totals and group refreshes scoped to all accounts, independently of dropdown pagination.
 - **Z.AI Plan Management**: search all provider accounts by name/email and navigate numbered pages with First/Last controls. List accounts without automatic upstream checks; add explicit Check This Page and per-account Check Account buttons, preserving account-scoped credentials, shared cooldowns, and page-scoped claims.
 - **Self-Aware**: open active cooldowns with a distinct provider list, then show the existing cooldown table filtered to the selected provider with back navigation; explicitly label global reset scope.

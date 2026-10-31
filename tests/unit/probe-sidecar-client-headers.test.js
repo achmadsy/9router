@@ -18,6 +18,13 @@ afterEach(() => {
 });
 
 describe("Probe sidecar custom-header payloads", () => {
+  it("fails closed on old engines rather than turning rejudge into target execution", async () => {
+    const { runProbeOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
+    fetch.mockResolvedValue(Response.json({ status: "ok" }));
+    await expect(runProbeOnSidecar({ operation: "rejudge", target: { endpoint: "https://target.example/v1", model: "m" } })).rejects.toThrow("engine update required");
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0][0]).toBe("https://sidecar.internal/health");
+  });
   it("sends model headers in JSON without changing sidecar authorization", async () => {
     const { discoverModelsOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
     fetch.mockResolvedValue(Response.json({ models: [] }));

@@ -22,6 +22,25 @@ afterEach(() => {
 });
 
 describe("probe run persistence", () => {
+  it("encrypts replay credentials, excludes them from public results, and purges expired settings", async () => {
+    const repo = await import("@/lib/db/repos/probeRunsRepo.js");
+    const { getAdapter } = await import("@/lib/db/driver.js");
+    const replayConfig = { target: { model: "m", apiKey: "secret-for-replay", customHeaders: { "x-token": "header-secret" } } };
+    await repo.createProbeRun({ id: "encrypted", replayConfig });
+    const db = await getAdapter();
+    const stored = db.get("SELECT replayConfig FROM probeRuns WHERE id = ?", ["encrypted"]);
+    expect(stored.replayConfig).toMatch(/^v1:/);
+    expect(stored.replayConfig).not.toContain("secret-for-replay");
+    expect(await repo.getProbeRunReplay("encrypted")).toEqual(replayConfig);
+    const publicRun = await repo.getProbeRun("encrypted");
+    expect(publicRun.canReplay).toBe(true);
+    expect(JSON.stringify(publicRun)).not.toContain("secret-for-replay");
+    expect(publicRun).not.toHaveProperty("replayConfig");
+    db.run("UPDATE probeRuns SET replayExpiresAt = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", "encrypted"]);
+    expect(await repo.getProbeRunReplay("encrypted")).toBeNull();
+    expect((await repo.getProbeRun("encrypted")).canReplay).toBe(false);
+    expect(db.get("SELECT replayConfig FROM probeRuns WHERE id = ?", ["encrypted"]).replayConfig).toBeNull();
+  });
   it("persists incremental progress and returns it after a fresh module import", async () => {
     const repo = await import("@/lib/db/repos/probeRunsRepo.js");
     await repo.createProbeRun({

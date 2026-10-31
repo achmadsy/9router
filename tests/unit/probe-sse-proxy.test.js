@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   createProbeRun: vi.fn(async () => ({})),
   appendProbeRunResults: vi.fn(async () => {}),
   finishProbeRun: vi.fn(async () => {}),
+  getProbeRun: vi.fn(),
+  getProbeRunReplay: vi.fn(),
 }));
 
 vi.mock("@/lib/probe/auth.js", () => ({
@@ -29,6 +31,8 @@ vi.mock("@/lib/db/repos/probeRunsRepo.js", () => ({
   createProbeRun: mocks.createProbeRun,
   appendProbeRunResults: mocks.appendProbeRunResults,
   finishProbeRun: mocks.finishProbeRun,
+  getProbeRun: mocks.getProbeRun,
+  getProbeRunReplay: mocks.getProbeRunReplay,
 }));
 
 vi.mock("@/lib/probe/sidecarClient.js", () => ({
@@ -80,6 +84,31 @@ describe("Probe Run & One Active Run Enforcement", () => {
       authorized: true,
       ownerId: "admin-1",
     });
+  });
+
+  it("creates a separate retry run using only server-stored settings and saved rows", async () => {
+    const rows = [{ probeId: "consistency_check", status: "error", response: null }];
+    mocks.getProbeRun.mockResolvedValue({ id: "old", status: "complete", results: rows });
+    mocks.getProbeRunReplay.mockResolvedValue({ target: { source: "this_9router", model: "saved-model", apiKey: "saved-secret" } });
+    mocks.runProbeOnSidecar.mockResolvedValue(createMockSseResponse(["event: complete\ndata: {\"report\":{\"results\":[]}}\n\n"]));
+    const response = await runPost(new Request("https://router.test/api/probe/run", {
+      method: "POST", body: JSON.stringify({ sourceRunId: "old", action: "retry", probeId: "consistency_check", target: { model: "attacker-override" } }),
+    }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-probe-run-id")).not.toBe("old");
+    expect(mocks.runProbeOnSidecar).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "retry", retryProbeId: "consistency_check", previousResults: rows,
+      target: expect.objectContaining({ model: "saved-model", apiKey: "saved-secret" }),
+    }), expect.any(AbortSignal));
+    await response.text();
+  });
+
+  it("rejects expired replay settings without dispatching the engine", async () => {
+    mocks.getProbeRun.mockResolvedValue({ id: "old", status: "complete", results: [] });
+    mocks.getProbeRunReplay.mockResolvedValue(null);
+    const response = await runPost(new Request("https://router.test/api/probe/run", { method: "POST", body: JSON.stringify({ sourceRunId: "old", action: "rerun" }) }));
+    expect(response.status).toBe(410);
+    expect(mocks.runProbeOnSidecar).not.toHaveBeenCalled();
   });
 
   it("keeps target and judge custom headers separate in the sidecar payload", async () => {

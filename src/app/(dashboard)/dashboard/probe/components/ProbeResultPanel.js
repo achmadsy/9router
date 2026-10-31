@@ -18,6 +18,11 @@ export default function ProbeResultPanel({
   elapsedSec,
   isRunning,
   asDrawerContent = false,
+  onRetry,
+  onRejudge,
+  actionsDisabled = false,
+  actionPending,
+  actionError,
   className,
 }) {
   const displayProbe = selectedProbe || activeProbe;
@@ -51,6 +56,23 @@ export default function ProbeResultPanel({
           </span>
         )}
       </div>
+
+      {onRetry && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onRetry} disabled={actionsDisabled} className="rounded-[8px] border border-primary px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed">
+              {actionPending === `retry:${displayProbe.id}` ? "Starting retry…" : "Retry this check"}
+            </button>
+            {onRejudge && !displayProbe.responseTruncated && ["llm_judge", "keyword_match", "exact_match", "feature_extract"].includes(displayProbe.scoring) && typeof displayProbe.response === "string" && (
+              <button type="button" onClick={onRejudge} disabled={actionsDisabled} className="rounded-[8px] border border-border px-3 py-2 text-xs font-semibold text-text-main hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                {actionPending === `rejudge:${displayProbe.id}` ? "Starting re-judge…" : "Re-judge response"}
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-text-muted">Creates a new run; other saved checks are kept unchanged.</p>
+          {actionError && <p role="alert" className="text-xs text-red-600 dark:text-red-300">{actionError}</p>}
+        </div>
+      )}
 
       {/* About this probe */}
       {displayProbe.description && (
@@ -142,6 +164,16 @@ export default function ProbeResultPanel({
           </p>
         </div>
       )}
+
+      {displayProbe.judgeError && (
+        <div role="alert" className="p-3 rounded-[8px] bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+          <span className="font-semibold block">Judging failed</span>
+          <p className="break-words">{displayProbe.judgeError}</p>
+          <p>The target response is saved. Use Re-judge response to retry only the judge.</p>
+        </div>
+      )}
+
+      {displayProbe.responseTruncated && <p className="text-xs text-text-muted">Only a response excerpt was saved. Re-judging preserves this check’s verdict; retry the check to collect new evidence.</p>}
 
       {/* Response Payload Preview */}
       {displayProbe.response && (
@@ -277,5 +309,10 @@ ProbeResultPanel.propTypes = {
   elapsedSec: PropTypes.number.isRequired,
   isRunning: PropTypes.bool.isRequired,
   asDrawerContent: PropTypes.bool,
+  onRetry: PropTypes.func,
+  onRejudge: PropTypes.func,
+  actionsDisabled: PropTypes.bool,
+  actionPending: PropTypes.string,
+  actionError: PropTypes.string,
   className: PropTypes.string,
 };

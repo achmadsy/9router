@@ -150,6 +150,14 @@ export async function discoverModelsOnSidecar({ baseUrl, apiKey, customHeaders }
  * Forward a probe run to the sidecar. Returns the raw SSE Response.
  */
 export async function runProbeOnSidecar(payload, signal) {
+  // Older engines ignore unknown fields and would execute the full suite.
+  // Fail closed rather than silently spending target tokens during re-judging.
+  if (payload.operation) {
+    const health = await getSidecarHealth();
+    if (!health.data?.capabilities?.includes("saved-result-replay")) {
+      throw new Error("Probe engine update required for task retry and re-judging");
+    }
+  }
   const target = toEndpointConfig(payload.target);
   if (!target) {
     throw new Error("Target endpoint/model missing for probe run");
@@ -158,6 +166,11 @@ export async function runProbeOnSidecar(payload, signal) {
   const body = {
     id: payload.runId,
     ...target,
+    ...(payload.operation ? {
+      operation: payload.operation,
+      previousResults: payload.previousResults,
+      ...(payload.retryProbeId ? { retryProbeId: payload.retryProbeId } : {}),
+    } : {}),
     ...(judge ? { judge } : {}),
     // Official baseline responses keyed by probeId, used by llm_judge
     // similarity scoring (engine contract: Record<probeId, string>).

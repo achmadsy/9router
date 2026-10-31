@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { verifyProbeAdminAuth, verifyCsrfOrigin } from "@/lib/probe/auth.js";
 import { getActiveRun, startActiveRun, finishActiveRun } from "@/lib/probe/activeRun.js";
 import { getProbeProfileSecrets } from "@/lib/db/repos/probeProfilesRepo.js";
-import { createProbeRun, finishProbeRun } from "@/lib/db/repos/probeRunsRepo.js";
+import { createProbeRun, finishProbeRun, getProbeRun, getProbeRunReplay } from "@/lib/db/repos/probeRunsRepo.js";
 import { runProbeOnSidecar, fetchBaselineMap } from "@/lib/probe/sidecarClient.js";
 import { createBoundedSseStream, boundErrorMessage } from "@/lib/probe/sseProxy.js";
 import { redactSensitiveText } from "@/lib/sentry.js";
@@ -49,6 +49,33 @@ export async function POST(request) {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  let operation;
+  let previousResults;
+  let retryProbeId;
+  if (body?.sourceRunId) {
+    if (!["rerun", "retry", "rejudge"].includes(body.action)) {
+      return NextResponse.json({ error: "Invalid saved-run action" }, { status: 400 });
+    }
+    const saved = await getProbeRun(body.sourceRunId);
+    if (!saved) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    if (saved.status === "running") return NextResponse.json({ error: "Wait for this run to finish" }, { status: 409 });
+    const replay = await getProbeRunReplay(saved.id);
+    if (!replay) return NextResponse.json({ error: "Replay settings are unavailable or expired. Start a new run from Probe configuration." }, { status: 410 });
+    if (body.probeId !== undefined && !ORIGINAL_SUITE_IDS.includes(body.probeId)) {
+      return NextResponse.json({ error: "Unknown check" }, { status: 400 });
+    }
+    if (body.action === "retry" && !body.probeId) {
+      return NextResponse.json({ error: "Select a check to retry" }, { status: 400 });
+    }
+    if (body.action !== "rerun") {
+      if (!saved.results.length) return NextResponse.json({ error: "No saved results to replay" }, { status: 400 });
+      operation = body.action;
+      previousResults = saved.results;
+      retryProbeId = body.probeId;
+    }
+    body = replay;
   }
 
   const { target, targetProfileId, judge, judgeProfileId, config = {} } = body || {};
@@ -146,6 +173,7 @@ export async function POST(request) {
       claimedModel: resolvedTarget.claimedModel,
       totalProbes: ORIGINAL_SUITE_IDS.length,
       ownerId: auth.ownerId,
+      replayConfig: { target: resolvedTarget, judge: resolvedJudge, config },
     });
   } catch {
     finishActiveRun(runId);
@@ -161,6 +189,9 @@ export async function POST(request) {
         target: resolvedTarget,
         judge: resolvedJudge,
         config,
+        operation,
+        previousResults,
+        retryProbeId,
         ...(baseline ? { baseline } : {}),
       },
       abortController.signal

@@ -2,7 +2,7 @@
 // Rows are written incrementally as SSE events land so a page refresh can
 // hydrate from the server instead of losing everything to React state.
 import { getAdapter } from "../driver.js";
-import { TABLES } from "../schema.js";
+import { encryptProfileSecret, decryptProfileSecret } from "@/lib/probe/crypto.js";
 
 const STALE_RUNNING_MS = 10 * 60 * 1000; // running rows with no update for 10 min are dead
 
@@ -44,7 +44,8 @@ function rowToSummary(r) {
   };
 }
 
-export async function createProbeRun({ id, targetModel, targetSource, claimedModel, totalProbes, ownerId }) {
+export async function createProbeRun({ id, targetModel, targetSource, claimedModel, totalProbes, ownerId, replayConfig }) {
+  await purgeExpiredProbeReplay();
   const db = await getAdapter();
   const now = new Date().toISOString();
   db.run(
@@ -52,6 +53,11 @@ export async function createProbeRun({ id, targetModel, targetSource, claimedMod
      VALUES (?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL, ?, ?, ?, NULL)`,
     [id, targetModel ?? null, targetSource ?? null, claimedModel ?? null, totalProbes ?? null, ownerId ?? null, now, now],
   );
+  if (replayConfig) {
+    db.run(`UPDATE probeRuns SET replayConfig = ?, replayExpiresAt = ? WHERE id = ?`, [
+      encryptProfileSecret(replayConfig), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), id,
+    ]);
+  }
   return { id, status: "running", createdAt: now };
 }
 
@@ -115,7 +121,21 @@ export async function finishProbeRun(runId, status = "complete", rows = null, su
   );
 }
 
+export async function purgeExpiredProbeReplay() {
+  const db = await getAdapter();
+  db.run(`UPDATE probeRuns SET replayConfig = NULL WHERE replayExpiresAt <= ? AND replayConfig IS NOT NULL`, [new Date().toISOString()]);
+}
+
+// Server-only: never include decrypted replay settings in a GET response.
+export async function getProbeRunReplay(runId) {
+  await purgeExpiredProbeReplay();
+  const db = await getAdapter();
+  const row = db.get(`SELECT replayConfig FROM probeRuns WHERE id = ?`, [runId]);
+  return decryptProfileSecret(row?.replayConfig);
+}
+
 export async function getProbeRun(runId) {
+  await purgeExpiredProbeReplay();
   const db = await getAdapter();
   const r = db.get(`SELECT * FROM probeRuns WHERE id = ?`, [runId]);
   if (!r) return null;
@@ -129,10 +149,13 @@ export async function getProbeRun(runId) {
     scoreMax: r.scoreMax ?? null,
     summary,
     results,
+    canReplay: Boolean(r.replayConfig && r.replayExpiresAt > new Date().toISOString()),
+    replayExpiresAt: r.replayExpiresAt || null,
   };
 }
 
 export async function listProbeRuns(limit = 20) {
+  await purgeExpiredProbeReplay();
   const db = await getAdapter();
   // Rows stuck "running" past the staleness window (e.g. gateway restarted
   // mid-run) can never resume — downgrade them so the list stays truthful.
