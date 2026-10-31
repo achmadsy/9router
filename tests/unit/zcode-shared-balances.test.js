@@ -176,6 +176,62 @@ describe("shared ZCode balance snapshots", () => {
     expect(balanceCalls()).toHaveLength(26);
   });
 
+  it("groups same-named daily and promotional grants independently of row order across 26 accounts", async () => {
+    const dailyId = "zcode-v3-start-plan-0817";
+    const promoId = "dynamic-promotion";
+    mocks.fetch.mockImplementation(async (_url, options) => {
+      const index = Number(options.headers.Authorization.split("-").at(-1));
+      const daily = { plan_id: dailyId, entitlement_id: `daily-${index}`, show_name: "GLM-5.3-Flash", meter: "model_usage", capabilities: ["model:GLM-5.3-Flash"], total_units: 5_000_000, used_units: 1_000_000, remaining_units: 4_000_000 };
+      const promo = { ...daily, plan_id: promoId, entitlement_id: `promo-${index}`, total_units: 300_000_000, used_units: 0, remaining_units: 300_000_000 };
+      return response({ code: 0, data: { plans: [{ plan_id: dailyId, status: "active" }, { plan_id: promoId, name: "Bonus", status: "active" }], balances: index % 2 ? [promo, daily] : [daily, promo] } });
+    });
+    const connections = Array.from({ length: 26 }, (_, i) => ({ id: String(i), provider: "glm" }));
+    const snapshots = {};
+    for (const connection of connections) {
+      const usage = await getGlmUsage(null, "glm", proxy, { zcodeJwtToken: `jwt-${connection.id}` }, { accountScope: `glm:${connection.id}` });
+      snapshots[connection.id] = { quotas: parseQuotaData("glm", usage) };
+    }
+    const result = aggregateProviderQuotas(connections, snapshots);
+    expect(result.quotas).toHaveLength(2);
+    expect(result.quotas.find((row) => row.planId === dailyId)).toMatchObject({ total: 130_000_000, used: 26_000_000, accountCount: 26 });
+    expect(result.quotas.find((row) => row.planId === promoId)).toMatchObject({ total: 7_800_000_000, accountCount: 26 });
+    expect(result.quotas.every((row) => row.modelKey && !/\(2\)$/.test(row.name))).toBe(true);
+  });
+
+  it("adds multiple grants of the same plan/model once per account, regardless of entitlement IDs", async () => {
+    const daily = { plan_id: "zcode-v3-start-plan-0817", show_name: "GLM-5.3-Flash", meter: "model_usage", capabilities: ["model:GLM-5.3-Flash"], total_units: 2_500_000, used_units: 500_000, remaining_units: 2_000_000 };
+    mocks.fetch.mockResolvedValue(response({ code: 0, data: { plans: data().plans, balances: [{ ...daily, entitlement_id: "first" }, { ...daily, entitlement_id: "second" }] } }));
+    const usage = await quota();
+    const rows = parseQuotaData("glm", usage);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ total: 5_000_000, used: 1_000_000 });
+    const grouped = aggregateProviderQuotas([{ id: "one", provider: "glm" }], { one: { quotas: rows } });
+    expect(grouped.quotas[0].accountCount).toBe(1);
+    expect(usage.quotas["Start: GLM-5.3-Flash"].remainingPercentage).toBe(80);
+  });
+
+  it("normalizes capability order but keeps different meters and periods separate", async () => {
+    const grant = { plan_id: "zcode-v3-start-plan-0817", show_name: "Shared name", meter: "model_usage", period: "day", unit_type: "token", capabilities: ["model:A", "model:B"], total_units: 5, used_units: 1, remaining_units: 4 };
+    mocks.fetch.mockResolvedValue(response({ code: 0, data: { plans: data().plans, balances: [
+      grant, { ...grant, capabilities: ["model:B", "model:A", "model:A"] },
+      { ...grant, meter: "other_meter" }, { ...grant, period: "week" },
+    ] } }));
+    const rows = parseQuotaData("glm", await quota());
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.total).sort((a, b) => a - b)).toEqual([5, 5, 10]);
+    expect(new Set(rows.map((row) => row.modelKey)).size).toBe(3);
+  });
+
+  it("does not merge unknown-plan entitlements solely by display name", async () => {
+    const grant = { show_name: "Shared name", total_units: 5, used_units: 1, remaining_units: 4 };
+    mocks.fetch.mockResolvedValue(response({ code: 0, data: { plans: data().plans, balances: [
+      { ...grant, entitlement_id: "one" }, { ...grant, entitlement_id: "two" },
+    ] } }));
+    const rows = parseQuotaData("glm", await quota());
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.modelKey)).size).toBe(2);
+  });
+
   it("reports partial contributors even when they have other successful quotas", () => {
     const connections = [{ id: "one", provider: "glm" }, { id: "two", provider: "glm" }];
     const result = aggregateProviderQuotas(connections, {

@@ -711,7 +711,8 @@ export function parseQuotaData(provider, data) {
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([name, quota]) => {
             normalizedQuotas.push({
-              name,
+              name: quota.name || name,
+              ...(quota.modelKey ? { modelKey: quota.modelKey, planId: quota.planId } : {}),
               used: quota.used || 0,
               total: quota.total || 0,
               resetAt: quota.resetAt || null,

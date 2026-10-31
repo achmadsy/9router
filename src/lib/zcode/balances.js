@@ -111,7 +111,7 @@ export async function getZcodeBalance(jwt, proxyOptions = null, fetchImpl = prox
       entry.data = {
         plans: data.plans.filter((row) => row && typeof row === "object").map((row) => pick(row, ["plan_id", "name", "description", "status", "starts_at", "ends_at"])),
         balances: (data.balances || []).filter((row) => row && typeof row === "object").map((row) => pick(row, [
-          "entitlement_id", "plan_id", "show_name", "meter", "capabilities", "total_units", "used_units", "remaining_units", "expires_at",
+          "entitlement_id", "plan_id", "show_name", "meter", "capabilities", "unit_type", "period", "total_units", "used_units", "remaining_units", "expires_at",
         ])),
       };
       entry.checkedAt = Date.now();

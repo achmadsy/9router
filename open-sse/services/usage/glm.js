@@ -49,48 +49,49 @@ function normalizeCapabilities(capabilities) {
     .filter((s) => s.trim().length > 0);
 }
 
-/** Map billing/balance rows 1:1 with native normalizeZaiStartPlanBalanceLimits. */
+/** Group grants by upstream identity, never response position or display name. */
 function mapStartPlanBalances(balances, quotas = {}) {
   if (!Array.isArray(balances)) return quotas;
-
+  const buckets = new Map();
+  const text = (value) => typeof value === "string" ? value.trim() : "";
   for (const balance of balances) {
     const total = parseNumberOrNull(balance?.total_units);
     const used = parseNumberOrNull(balance?.used_units);
     const remaining = parseNumberOrNull(balance?.remaining_units);
     if (total === null && used === null && remaining === null) continue;
-
-    const models = normalizeCapabilities(balance?.capabilities);
-    const showName = typeof balance?.show_name === "string" ? balance.show_name.trim() : "";
-    const name =
-      showName ||
-      models.join(", ") ||
-      (typeof balance?.meter === "string" && balance.meter.trim()) ||
-      "model_usage";
+    const models = [...new Set(normalizeCapabilities(balance?.capabilities))].sort();
+    const meter = text(balance?.meter);
+    const name = text(balance?.show_name) || models.join(", ") || meter || "model_usage";
+    const planId = text(balance?.plan_id);
+    // Missing plan/model context must not merge unrelated entitlements by label.
+    const fallback = !planId || (!models.length && !meter)
+      ? text(balance?.entitlement_id) || name : "";
+    const modelKey = `zcode:${JSON.stringify([planId, models, meter, text(balance?.unit_type), text(balance?.period), fallback])}`;
+    const label = `${START_PLAN_LEVEL}: ${name}${planId && planId !== ZCODE_ORIGINAL_START_PLAN_ID ? ` [${planId}]` : ""}`;
     const expiresSec = parseNumberOrNull(balance?.expires_at);
-    const resetAt =
-      expiresSec !== null && expiresSec > 0 ? new Date(expiresSec * 1000).toISOString() : null;
-    const remainingPct =
-      total !== null && remaining !== null && total > 0
-        ? (remaining / total) * 100
-        : undefined;
-
-    // Prefix keeps Start buckets distinct from Coding Plan "Session (5h)" etc.
-    let key = `${START_PLAN_LEVEL}: ${name}`;
-    let suffix = 2;
-    while (quotas[key]) {
-      key = `${START_PLAN_LEVEL}: ${name} (${suffix++})`;
+    const resetAt = expiresSec !== null && expiresSec > 0 ? new Date(expiresSec * 1000).toISOString() : null;
+    const existing = buckets.get(modelKey);
+    if (existing) {
+      existing.used += used ?? (total !== null && remaining !== null ? total - remaining : 0);
+      existing.total += total ?? 0;
+      if (remaining !== null && existing.remaining !== undefined) existing.remaining += remaining;
+      else existing.remaining = undefined;
+      if (resetAt && (!existing.resetAt || resetAt < existing.resetAt)) existing.resetAt = resetAt;
+    } else {
+      buckets.set(modelKey, {
+        name: label, modelKey, planId,
+        used: used ?? (total !== null && remaining !== null ? total - remaining : 0),
+        total: total ?? 0, remaining: remaining ?? undefined, resetAt, unlimited: false,
+      });
     }
-
-    quotas[key] = {
-      used: used ?? 0,
-      total: total ?? 0,
-      remaining: remaining ?? undefined,
-      remainingPercentage: remainingPct,
-      resetAt,
-      unlimited: false,
-    };
   }
-
+  const labels = new Map();
+  for (const quota of buckets.values()) labels.set(quota.name, (labels.get(quota.name) || 0) + 1);
+  for (const quota of buckets.values()) {
+    quota.remainingPercentage = quota.total > 0 && quota.remaining !== undefined ? quota.remaining / quota.total * 100 : undefined;
+    const key = labels.get(quota.name) > 1 ? `${quota.name} [${quota.modelKey}]` : quota.name;
+    quotas[key] = quota;
+  }
   return quotas;
 }
 
