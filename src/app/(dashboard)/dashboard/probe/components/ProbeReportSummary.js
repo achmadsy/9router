@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import PropTypes from "prop-types";
 import { cn } from "@/shared/utils/cn";
-import { identityVerdictKey } from "@/lib/probe/reportPresentation.js";
+import { identityVerdictKey, identityEvidencePresentation } from "@/lib/probe/reportPresentation.js";
 import Card from "@/shared/components/Card";
 import Badge from "@/shared/components/Badge";
 import Button from "@/shared/components/Button";
@@ -43,6 +43,7 @@ export default function ProbeReportSummary({
   const verdictKey = identityVerdictKey(identity);
   const verdictMeta = VERDICT_MAP[verdictKey] || VERDICT_MAP.abstain;
   const isModelEstimate = ["likely_match", "likely_submodel_mismatch", "model_estimate"].includes(verdictKey);
+  const presentation = identityEvidencePresentation(identity, report?.modelId);
   const riskFlags = Array.isArray(identity.riskFlags) ? identity.riskFlags : [];
 
   // Aggregates
@@ -172,14 +173,15 @@ export default function ProbeReportSummary({
 
             <div className="space-y-1">
               <h4 className="text-base font-semibold text-text-main">
-                {identity.predictedFamily
-                  ? `Classified Family: ${identity.predictedFamily}`
+                {presentation.family
+                  ? `Classified Family: ${presentation.family}`
                   : verdictMeta.label}
               </h4>
               {isModelEstimate && identity.verdict?.trueModel && <p className="text-sm font-semibold font-mono text-text-main">Estimated model: {identity.verdict.trueModel}</p>}
               <p className="text-xs text-text-muted">
                 {verdictMeta.description}
               </p>
+              {presentation.modelExplanation && <p className="text-xs text-text-muted">{presentation.modelExplanation}</p>}
             </div>
           </div>
 
@@ -188,8 +190,8 @@ export default function ProbeReportSummary({
               {identity.claimedModel && (
                 <span>Claimed: <strong className="text-text-main">{identity.claimedModel}</strong></span>
               )}
-              {!isModelEstimate && typeof identity.confidence === "number" && (
-                <span>Confidence: <strong className="text-text-main">{(identity.confidence * 100).toFixed(1)}%</strong></span>
+              {identity.verdict?.confidence && (
+                <span>Evidence strength: <strong className="text-text-main">{identity.verdict.confidence}</strong> (qualitative)</span>
               )}
             </div>
             {identity.status && (

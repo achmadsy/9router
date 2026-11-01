@@ -1,11 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { stripUnsupportedModalities } from "../../open-sse/translator/concerns/modality.js";
+import { stripUnsupportedModalities, hasUnsupportedCurrentDocument } from "../../open-sse/translator/concerns/modality.js";
+import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 
 const NO_VISION = { vision: false, audioInput: true, pdf: true };
 const NO_AUDIO = { vision: true, audioInput: false, pdf: true };
 const NO_PDF = { vision: true, audioInput: true, pdf: false };
 const ALL = { vision: true, audioInput: true, pdf: true };
+
+describe("current document delivery guard", () => {
+  const pdf = { type: "file", file: { filename: "probe.pdf", file_data: "data:application/pdf;base64,JVBERg==" } };
+  it("detects the actual GLM-5.3 route limitation before the PDF is dropped", () => {
+    const body = { messages: [{ role: "user", content: [pdf, { type: "text", text: "Read this PDF" }] }] };
+    const before = structuredClone(body);
+    expect(getCapabilitiesForModel("glm", "glm-5.3").pdf).toBe(false);
+    expect(hasUnsupportedCurrentDocument(body, FORMATS.OPENAI, getCapabilitiesForModel("glm", "glm-5.3"))).toBe(true);
+    expect(body).toEqual(before);
+    expect(hasUnsupportedCurrentDocument(body, FORMATS.OPENAI, ALL)).toBe(false);
+  });
+  it("does not reject a previous-turn PDF when the current user request is text", () => {
+    const body = { messages: [{ role: "user", content: [pdf] }, { role: "assistant", content: "ok" }, { role: "user", content: "new question" }] };
+    expect(hasUnsupportedCurrentDocument(body, FORMATS.OPENAI, NO_PDF)).toBe(false);
+  });
+  it.each([
+    [FORMATS.CLAUDE, { messages: [{ role: "user", content: [{ type: "document" }] }] }],
+    [FORMATS.OPENAI_RESPONSES, { input: [{ role: "user", content: [{ type: "input_file" }] }] }],
+    [FORMATS.GEMINI, { contents: [{ role: "user", parts: [{ inlineData: { mimeType: "application/pdf" } }] }] }],
+  ])("detects documents in %s without inspecting or fetching their data", (format, body) => {
+    expect(hasUnsupportedCurrentDocument(body, format, NO_PDF)).toBe(true);
+  });
+});
 
 describe("stripUnsupportedModalities", () => {
   it("fast-exits when model supports all modalities", () => {

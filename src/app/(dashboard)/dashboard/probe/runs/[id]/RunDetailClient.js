@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Drawer from "@/shared/components/Drawer";
-import { identityVerdictKey, reportFromRun, probeResultStatus } from "@/lib/probe/reportPresentation.js";
+import { identityVerdictKey, identityEvidencePresentation, reportFromRun, probeResultStatus } from "@/lib/probe/reportPresentation.js";
 import { supportsGlmDistribution } from "@/lib/probe/glmDistribution.js";
 import ProbeRail from "../../components/ProbeRail";
 import ProbeResultPanel from "../../components/ProbeResultPanel";
@@ -40,14 +40,14 @@ const VERDICT_TEXT = {
   insufficient_data: { headline: "Not enough data for a verdict", tone: "neutral" },
 };
 
-function IdentityCard({ summary }) {
+function IdentityCard({ summary, targetModel }) {
   if (!summary?.identityAssessment) return null;
   const identity = summary.identityAssessment;
   const verdict = identity.verdict || {};
   const key = identityVerdictKey(identity);
   const text = VERDICT_TEXT[key] || { headline: key, tone: "neutral" };
   const isModelEstimate = ["likely_match", "likely_submodel_mismatch", "model_estimate"].includes(key);
-  const confidencePct = !isModelEstimate && typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
+  const presentation = identityEvidencePresentation(identity, targetModel);
   const candidates = Array.isArray(identity.predictedCandidates) ? identity.predictedCandidates.slice(0, 5) : [];
   const engineVerdict = identity.verdict;
   const effectiveHeadline = engineVerdict?.status === "clean_match_family_only" && text.tone === "bad"
@@ -70,12 +70,6 @@ function IdentityCard({ summary }) {
             {identity.claimedModel ? <>Claimed model: <span className="font-mono">{identity.claimedModel}</span></> : "No claimed model"}
           </p>
         </div>
-        {confidencePct !== null && (
-          <div className="text-right">
-            <div className="text-2xl font-bold text-text-main leading-none">{confidencePct}%</div>
-            <div className="text-[11px] text-text-muted mt-0.5">Assessment confidence</div>
-          </div>
-        )}
       </div>
 
       <div className={`rounded-[10px] border p-3 text-sm font-semibold ${toneClass}`}>
@@ -87,7 +81,7 @@ function IdentityCard({ summary }) {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
         <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
           <span className="text-text-subtle text-[10px] block uppercase font-mono">Inferred family</span>
-          <span className="font-semibold text-text-main break-words">{identity.predictedFamily || "—"}</span>
+          <span className="font-semibold text-text-main break-words">{presentation.family || "—"}</span>
         </div>
         <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
           <span className="text-text-subtle text-[10px] block uppercase font-mono">Verdict status</span>
@@ -99,10 +93,13 @@ function IdentityCard({ summary }) {
         </div>
       </div>
 
+      {presentation.modelExplanation && <p className="text-xs text-text-muted">{presentation.modelExplanation}</p>}
+      {presentation.diagnosticsUnavailable && <p className="text-xs text-amber-700 dark:text-amber-300">Advanced identity assessment was unavailable when this report was saved. The displayed family verdict is the fallback assessment, not an exact-model result.</p>}
+
       {candidates.length > 0 && (
-        <div className="space-y-1">
-          <span className="font-semibold text-text-subtle text-[10px] uppercase font-mono block">Closest family signals</span>
-          <p className="text-xs text-text-muted">Relative heuristic similarity, not identity probabilities or exact-model verification.</p>
+        <details className="space-y-1 rounded-[8px] border border-border-subtle p-3">
+          <summary className="cursor-pointer font-semibold text-text-main text-xs">Raw family heuristic diagnostics</summary>
+          <p className="text-xs text-text-muted">Overlapping style signals, not identity probabilities or a final ranking. These legacy scores can favor another family’s writing style even when corroborated evidence supports the displayed family.</p>
           <div className="space-y-1">
             {candidates.map((candidate) => (
               <div key={candidate.modelId || candidate.family} className="flex items-center justify-between text-xs bg-surface-2 rounded-[8px] px-2.5 py-1.5">
@@ -113,7 +110,7 @@ function IdentityCard({ summary }) {
               </div>
             ))}
           </div>
-        </div>
+        </details>
       )}
 
       {Array.isArray(verdict.reasoning) && verdict.reasoning.length > 0 && (
@@ -316,21 +313,7 @@ export default function RunDetailClient({ runId }) {
       </p>}
       {run.canReplay && supportsGlmDistribution(run.targetModel) && <p className="text-xs text-text-muted">A full rerun automatically repeats up to 51 additional GLM distribution requests. Retry and rejudge do not refresh these samples.</p>}
 
-      {run.score !== null && run.score !== undefined && (
-        <div className="rounded-[14px] bg-surface border border-border-subtle p-5 flex items-center gap-6">
-          <div>
-            <div className="text-3xl font-bold text-text-main leading-none">{run.scoreMax !== null && run.scoreMax !== run.score ? `${run.score}–${run.scoreMax}` : run.score}<span className="text-lg text-text-muted"> / 100</span></div>
-            <div className="text-[11px] text-text-muted mt-1">Endpoint integrity score</div>
-          </div>
-          <div className="h-10 w-px bg-border" />
-          <div className="text-xs text-text-muted">
-            {completeResults.length} checks recorded
-            {run.summary?.totalInputTokens ? ` · ${run.summary.totalInputTokens} in / ${run.summary.totalOutputTokens ?? 0} out tokens` : ""}
-          </div>
-        </div>
-      )}
-
-      <IdentityCard summary={run.summary} />
+      <IdentityCard summary={run.summary} targetModel={run.targetModel} />
 
       <div className="rounded-[12px] border border-border bg-bg-elevated p-4">
         <div className="flex justify-between text-xs text-text-muted mb-2">

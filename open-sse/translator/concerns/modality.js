@@ -2,6 +2,8 @@
 // Driven by getCapabilitiesForModel: vision/audioInput/pdf. Replaces removed
 // media with a short text placeholder so messages never become empty.
 import { FORMATS } from "../formats.js";
+import { ROLE } from "../schema/roles.js";
+import { OPENAI_BLOCK, CLAUDE_BLOCK, RESPONSES_ITEM } from "../schema/blocks.js";
 
 // Placeholder text inserted where a media block was removed.
 // Current turn: explain the active model can't read what the user just sent.
@@ -42,6 +44,31 @@ function capForClaudeBlock(block) {
   if (t === "image") return "vision";
   if (t === "document") return "pdf";
   return null;
+}
+
+// A current PDF must not silently turn into a text-only question. Historical
+// media can still be stripped for model/combo context compatibility.
+export function hasUnsupportedCurrentDocument(body, sourceFormat, caps) {
+  if (!body || caps?.pdf !== false) return false;
+  const lastUser = (items) => Array.isArray(items) ? items.findLast(item => item?.role === ROLE.USER) : null;
+  const contains = (blocks, predicate) => Array.isArray(blocks) && blocks.some(predicate);
+  switch (sourceFormat) {
+    case FORMATS.CLAUDE:
+      return contains(lastUser(body.messages)?.content, block => block?.type === CLAUDE_BLOCK.DOCUMENT);
+    case FORMATS.OPENAI_RESPONSES:
+    case FORMATS.OPENAI_RESPONSE:
+    case FORMATS.CODEX:
+      return contains(lastUser(body.input)?.content, block => block?.type === RESPONSES_ITEM.INPUT_FILE);
+    case FORMATS.GEMINI:
+    case FORMATS.GEMINI_CLI:
+    case FORMATS.VERTEX:
+    case FORMATS.ANTIGRAVITY: {
+      const contents = sourceFormat === FORMATS.ANTIGRAVITY ? body.request?.contents : body.contents;
+      return contains(lastUser(contents)?.parts, part => capForMime(part?.inlineData?.mimeType || part?.fileData?.mimeType) === "pdf");
+    }
+    default:
+      return contains(lastUser(body.messages)?.content, block => block?.type === OPENAI_BLOCK.FILE);
+  }
 }
 
 // Filter an array of content blocks; drop unsupported, inject one placeholder per kind.

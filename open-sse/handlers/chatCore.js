@@ -29,7 +29,7 @@ import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
 import { compressWithPxpipe } from "../rtk/pxpipe.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
-import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
+import { stripUnsupportedModalities, hasUnsupportedCurrentDocument } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
@@ -233,6 +233,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Auto-strip media blocks the model can't read (vision/audio/pdf) before translation.
   if (!passthrough) {
     const caps = getCapabilitiesForModel(runtimeProvider, model);
+    if (hasUnsupportedCurrentDocument(body, sourceFormat, caps)) {
+      return createErrorResult(HTTP_STATUS.BAD_REQUEST, "PDF/document input is not supported by this model route; the attached file was not sent upstream", { noCooldown: true });
+    }
     if (stripUnsupportedModalities(body, sourceFormat, caps)) {
       log?.debug?.("MODALITY", `stripped unsupported media for ${provider}/${model}`);
     }
