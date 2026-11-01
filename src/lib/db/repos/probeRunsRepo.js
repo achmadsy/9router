@@ -95,6 +95,13 @@ export async function appendProbeRunResults(runId, rows, totalProbes = null) {
   );
 }
 
+// Sampling can outlast the normal task phase. Keep the row live without replacing
+// task evidence, counters, or the previous summary during an in-place replay.
+export async function touchProbeRun(runId) {
+  const db = await getAdapter();
+  db.run(`UPDATE probeRuns SET updatedAt = ? WHERE id = ? AND status = 'running'`, [new Date().toISOString(), runId]);
+}
+
 export async function finishProbeRun(runId, status = "complete", rows = null, summary = null) {
   const db = await getAdapter();
   const now = new Date().toISOString();
@@ -119,6 +126,43 @@ export async function finishProbeRun(runId, status = "complete", rows = null, su
     `UPDATE probeRuns SET status = ?, finishedAt = ?, updatedAt = ? WHERE id = ?`,
     [status, now, now, runId],
   );
+}
+
+// Replay keeps existing evidence intact until a complete report arrives.
+export async function beginProbeRunReplay(runId) {
+  const db = await getAdapter();
+  const row = db.get(`SELECT status FROM probeRuns WHERE id = ?`, [runId]);
+  if (!row || row.status === "running") throw new Error("Run is missing or already active");
+  db.run(`UPDATE probeRuns SET status = 'running', updatedAt = ? WHERE id = ?`, [new Date().toISOString(), runId]);
+}
+
+// One write publishes the replacement rows and derived metadata together, so
+// readers never see new evidence paired with the previous identity/score.
+export async function commitProbeRunReplay(runId, previous, report) {
+  const db = await getAdapter();
+  const current = db.get(`SELECT reportJson FROM probeRuns WHERE id = ? AND status = 'running'`, [runId]);
+  if (!current) throw new Error("Replay is no longer active");
+  const byId = new Map(JSON.parse(current.reportJson || "[]").map(row => [row.probeId || row.id, row]));
+  for (const row of report.results) byId.set(row.probeId || row.id, row);
+  const results = [...byId.values()];
+  const counts = computeCounts(results);
+  const { identityAssessment, totalInputTokens, totalOutputTokens, modelId, startedAt, completedAt } = report;
+  const reportJson = JSON.stringify(results);
+  const summaryJson = JSON.stringify({ identityAssessment, totalInputTokens, totalOutputTokens, modelId, startedAt, completedAt });
+  if (reportJson.length > 8 * 1024 * 1024 || summaryJson.length > 2 * 1024 * 1024) throw new Error("Replay report exceeds storage limits");
+  db.run(`UPDATE probeRuns SET reportJson = ?, summaryJson = ?, score = ?, scoreMax = ?, completedProbes = ?, passedCount = ?, failedCount = ?, errorCount = ?, neutralCount = ?, status = ?, updatedAt = ? WHERE id = ? AND status = 'running'`, [
+    reportJson, summaryJson, Number.isFinite(report.score) ? Math.round(report.score) : null,
+    Number.isFinite(report.scoreMax) ? Math.round(report.scoreMax) : null,
+    counts.completedProbes, counts.passedCount, counts.failedCount, counts.errorCount, counts.neutralCount,
+    previous.status, new Date().toISOString(), runId,
+  ]);
+}
+
+export async function restoreProbeRunState(runId, previous) {
+  const db = await getAdapter();
+  db.run(`UPDATE probeRuns SET status = ?, finishedAt = ?, updatedAt = ? WHERE id = ?`, [
+    previous.status, previous.finishedAt, previous.updatedAt, runId,
+  ]);
 }
 
 export async function purgeExpiredProbeReplay() {

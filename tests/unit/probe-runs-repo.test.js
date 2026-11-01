@@ -81,6 +81,42 @@ describe("probe run persistence", () => {
     expect(run.finishedAt).toBeTruthy();
   });
 
+  it("edits an existing run without losing sibling results, timestamps, or replay credentials", async () => {
+    const repo = await import("@/lib/db/repos/probeRunsRepo.js");
+    await repo.createProbeRun({ id: "same", targetModel: "glm/glm-5.3", replayConfig: { target: { apiKey: "secret" } } });
+    await repo.finishProbeRun("same", "complete", [
+      { probeId: "one", status: "error", response: null },
+      { probeId: "two", status: "done", passed: true, response: "sibling" },
+    ], { score: 50, scoreMax: 100 });
+    const before = await repo.getProbeRun("same");
+    await repo.beginProbeRunReplay("same");
+    expect((await repo.getProbeRun("same")).results).toEqual(before.results);
+    await repo.commitProbeRunReplay("same", before, { results: [{ probeId: "one", status: "done", passed: true, response: "fixed" }], score: 100, scoreMax: 100 });
+    const after = await repo.getProbeRun("same");
+    expect(after).toMatchObject({ id: "same", createdAt: before.createdAt, score: 100, errorCount: 0, passedCount: 2 });
+    expect(after.results[1]).toEqual(before.results[1]);
+    expect(await repo.listProbeRuns()).toHaveLength(1);
+    expect(await repo.getProbeRunReplay("same")).toEqual({ target: { apiKey: "secret" } });
+    await repo.beginProbeRunReplay("same");
+    await repo.restoreProbeRunState("same", after);
+    expect(await repo.getProbeRun("same")).toEqual(after);
+  });
+
+  it("keeps model estimates and exact saved observations through same-ID rejudge", async () => {
+    const repo = await import("@/lib/db/repos/probeRunsRepo.js");
+    const identityAssessment = { status: "match", predictedFamily: "zhipu",
+      verdict: { status: "likely_match", trueModel: "z-ai/glm-5.3", confidence: "medium" },
+      distributionEvidence: { version: 1, modelId: "glm/glm-5.3", attempts: 51, failures: 0,
+        observations: [{ probeId: "day", answers: ["wednesday", "wednesday", "thursday"] }] } };
+    await repo.createProbeRun({ id: "estimate", targetModel: "glm/glm-5.3" });
+    await repo.finishProbeRun("estimate", "complete", [{ probeId: "one", status: "done", response: "saved" }], { identityAssessment });
+    const previous = await repo.getProbeRun("estimate");
+    await repo.beginProbeRunReplay("estimate");
+    await repo.commitProbeRunReplay("estimate", previous, { results: previous.results, identityAssessment });
+    expect((await repo.getProbeRun("estimate")).summary.identityAssessment).toEqual(identityAssessment);
+    expect(await repo.listProbeRuns()).toHaveLength(1);
+  });
+
   it("lists newest runs first without report payloads", async () => {
     const repo = await import("@/lib/db/repos/probeRunsRepo.js");
     await repo.createProbeRun({ id: "prun_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", targetModel: "first" });

@@ -3,18 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Drawer from "@/shared/components/Drawer";
+import { identityVerdictKey, reportFromRun, probeResultStatus } from "@/lib/probe/reportPresentation.js";
+import { supportsGlmDistribution } from "@/lib/probe/glmDistribution.js";
 import ProbeRail from "../../components/ProbeRail";
 import ProbeResultPanel from "../../components/ProbeResultPanel";
 import ProbeReportSummary from "../../components/ProbeReportSummary";
 import { DEFAULT_PROBES, ORIGINAL_SUITE_IDS } from "../../components/probeConstants";
-
-function statusOf(result) {
-  if (result.status === "error") return "error";
-  if (result.status === "skipped") return "skipped";
-  if (typeof result.passed === "boolean") return result.passed ? "passed" : "failed";
-  if (result.neutral) return "neutral";
-  return result.status || "neutral";
-}
 
 function mergeRunResults(templates, results) {
   const templateById = new Map(templates.map((probe) => [probe.id, probe]));
@@ -27,13 +21,16 @@ function mergeRunResults(templates, results) {
     const probe = templateById.get(id) || DEFAULT_PROBES.find((item) => item.id === id);
     const result = resultById.get(id);
     if (!result) return { ...probe, status: "pending" };
-    return { ...result, ...probe, status: statusOf(result) };
+    return { ...result, ...probe, neutral: result.neutral ?? probe.neutral, status: probeResultStatus(result) };
   });
 }
 
 /** Human wording for the engine verdict statuses. */
 const VERDICT_TEXT = {
   clean_match: { headline: "Model verified — full match", tone: "good" },
+  likely_match: { headline: "Likely model match — provisional estimate", tone: "good" },
+  likely_submodel_mismatch: { headline: "Likely different GLM model — provisional estimate", tone: "warn" },
+  model_estimate: { headline: "Model estimate available — claim not compared", tone: "partial" },
   clean_match_family_only: { headline: "Same family — exact model unconfirmed", tone: "partial" },
   clean_match_submodel_mismatch: { headline: "Family matches — different sub-model", tone: "warn" },
   plain_mismatch: { headline: "Model does not match the claim", tone: "bad" },
@@ -47,9 +44,10 @@ function IdentityCard({ summary }) {
   if (!summary?.identityAssessment) return null;
   const identity = summary.identityAssessment;
   const verdict = identity.verdict || {};
-  const key = verdict.status || identity.status;
+  const key = identityVerdictKey(identity);
   const text = VERDICT_TEXT[key] || { headline: key, tone: "neutral" };
-  const confidencePct = typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
+  const isModelEstimate = ["likely_match", "likely_submodel_mismatch", "model_estimate"].includes(key);
+  const confidencePct = !isModelEstimate && typeof identity.confidence === "number" ? Math.round(identity.confidence * 100) : null;
   const candidates = Array.isArray(identity.predictedCandidates) ? identity.predictedCandidates.slice(0, 5) : [];
   const engineVerdict = identity.verdict;
   const effectiveHeadline = engineVerdict?.status === "clean_match_family_only" && text.tone === "bad"
@@ -75,20 +73,16 @@ function IdentityCard({ summary }) {
         {confidencePct !== null && (
           <div className="text-right">
             <div className="text-2xl font-bold text-text-main leading-none">{confidencePct}%</div>
-            <div className="text-[11px] text-text-muted mt-0.5">Family confidence</div>
+            <div className="text-[11px] text-text-muted mt-0.5">Assessment confidence</div>
           </div>
         )}
       </div>
 
       <div className={`rounded-[10px] border p-3 text-sm font-semibold ${toneClass}`}>
         {effectiveHeadline.headline}
+        {isModelEstimate && verdict.trueModel && <p className="mt-1 font-mono">{verdict.trueModel}</p>}
+        {isModelEstimate && <p className="mt-1 text-xs font-normal">Five-reference distribution estimate, not an independently verified identity or authenticity probability.</p>}
       </div>
-
-      {Array.isArray(engineVerdict?.reasoning) && engineVerdict.reasoning.length > 0 && (
-        <ul className="text-xs text-text-muted space-y-1 list-disc pl-4">
-          {engineVerdict.reasoning.slice(0, 4).map((line, index) => <li key={index}>{line}</li>)}
-        </ul>
-      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
         <div className="p-2.5 rounded-[8px] bg-bg border border-border-subtle">
@@ -107,14 +101,15 @@ function IdentityCard({ summary }) {
 
       {candidates.length > 0 && (
         <div className="space-y-1">
-          <span className="font-semibold text-text-subtle text-[10px] uppercase font-mono block">Closest sub-models</span>
+          <span className="font-semibold text-text-subtle text-[10px] uppercase font-mono block">Closest family signals</span>
+          <p className="text-xs text-text-muted">Relative heuristic similarity, not identity probabilities or exact-model verification.</p>
           <div className="space-y-1">
             {candidates.map((candidate) => (
               <div key={candidate.modelId || candidate.family} className="flex items-center justify-between text-xs bg-surface-2 rounded-[8px] px-2.5 py-1.5">
                 <span className="font-medium text-text-main truncate">
                   {candidate.displayName || candidate.model || candidate.modelId || candidate.family || "Unknown model"}
                 </span>
-                <span className="font-mono text-text-muted shrink-0">{Math.round((candidate.score || 0) * 100)}%</span>
+                <span className="font-mono text-text-muted shrink-0">{Math.round((candidate.score || 0) * 100)} / 100</span>
               </div>
             ))}
           </div>
@@ -128,6 +123,29 @@ function IdentityCard({ summary }) {
             {verdict.reasoning.map((line, index) => <li key={index}>{line}</li>)}
           </ul>
         </div>
+      )}
+
+      {identity.advanced && (
+        <details className="rounded-[8px] border border-border-subtle p-3 text-xs text-text-muted">
+          <summary className="cursor-pointer font-semibold text-text-main">Identity evidence and decision path</summary>
+          <div className="mt-3 space-y-2">
+            <p>Reference pack: <span className="font-mono">{identity.advanced.distribution?.referencePackId || "—"}</span></p>
+            <p>Claim distribution reference: {identity.advanced.distribution?.claimReferenceCovered ? "Saved" : "Unavailable"}. Saved coverage does not mean verified identity.</p>
+            <p>GLM recheck: {identity.advanced.distribution?.state || "Unavailable"}. {identity.distributionEvidence ? `${identity.distributionEvidence.attempts - identity.distributionEvidence.failures}/51 answers saved.` : "Rejudge does not collect missing samples."}</p>
+            <p>Global behavioral candidate: {identity.advanced.v3?.global?.top?.displayName || "Abstained"} (diagnostic only).</p>
+            <p>Model estimates require all 51 answers, corroborated family evidence and the fixed acceptance gates. Retry and rejudge reuse saved samples.</p>
+            {identity.advanced.creatorGuard?.contradictory && <p>Creator assertions conflict; no self-identification override was applied.</p>}
+            <p>Cross-cluster fit: {identity.advanced.clusterComparison?.bestFamily || "No comparable evidence"} (diagnostic only).</p>
+            {Array.isArray(identity.advanced.decisionPath) && (
+              <ol className="list-decimal pl-4 space-y-1">
+                {identity.advanced.decisionPath.map((step) => <li key={step.stage}><strong>{step.stage}: {step.outcome}</strong> — {step.reason}</li>)}
+              </ol>
+            )}
+            <ul className="list-disc pl-4 space-y-1">
+              {(identity.advanced.limitations || []).map((line, index) => <li key={index}>{line}</li>)}
+            </ul>
+          </div>
+        </details>
       )}
 
       {Array.isArray(identity.riskFlags) && identity.riskFlags.length > 0 && (
@@ -151,6 +169,7 @@ export default function RunDetailClient({ runId }) {
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [pendingAction, setPendingAction] = useState(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   const fetchRun = useCallback(async () => {
     const res = await fetch(`/api/probe/runs/${encodeURIComponent(runId)}`, { cache: "no-store" });
@@ -190,7 +209,7 @@ export default function RunDetailClient({ runId }) {
       stopped = true;
       if (timer) clearTimeout(timer);
     };
-  }, [fetchRun]);
+  }, [fetchRun, refreshVersion]);
 
   const probes = useMemo(
     () => mergeRunResults(templates, run?.results),
@@ -216,14 +235,27 @@ export default function RunDetailClient({ runId }) {
         throw new Error(data.error || `Action failed with HTTP ${res.status}`);
       }
       const nextRunId = res.headers.get("x-probe-run-id");
-      // Persistence has its own SSE branch; release the browser branch before
-      // navigating. The original report remains an immutable comparison point.
-      void res.body?.cancel().catch(() => {});
       if (!nextRunId) throw new Error("The engine did not return a run ID");
-      router.push(`/dashboard/probe/runs/${encodeURIComponent(nextRunId)}`);
+      if (nextRunId !== runId) {
+        void res.body?.cancel().catch(() => {});
+        router.push(`/dashboard/probe/runs/${encodeURIComponent(nextRunId)}`);
+      } else {
+        // Keep the drawer open and show operation failures instead of silently
+        // navigating away or treating a canceled replay as a successful edit.
+        const events = (await res.text()).split(/\r?\n\r?\n/);
+        const failure = events.find(event => /^event:\s*(error|canceled)\s*$/m.test(event));
+        if (failure) {
+          const text = failure.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
+          const data = JSON.parse(text);
+          throw new Error(data.error || data.reason || "Action canceled; the previous report was kept");
+        }
+        if (!events.some(event => /^event:\s*complete\s*$/m.test(event))) throw new Error("The action ended without a final report; the previous report was kept");
+      }
     } catch (err) {
       setActionError(err.message || "Probe action failed");
     } finally {
+      await fetchRun().catch(() => {});
+      setRefreshVersion(version => version + 1);
       setPendingAction(null);
     }
   };
@@ -279,14 +311,15 @@ export default function RunDetailClient({ runId }) {
       {actionError && <div role="alert" className="rounded-[10px] border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-300">{actionError}</div>}
       {!isRunning && <p className="text-xs text-text-muted">
         {run.canReplay
-          ? "Actions create a new run and preserve this report. Retry sends only the selected check to the target. Re-judge recalculates text checks and identity from saved responses, using the original judge when configured. Transport checks stay unchanged; the target is not called. Replay settings expire after 24 hours."
+          ? "Retry and re-judge update this run in place. Retry sends only the selected check to the target. Only Re-run all checks creates a new run. Re-judge recalculates text checks and identity from saved responses, using the original judge when configured. Transport checks stay unchanged; the target is not called. Replay settings expire after 24 hours."
           : "Replay settings are unavailable for this older run or have expired. Start a new run from Probe configuration to enable retry and re-judging."}
       </p>}
+      {run.canReplay && supportsGlmDistribution(run.targetModel) && <p className="text-xs text-text-muted">A full rerun automatically repeats up to 51 additional GLM distribution requests. Retry and rejudge do not refresh these samples.</p>}
 
       {run.score !== null && run.score !== undefined && (
         <div className="rounded-[14px] bg-surface border border-border-subtle p-5 flex items-center gap-6">
           <div>
-            <div className="text-3xl font-bold text-text-main leading-none">{run.score}<span className="text-lg text-text-muted"> / {run.scoreMax ?? 100}</span></div>
+            <div className="text-3xl font-bold text-text-main leading-none">{run.scoreMax !== null && run.scoreMax !== run.score ? `${run.score}–${run.scoreMax}` : run.score}<span className="text-lg text-text-muted"> / 100</span></div>
             <div className="text-[11px] text-text-muted mt-1">Endpoint integrity score</div>
           </div>
           <div className="h-10 w-px bg-border" />
@@ -308,6 +341,7 @@ export default function RunDetailClient({ runId }) {
           <div className="h-full bg-primary transition-[width] duration-500" style={{ width: `${run.totalProbes ? Math.min(100, ((run.completedProbes || 0) / run.totalProbes) * 100) : 0}%` }} />
         </div>
         {isRunning && nextPending && <p className="text-xs text-text-muted mt-2">Next: {nextPending.label}</p>}
+        {isRunning && !nextPending && supportsGlmDistribution(run.targetModel) && <p className="text-xs text-text-muted mt-2">Finalizing identity assessment and GLM distribution recheck (up to 51 sequential requests). The run is not complete until the saved report arrives.</p>}
       </div>
 
       <ProbeRail
@@ -320,7 +354,7 @@ export default function RunDetailClient({ runId }) {
 
       {!isRunning && completeResults.length > 0 && (
         <ProbeReportSummary
-          report={{ startedAt: run.createdAt, completedAt: run.finishedAt }}
+          report={reportFromRun(run)}
           results={completeResults}
           onSelectProbe={(probe) => setSelectedProbeId(probe.id)}
         />

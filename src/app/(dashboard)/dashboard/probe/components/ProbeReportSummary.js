@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import PropTypes from "prop-types";
 import { cn } from "@/shared/utils/cn";
+import { identityVerdictKey } from "@/lib/probe/reportPresentation.js";
 import Card from "@/shared/components/Card";
 import Badge from "@/shared/components/Badge";
 import Button from "@/shared/components/Button";
@@ -32,13 +33,16 @@ export default function ProbeReportSummary({
   const [groupFilter, setGroupFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  const score = report?.score ?? 0;
-  const scoreMax = report?.scoreMax ?? 100;
-  const scorePercent = scoreMax > 0 ? Math.round((score / scoreMax) * 100) : 0;
+  const score = report?.score ?? null;
+  const scoreMax = report?.scoreMax ?? null;
+  // scoreMax is the optimistic bound, not a denominator. Both are on 0–100.
+  const scoredResults = results.filter(row => !row.neutral && typeof row.passed === "boolean" && row.status !== "error" && row.status !== "skipped");
+  const compliance = scoredResults.length ? Math.round(scoredResults.filter(row => row.passed).length / scoredResults.length * 100) : null;
 
   const identity = report?.identityAssessment || {};
-  const verdictKey = identity.status || identity.verdict || "abstain";
+  const verdictKey = identityVerdictKey(identity);
   const verdictMeta = VERDICT_MAP[verdictKey] || VERDICT_MAP.abstain;
+  const isModelEstimate = ["likely_match", "likely_submodel_mismatch", "model_estimate"].includes(verdictKey);
   const riskFlags = Array.isArray(identity.riskFlags) ? identity.riskFlags : [];
 
   // Aggregates
@@ -141,16 +145,16 @@ export default function ProbeReportSummary({
             </span>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="text-4xl font-extrabold tracking-tight text-text-main font-mono">
-                {score}
+                {score === null ? "—" : scoreMax !== null && scoreMax !== score ? `${score}–${scoreMax}` : score}
               </span>
               <span className="text-base text-text-muted font-mono font-medium">
-                / {scoreMax}
+                / 100
               </span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-border-subtle flex items-center justify-between text-xs text-text-muted">
             <span>Pass compliance</span>
-            <span className="font-mono font-semibold text-text-main">{scorePercent}%</span>
+            <span className="font-mono font-semibold text-text-main">{compliance === null ? "—" : `${compliance}%`}</span>
           </div>
         </Card>
 
@@ -172,6 +176,7 @@ export default function ProbeReportSummary({
                   ? `Classified Family: ${identity.predictedFamily}`
                   : verdictMeta.label}
               </h4>
+              {isModelEstimate && identity.verdict?.trueModel && <p className="text-sm font-semibold font-mono text-text-main">Estimated model: {identity.verdict.trueModel}</p>}
               <p className="text-xs text-text-muted">
                 {verdictMeta.description}
               </p>
@@ -183,7 +188,7 @@ export default function ProbeReportSummary({
               {identity.claimedModel && (
                 <span>Claimed: <strong className="text-text-main">{identity.claimedModel}</strong></span>
               )}
-              {typeof identity.confidence === "number" && (
+              {!isModelEstimate && typeof identity.confidence === "number" && (
                 <span>Confidence: <strong className="text-text-main">{(identity.confidence * 100).toFixed(1)}%</strong></span>
               )}
             </div>
@@ -353,6 +358,7 @@ export default function ProbeReportSummary({
               <option value="passed">Passed</option>
               <option value="failed">Failed</option>
               <option value="neutral">Neutral Evidence</option>
+              <option value="warning">Warning / Not assessed</option>
               <option value="error">Error</option>
             </select>
           </div>
@@ -452,7 +458,7 @@ ProbeReportSummary.propTypes = {
     totalOutputTokens: PropTypes.number,
     identityAssessment: PropTypes.shape({
       status: PropTypes.string,
-      verdict: PropTypes.string,
+      verdict: PropTypes.oneOfType([PropTypes.string, PropTypes.object]),
       confidence: PropTypes.number,
       claimedModel: PropTypes.string,
       predictedFamily: PropTypes.string,

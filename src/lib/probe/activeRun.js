@@ -9,7 +9,7 @@ export function getActiveRun() {
   };
 }
 
-export function startActiveRun({ runId, ownerId, abortController }) {
+export function startActiveRun({ runId, ownerId, abortController, retainUntilFinished = false }) {
   if (activeRun) {
     return {
       ok: false,
@@ -24,6 +24,7 @@ export function startActiveRun({ runId, ownerId, abortController }) {
     ownerId,
     startedAt: new Date().toISOString(),
     abortController,
+    retainUntilFinished,
   };
 
   return { ok: true, runId };
@@ -54,7 +55,9 @@ export function cancelActiveRun(runId, requesterId) {
   } catch { /* best effort */ }
 
   const cancelledId = activeRun.runId;
-  activeRun = null;
+  // An in-place edit must finish restoring/committing its report before a new
+  // operation can acquire the same run ID. Otherwise late cleanup races it.
+  if (!activeRun.retainUntilFinished) activeRun = null;
 
   return { ok: true, runId: cancelledId };
 }

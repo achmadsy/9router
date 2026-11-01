@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { verifyProbeAdminAuth, verifyCsrfOrigin } from "@/lib/probe/auth.js";
 import { getActiveRun, startActiveRun, finishActiveRun } from "@/lib/probe/activeRun.js";
 import { getProbeProfileSecrets } from "@/lib/db/repos/probeProfilesRepo.js";
-import { createProbeRun, finishProbeRun, getProbeRun, getProbeRunReplay } from "@/lib/db/repos/probeRunsRepo.js";
+import { createProbeRun, finishProbeRun, getProbeRun, getProbeRunReplay, beginProbeRunReplay, restoreProbeRunState, commitProbeRunReplay } from "@/lib/db/repos/probeRunsRepo.js";
 import { runProbeOnSidecar, fetchBaselineMap } from "@/lib/probe/sidecarClient.js";
 import { createBoundedSseStream, boundErrorMessage } from "@/lib/probe/sseProxy.js";
 import { redactSensitiveText } from "@/lib/sentry.js";
@@ -53,7 +53,9 @@ export async function POST(request) {
 
   let operation;
   let previousResults;
+  let savedDistributionEvidence;
   let retryProbeId;
+  let sourceRun;
   if (body?.sourceRunId) {
     if (!["rerun", "retry", "rejudge"].includes(body.action)) {
       return NextResponse.json({ error: "Invalid saved-run action" }, { status: 400 });
@@ -71,8 +73,10 @@ export async function POST(request) {
     }
     if (body.action !== "rerun") {
       if (!saved.results.length) return NextResponse.json({ error: "No saved results to replay" }, { status: 400 });
+      sourceRun = saved;
       operation = body.action;
       previousResults = saved.results;
+      savedDistributionEvidence = saved.summary?.identityAssessment?.distributionEvidence;
       retryProbeId = body.probeId;
     }
     body = replay;
@@ -148,13 +152,18 @@ export async function POST(request) {
     );
   }
 
-  const runId = `prun_${randomUUID()}`;
+  const runId = sourceRun?.id || `prun_${randomUUID()}`;
+  let replayCommitted = false;
+  const restoreReplay = async () => {
+    if (sourceRun && !replayCommitted) await restoreProbeRunState(runId, sourceRun);
+  };
   const abortController = new AbortController();
 
   const started = startActiveRun({
     runId,
     ownerId: auth.ownerId,
     abortController,
+    retainUntilFinished: Boolean(sourceRun),
   });
 
   if (!started.ok) {
@@ -166,7 +175,8 @@ export async function POST(request) {
 
   // Persist the run up front so a page refresh mid-run can hydrate from the DB.
   try {
-    await createProbeRun({
+    if (sourceRun) await beginProbeRunReplay(runId);
+    else await createProbeRun({
       id: runId,
       targetModel: resolvedTarget.model,
       targetSource: resolvedTarget.source,
@@ -191,14 +201,16 @@ export async function POST(request) {
         config,
         operation,
         previousResults,
+        savedDistributionEvidence,
         retryProbeId,
         ...(baseline ? { baseline } : {}),
       },
       abortController.signal
     );
   } catch (err) {
+    if (sourceRun) await restoreReplay().catch(() => {});
+    else await finishProbeRun(runId, "error").catch(() => {});
     finishActiveRun(runId);
-    await finishProbeRun(runId, "error").catch(() => {});
     const boundedErr = boundErrorMessage(redactSensitiveText(err.message));
     return NextResponse.json(
       { error: `Failed to reach probe sidecar: ${boundedErr}` },
@@ -207,8 +219,9 @@ export async function POST(request) {
   }
 
   if (!sidecarRes.ok) {
+    if (sourceRun) await restoreReplay().catch(() => {});
+    else await finishProbeRun(runId, "error").catch(() => {});
     finishActiveRun(runId);
-    await finishProbeRun(runId, "error").catch(() => {});
     const text = await sidecarRes.text().catch(() => "");
     const boundedErr = boundErrorMessage(redactSensitiveText(text) || `Sidecar returned HTTP ${sidecarRes.status}`);
     return NextResponse.json(
@@ -226,11 +239,31 @@ export async function POST(request) {
     createBoundedSseStream(runId, { manageLifecycle: false }),
   );
   const persistenceStream = persistenceBranch.pipeThrough(
-    createBoundedSseStream(runId, { persist: true, manageLifecycle: true }),
+    createBoundedSseStream(runId, {
+      persist: true,
+      manageLifecycle: !sourceRun,
+      ...(sourceRun ? {
+        // Stage replay progress; replace evidence + derived summaries only after
+        // a valid final report. Cancellation/errors preserve the prior report.
+        persistEvent: async (_id, eventName, text) => {
+          if (eventName !== "complete") return;
+          const data = JSON.parse(text);
+          if (!Array.isArray(data.report?.results) || !data.report.results.length) {
+            throw new Error("Replay returned an invalid report");
+          }
+          await commitProbeRunReplay(runId, sourceRun, data.report);
+          replayCommitted = true;
+        },
+      } : {}),
+    }),
   );
-  void persistenceStream.pipeTo(new WritableStream()).catch(async () => {
+  void persistenceStream.pipeTo(new WritableStream()).then(async () => {
+    await restoreReplay();
+  }).catch(async () => {
+    if (sourceRun) await restoreReplay().catch(() => {});
+    else await finishProbeRun(runId, "interrupted").catch(() => {});
+  }).finally(() => {
     finishActiveRun(runId);
-    await finishProbeRun(runId, "interrupted").catch(() => {});
   });
 
   return new Response(boundedStream, {

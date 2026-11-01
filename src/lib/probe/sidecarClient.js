@@ -1,3 +1,5 @@
+import { supportsGlmDistribution } from "./glmDistribution.js";
+
 // Sidecar contract (achmadsy/LLMprobe-engine):
 //   GET  /health
 //   GET  /v1/probes          → { version, probes: [{ id, label, group, description, ...flags }] }
@@ -150,17 +152,20 @@ export async function discoverModelsOnSidecar({ baseUrl, apiKey, customHeaders }
  * Forward a probe run to the sidecar. Returns the raw SSE Response.
  */
 export async function runProbeOnSidecar(payload, signal) {
-  // Older engines ignore unknown fields and would execute the full suite.
-  // Fail closed rather than silently spending target tokens during re-judging.
-  if (payload.operation) {
+  const target = toEndpointConfig(payload.target);
+  if (!target) throw new Error("Target endpoint/model missing for probe run");
+  const sampleDistribution = !payload.operation && supportsGlmDistribution(target.modelId);
+  // Fail closed on incompatible engines; never silently omit evidence or turn
+  // replay into target execution. Resolve eligibility server-side, not from UI flags.
+  if (payload.operation || sampleDistribution || payload.savedDistributionEvidence) {
     const health = await getSidecarHealth();
-    if (!health.data?.capabilities?.includes("saved-result-replay")) {
+    if (!health.reachable) throw new Error("Probe engine health check failed");
+    if (payload.operation && !health.data?.capabilities?.includes("saved-result-replay")) {
       throw new Error("Probe engine update required for task retry and re-judging");
     }
-  }
-  const target = toEndpointConfig(payload.target);
-  if (!target) {
-    throw new Error("Target endpoint/model missing for probe run");
+    if ((sampleDistribution || payload.savedDistributionEvidence) && !health.data?.capabilities?.includes("glm-distribution-v1")) {
+      throw new Error("Probe engine update required for automatic GLM distribution recheck");
+    }
   }
   const judge = toEndpointConfig(payload.judge);
   const body = {
@@ -169,8 +174,10 @@ export async function runProbeOnSidecar(payload, signal) {
     ...(payload.operation ? {
       operation: payload.operation,
       previousResults: payload.previousResults,
+      ...(payload.savedDistributionEvidence ? { savedDistributionEvidence: payload.savedDistributionEvidence } : {}),
       ...(payload.retryProbeId ? { retryProbeId: payload.retryProbeId } : {}),
     } : {}),
+    ...(sampleDistribution ? { distributionSampling: { enabled: true, maxCalls: 51 } } : {}),
     ...(judge ? { judge } : {}),
     // Official baseline responses keyed by probeId, used by llm_judge
     // similarity scoring (engine contract: Record<probeId, string>).

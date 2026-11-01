@@ -13,9 +13,13 @@ const mocks = vi.hoisted(() => ({
   cancelProbeOnSidecar: vi.fn(async () => ({ ok: true })),
   createProbeRun: vi.fn(async () => ({})),
   appendProbeRunResults: vi.fn(async () => {}),
+  touchProbeRun: vi.fn(async () => {}),
   finishProbeRun: vi.fn(async () => {}),
   getProbeRun: vi.fn(),
   getProbeRunReplay: vi.fn(),
+  beginProbeRunReplay: vi.fn(async () => {}),
+  restoreProbeRunState: vi.fn(async () => {}),
+  commitProbeRunReplay: vi.fn(async () => {}),
 }));
 
 vi.mock("@/lib/probe/auth.js", () => ({
@@ -30,9 +34,13 @@ vi.mock("@/lib/db/repos/probeProfilesRepo.js", () => ({
 vi.mock("@/lib/db/repos/probeRunsRepo.js", () => ({
   createProbeRun: mocks.createProbeRun,
   appendProbeRunResults: mocks.appendProbeRunResults,
+  touchProbeRun: mocks.touchProbeRun,
   finishProbeRun: mocks.finishProbeRun,
   getProbeRun: mocks.getProbeRun,
   getProbeRunReplay: mocks.getProbeRunReplay,
+  beginProbeRunReplay: mocks.beginProbeRunReplay,
+  restoreProbeRunState: mocks.restoreProbeRunState,
+  commitProbeRunReplay: mocks.commitProbeRunReplay,
 }));
 
 vi.mock("@/lib/probe/sidecarClient.js", () => ({
@@ -52,6 +60,8 @@ const { POST: cancelPost } = await import(
 const {
   __testResetActiveRun,
   startActiveRun,
+  finishActiveRun,
+  getActiveRun,
   cancelActiveRun,
 } = await import("../../src/lib/probe/activeRun.js");
 const {
@@ -86,20 +96,62 @@ describe("Probe Run & One Active Run Enforcement", () => {
     });
   });
 
-  it("creates a separate retry run using only server-stored settings and saved rows", async () => {
+  it("updates the same retry run using only server-stored settings and saved rows", async () => {
     const rows = [{ probeId: "consistency_check", status: "error", response: null }];
-    mocks.getProbeRun.mockResolvedValue({ id: "old", status: "complete", results: rows });
+    const distributionEvidence = { version: 1, observations: [{ probeId: "day", answers: ["wednesday"] }] };
+    mocks.getProbeRun.mockResolvedValue({ id: "old", status: "complete", results: rows, summary: { identityAssessment: { distributionEvidence } } });
     mocks.getProbeRunReplay.mockResolvedValue({ target: { source: "this_9router", model: "saved-model", apiKey: "saved-secret" } });
-    mocks.runProbeOnSidecar.mockResolvedValue(createMockSseResponse(["event: complete\ndata: {\"report\":{\"results\":[]}}\n\n"]));
+    mocks.runProbeOnSidecar.mockResolvedValue(createMockSseResponse([`event: progress\ndata: ${JSON.stringify({ result: rows[0], total: 86 })}\n\nevent: complete\ndata: ${JSON.stringify({ report: { results: [{ ...rows[0], status: "done", passed: true, response: "fixed" }], score: 100, scoreMax: 100 } })}\n\n`]));
     const response = await runPost(new Request("https://router.test/api/probe/run", {
       method: "POST", body: JSON.stringify({ sourceRunId: "old", action: "retry", probeId: "consistency_check", target: { model: "attacker-override" } }),
     }));
     expect(response.status).toBe(200);
-    expect(response.headers.get("x-probe-run-id")).not.toBe("old");
+    expect(response.headers.get("x-probe-run-id")).toBe("old");
+    expect(mocks.createProbeRun).not.toHaveBeenCalled();
+    expect(mocks.beginProbeRunReplay).toHaveBeenCalledWith("old");
     expect(mocks.runProbeOnSidecar).toHaveBeenCalledWith(expect.objectContaining({
-      operation: "retry", retryProbeId: "consistency_check", previousResults: rows,
+      operation: "retry", retryProbeId: "consistency_check", previousResults: rows, savedDistributionEvidence: distributionEvidence,
       target: expect.objectContaining({ model: "saved-model", apiKey: "saved-secret" }),
     }), expect.any(AbortSignal));
+    await response.text();
+    await vi.waitFor(() => expect(mocks.commitProbeRunReplay).toHaveBeenCalledWith("old", expect.objectContaining({ status: "complete" }), expect.objectContaining({ score: 100, results: expect.arrayContaining([expect.objectContaining({ response: "fixed" })]) })));
+    expect(mocks.appendProbeRunResults).not.toHaveBeenCalled();
+  });
+
+  it.each(["rejudge", "retry"])("preserves prior evidence when %s is rejected by the engine", async (action) => {
+    const saved = { id: "old", status: "complete", finishedAt: "before", updatedAt: "before", results: [{ probeId: "symbol_exact", status: "done", response: "saved" }] };
+    mocks.getProbeRun.mockResolvedValue(saved);
+    mocks.getProbeRunReplay.mockResolvedValue({ target: { source: "this_9router", model: "m" } });
+    mocks.runProbeOnSidecar.mockResolvedValue(new Response("unavailable", { status: 503 }));
+    const response = await runPost(new Request("https://router.test/api/probe/run", { method: "POST", body: JSON.stringify({ sourceRunId: "old", action, probeId: "symbol_exact" }) }));
+    expect(response.status).toBe(503);
+    expect(mocks.restoreProbeRunState).toHaveBeenCalledWith("old", saved);
+    expect(mocks.finishProbeRun).not.toHaveBeenCalled();
+    expect(mocks.createProbeRun).not.toHaveBeenCalled();
+  });
+
+  it.each(["canceled", "error"])("keeps the current report when replay emits %s", async (event) => {
+    const saved = { id: "old", status: "complete", finishedAt: "before", updatedAt: "before", results: [{ probeId: "symbol_exact", status: "done", response: "saved" }] };
+    mocks.getProbeRun.mockResolvedValue(saved);
+    mocks.getProbeRunReplay.mockResolvedValue({ target: { source: "this_9router", model: "m" } });
+    mocks.runProbeOnSidecar.mockResolvedValue(createMockSseResponse([`event: ${event}\ndata: {"error":"failed"}\n\n`]));
+    const response = await runPost(new Request("https://router.test/api/probe/run", { method: "POST", body: JSON.stringify({ sourceRunId: "old", action: "rejudge" }) }));
+    expect(response.headers.get("x-probe-run-id")).toBe("old");
+    await response.text();
+    await vi.waitFor(() => expect(mocks.restoreProbeRunState).toHaveBeenCalledWith("old", saved));
+    expect(mocks.finishProbeRun).not.toHaveBeenCalled();
+    expect(mocks.appendProbeRunResults).not.toHaveBeenCalled();
+  });
+
+  it("only creates a new run for an explicit full re-run", async () => {
+    mocks.getProbeRun.mockResolvedValue({ id: "old", status: "complete", results: [] });
+    mocks.getProbeRunReplay.mockResolvedValue({ target: { source: "this_9router", model: "m" } });
+    mocks.runProbeOnSidecar.mockResolvedValue(createMockSseResponse(["event: complete\ndata: {\"report\":{\"results\":[]}}\n\n"]));
+    const response = await runPost(new Request("https://router.test/api/probe/run", { method: "POST", body: JSON.stringify({ sourceRunId: "old", action: "rerun" }) }));
+    expect(response.headers.get("x-probe-run-id")).not.toBe("old");
+    expect(mocks.createProbeRun).toHaveBeenCalledOnce();
+    expect(mocks.beginProbeRunReplay).not.toHaveBeenCalled();
+    expect(mocks.runProbeOnSidecar.mock.calls[0][0].operation).toBeUndefined();
     await response.text();
   });
 
@@ -269,6 +321,15 @@ describe("Probe Cancel Ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     __testResetActiveRun();
+  });
+
+  it("retains the edit lock through cancellation until persistence cleanup finishes", () => {
+    startActiveRun({ runId: "same", ownerId: "admin", abortController: new AbortController(), retainUntilFinished: true });
+    expect(cancelActiveRun("same", "admin").ok).toBe(true);
+    expect(getActiveRun()?.runId).toBe("same");
+    expect(startActiveRun({ runId: "next", ownerId: "admin" }).ok).toBe(false);
+    finishActiveRun("same");
+    expect(getActiveRun()).toBeNull();
   });
 
   it("enforces cancel ownership: non-owner gets 403, owner gets 200", async () => {
@@ -495,6 +556,15 @@ describe("Probe Bounded SSE Proxy & Errors", () => {
       report.results,
       report,
     );
+  });
+
+  it("keeps a run live during distribution sampling without creating task rows", async () => {
+    vi.clearAllMocks();
+    const source = createMockSseResponse(['event: distribution\ndata: {"attempts":7,"failures":0,"total":51}\n\n']);
+    await new Response(source.body.pipeThrough(createBoundedSseStream("sampling", { persist: true, manageLifecycle: false }))).text();
+    expect(mocks.touchProbeRun).toHaveBeenCalledWith("sampling");
+    expect(mocks.appendProbeRunResults).not.toHaveBeenCalled();
+    expect(mocks.finishProbeRun).not.toHaveBeenCalled();
   });
 
   it("persists sidecar progress and completion events in stream order", async () => {

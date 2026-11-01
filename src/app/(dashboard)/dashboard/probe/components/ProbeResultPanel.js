@@ -52,7 +52,7 @@ export default function ProbeResultPanel({
 
         {displayProbe.neutral && (
           <span className="text-[11px] font-medium text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
-            Neutral Identity Evidence
+            Informational — excluded from score
           </span>
         )}
       </div>
@@ -69,7 +69,7 @@ export default function ProbeResultPanel({
               </button>
             )}
           </div>
-          <p className="text-xs text-text-muted">Creates a new run; other saved checks are kept unchanged.</p>
+          <p className="text-xs text-text-muted">Updates this run in place; other saved checks are kept unchanged.</p>
           {actionError && <p role="alert" className="text-xs text-red-600 dark:text-red-300">{actionError}</p>}
         </div>
       )}

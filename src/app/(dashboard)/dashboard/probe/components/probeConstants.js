@@ -93,6 +93,13 @@ export const STATUS_META = {
     borderClass: "border-purple-500",
     textClass: "text-purple-600 dark:text-purple-400",
   },
+  warning: {
+    icon: "warning",
+    label: "Warning / Not assessed",
+    bgClass: "bg-amber-500/15",
+    borderClass: "border-amber-500",
+    textClass: "text-amber-600 dark:text-amber-400",
+  },
   error: {
     icon: "error",
     label: "Error",
@@ -110,10 +117,40 @@ export const STATUS_META = {
 };
 
 export const VERDICT_MAP = {
+  likely_match: {
+    label: "Likely model match",
+    badgeVariant: "success",
+    description: "The complete GLM recheck agrees with the claim among five references. This is a provisional estimate, not verified authenticity.",
+  },
+  likely_submodel_mismatch: {
+    label: "Likely different GLM model",
+    badgeVariant: "warning",
+    description: "The complete GLM recheck favors another sibling. This is a provisional estimate, not proof of substitution.",
+  },
+  model_estimate: {
+    label: "Model estimate available",
+    badgeVariant: "warning",
+    description: "The complete GLM recheck supports a model estimate; the claim is absent or outside the supported comparison set.",
+  },
   clean_match: {
     label: "Verified Authentic",
     badgeVariant: "success",
     description: "Endpoint behavior, styling, and tokenizer match the claimed model.",
+  },
+  clean_match_family_only: {
+    label: "Family match — exact model unconfirmed",
+    badgeVariant: "warning",
+    description: "Behavior is consistent with the claimed family; this does not verify the exact model.",
+  },
+  ambiguous: {
+    label: "Ambiguous evidence",
+    badgeVariant: "warning",
+    description: "Competing behavioral signals do not establish a model family or prove substitution.",
+  },
+  insufficient_data: {
+    label: "Insufficient evidence",
+    badgeVariant: "default",
+    description: "Not enough recorded evidence to assess identity.",
   },
   clean_match_submodel_mismatch: {
     label: "Sub-model Variant Mismatch",

@@ -49,6 +49,43 @@ describe("Probe sidecar custom-header payloads", () => {
     });
   });
 
+  it.each(["glm/glm-5", "glm-5.1", "z-ai/glm-5.2", "GLM/GLM-5.3", "glm/glm-5.3-flash"])("automatically samples %s with the fixed budget", async model => {
+    const { runProbeOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
+    fetch.mockResolvedValueOnce(Response.json({ capabilities: ["glm-distribution-v1"] }))
+      .mockResolvedValueOnce(new Response(""));
+    await runProbeOnSidecar({ config: { distributionSampling: false }, target: { endpoint: "https://target.example/v1", model } });
+    expect(JSON.parse(fetch.mock.calls[1][1].body).distributionSampling).toEqual({ enabled: true, maxCalls: 51 });
+  });
+
+  it("forwards saved evidence but never enables fresh sampling during rejudge", async () => {
+    const { runProbeOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
+    fetch.mockResolvedValueOnce(Response.json({ capabilities: ["saved-result-replay", "glm-distribution-v1"] }))
+      .mockResolvedValueOnce(new Response(""));
+    const evidence = { version: 1, observations: [] };
+    await runProbeOnSidecar({ operation: "rejudge", previousResults: [], savedDistributionEvidence: evidence,
+      config: { distributionSampling: true }, target: { endpoint: "https://target.example/v1", model: "glm/glm-5.3" } });
+    const body = JSON.parse(fetch.mock.calls[1][1].body);
+    expect(body.savedDistributionEvidence).toEqual(evidence);
+    expect(body).not.toHaveProperty("distributionSampling");
+  });
+
+  it("uses only the resolved target selector, never the claim or a caller sampling flag", async () => {
+    const { runProbeOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
+    fetch.mockResolvedValue(new Response(""));
+    await runProbeOnSidecar({ config: { distributionSampling: true }, target: {
+      endpoint: "https://target.example/v1", model: "other-model", claimedModel: "glm-5.3",
+    } });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).not.toHaveProperty("distributionSampling");
+  });
+
+  it("rejects distribution features on old engines without starting a run", async () => {
+    const { runProbeOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
+    fetch.mockResolvedValue(Response.json({ capabilities: ["saved-result-replay"] }));
+    await expect(runProbeOnSidecar({ config: { distributionSampling: true }, target: { endpoint: "https://target.example/v1", model: "glm/glm-5.3" } })).rejects.toThrow("engine update required");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("keeps target and judge headers separate in run JSON", async () => {
     const { runProbeOnSidecar } = await import("../../src/lib/probe/sidecarClient.js");
     fetch.mockResolvedValue(new Response("", { status: 200 }));

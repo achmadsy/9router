@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import PropTypes from "prop-types";
+import { supportsGlmDistribution } from "@/lib/probe/glmDistribution.js";
 import Card from "@/shared/components/Card";
 import Input from "@/shared/components/Input";
 import Button from "@/shared/components/Button";
@@ -428,6 +429,13 @@ export default function ProbeConfigCard({
           )}
         </div>
 
+        {supportsGlmDistribution(target.model) && (
+          <div className="rounded-[10px] border border-border-subtle p-3.5 text-xs text-text-muted">
+            <strong className="block text-text-main">Automatic GLM model recheck (+up to 51 target calls)</strong>
+            Compares GLM-5, 5.1, 5.2, 5.3 and 5.3-Flash using saved references. Sequential sampling stops on failure, without automatic retries. Results are qualified model estimates, not proof of authenticity. Retry and rejudge reuse saved evidence.
+          </div>
+        )}
+
         <div className="flex items-start gap-3 p-3.5 rounded-[10px] bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300">
           <span className="material-symbols-outlined text-[18px] text-amber-500 shrink-0">toll</span>
           <div>
@@ -468,6 +476,7 @@ export default function ProbeConfigCard({
       >
         <div className="space-y-3 text-sm text-text-muted">
           <p>You are about to launch an active behavioral audit.</p>
+          {supportsGlmDistribution(target.model) && <p className="font-semibold">Automatically includes up to 51 additional GLM distribution requests. Full rerun repeats this sampling; rejudge and per-task retry do not.</p>}
           <div className="p-3 rounded-[8px] bg-surface-2 font-mono text-xs text-text-main space-y-1">
             <div><span className="text-text-muted">Model:</span> {target.model}</div>
             <div><span className="text-text-muted">Source:</span> {target.source === "this_9router" ? "This 9Router" : target.endpoint}</div>

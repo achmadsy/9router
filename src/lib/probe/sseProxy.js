@@ -1,5 +1,5 @@
 import { finishActiveRun } from "./activeRun.js";
-import { appendProbeRunResults, finishProbeRun } from "@/lib/db/repos/probeRunsRepo.js";
+import { appendProbeRunResults, finishProbeRun, touchProbeRun } from "@/lib/db/repos/probeRunsRepo.js";
 
 export const MAX_EVENT_BYTES = 64 * 1024; // 64 KB for progress/error events
 export const MAX_COMPLETE_EVENT_BYTES = 2 * 1024 * 1024; // bounded full report + identity verdict
@@ -38,6 +38,8 @@ async function persistSseEvent(runId, eventName, dataText) {
 
   if (eventName === "progress" && parsed.result && typeof parsed.result === "object") {
     await appendProbeRunResults(runId, [parsed.result], parsed.total ?? null);
+  } else if (eventName === "distribution") {
+    await touchProbeRun(runId);
   } else if (eventName === "complete" && parsed.report) {
     // Persist score/identity metadata separately from result rows so the
     // verdict card survives refresh; truncated JSON still closes the run.
@@ -61,7 +63,7 @@ async function persistSseEvent(runId, eventName, dataText) {
  */
 export function createBoundedSseStream(
   runId,
-  { persist = false, manageLifecycle = true } = {},
+  { persist = false, manageLifecycle = true, persistEvent = persistSseEvent } = {},
 ) {
   let buffer = "";
   let totalBytes = 0;
@@ -103,7 +105,7 @@ export function createBoundedSseStream(
         controller.terminate();
         if (persist) {
           persistQueue = persistQueue
-            .then(() => finishProbeRun(runId, "error"))
+            .then(() => persistEvent(runId, "error", JSON.stringify({ error: "SSE event size limit exceeded" })))
             .catch(() => {});
         }
         if (manageLifecycle) finishActiveRun(runId);
@@ -121,7 +123,7 @@ export function createBoundedSseStream(
           controller.terminate();
           if (persist) {
             persistQueue = persistQueue
-              .then(() => finishProbeRun(runId, "error"))
+              .then(() => persistEvent(runId, "error", JSON.stringify({ error: "SSE event size limit exceeded" })))
               .catch(() => {});
           }
           if (manageLifecycle) finishActiveRun(runId);
@@ -137,7 +139,7 @@ export function createBoundedSseStream(
           }
           if (dataLines.length > 0) {
             persistQueue = persistQueue
-              .then(() => persistSseEvent(runId, eventName, dataLines.join("\n")))
+              .then(() => persistEvent(runId, eventName, dataLines.join("\n")))
               .catch(() => {});
           }
         }
@@ -157,14 +159,14 @@ export function createBoundedSseStream(
             }
             if (dataLines.length > 0) {
               persistQueue = persistQueue
-                .then(() => persistSseEvent(runId, eventName, dataLines.join("\n")))
+                .then(() => persistEvent(runId, eventName, dataLines.join("\n")))
                 .catch(() => {});
             }
           }
           controller.enqueue(encoder.encode(`${buffer}\n\n`));
         } else if (persist) {
           persistQueue = persistQueue
-            .then(() => finishProbeRun(runId, "error"))
+            .then(() => persistEvent(runId, "error", JSON.stringify({ error: "SSE event size limit exceeded" })))
             .catch(() => {});
         }
       }
