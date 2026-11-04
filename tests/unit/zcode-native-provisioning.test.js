@@ -3,14 +3,14 @@ import { readFileSync } from "node:fs";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({ proxyAwareFetch: mocks.fetch }));
-const { enrollZcodeProject } = await import("../../src/lib/zcode/provisioning.js");
+const { enrollZcodeProject, resolveZcodeBusinessSession } = await import("../../src/lib/zcode/provisioning.js");
 const { ZaiAuthFlow } = await import("../../src/lib/zcode/auth.js");
 const { prepareOriginalStartPlan } = await import("../../src/lib/zcode/plans.js");
 
 const reply = (data, code = 200) => new Response(JSON.stringify({ code, data }), { status: 200 });
 const info = { organizations: [{ organizationId: "org/id", projects: [{ projectId: "project/id" }] }] };
 const credentials = {
-  apiKey: "existing-key.secret", accessToken: "business-token",
+  apiKey: "existing-key.secret",
   providerSpecificData: { zcodeJwtToken: "permanent-login-jwt", zaiAccessToken: "account-oauth-token" },
 };
 
@@ -39,7 +39,7 @@ describe("native ZCode provisioning credential boundaries", () => {
     expect(mocks.fetch.mock.calls[3][1].body).toBe(JSON.stringify({ name: "zcode-api-key", usageScene: 1 }));
     expect(mocks.fetch.mock.calls[4][0]).toContain("/org%2Fid/projects/project%2Fid/api_keys/native%2Fkey/access_tokens");
     expect(mocks.fetch.mock.calls[4][1].headers.Authorization).toBe("Bearer fresh-business-token");
-    expect(mocks.fetch.mock.calls[4][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.16.3" }));
+    expect(mocks.fetch.mock.calls[4][1].body).toBe(JSON.stringify({ clientType: "zcode", clientVersion: "3.17.2" }));
     for (const [, options, actualProxy] of mocks.fetch.mock.calls) {
       expect(actualProxy).toBe(proxy);
       expect(options.redirect).toBe("error");
@@ -66,10 +66,68 @@ describe("native ZCode provisioning credential boundaries", () => {
     await expect(enrollZcodeProject(credentials)).rejects.toThrow(/^ZCode provisioning network request failed$/);
   });
 
-  it("requires the account OAuth token rather than falling back to its stored business token", async () => {
+  it("requires login credentials when neither a business nor OAuth token is present", async () => {
     await expect(enrollZcodeProject({ ...credentials, providerSpecificData: { zcodeJwtToken: "login" } }))
-      .rejects.toThrow("OAuth token is required");
+      .rejects.toThrow("OAuth login is required");
     expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("matches native 3.17.2 by validating and reusing a saved business token without OAuth exchange", async () => {
+    const saved = { ...credentials, accessToken: "saved-business-token" };
+    const before = structuredClone(saved);
+    mocks.fetch.mockResolvedValueOnce(reply(info))
+      .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "native-key" }]))
+      .mockResolvedValueOnce(reply({ enabled: true, accessToken: "discarded-project-token" }));
+    await expect(enrollZcodeProject(saved)).resolves.toEqual({ enrolled: true });
+    expect(saved).toEqual(before);
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(mocks.fetch.mock.calls[0][0]).toBe("https://api.z.ai/api/biz/customer/getCustomerInfo");
+    expect(mocks.fetch.mock.calls[0][1].headers.Authorization).toBe("saved-business-token");
+    expect(mocks.fetch.mock.calls.some(([url]) => url.endsWith("/auth/z/login"))).toBe(false);
+  });
+
+  it("can validate a saved business session without creating keys or project tokens", async () => {
+    mocks.fetch.mockResolvedValueOnce(reply(info));
+    const result = await resolveZcodeBusinessSession({ accessToken: "saved-business-token" });
+    expect(result.info).toEqual(info);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch.mock.calls[0][1].method).toBe("GET");
+  });
+
+  it("exchanges OAuth once only after a saved business token is explicitly rejected", async () => {
+    mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ code: 401 }), { status: 200 }))
+      .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
+      .mockResolvedValueOnce(reply(info));
+    const saved = { ...credentials, accessToken: "rejected-business-token" };
+    const before = structuredClone(saved);
+    const result = await resolveZcodeBusinessSession(saved);
+    expect(result.businessToken).toBe("fresh-business-token");
+    expect(mocks.fetch.mock.calls[1][1].body).toBe(JSON.stringify({ token: "account-oauth-token" }));
+    expect(saved).toEqual(before);
+  });
+
+  it.each([undefined, "0", "200"])("accepts native success envelopes with code %j", async (code) => {
+    mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ code, data: info }), { status: 200 }));
+    await expect(resolveZcodeBusinessSession({ accessToken: "saved-business-token" })).resolves.toMatchObject({ info });
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a reconnect instruction when OAuth exchange returns 500 without further calls", async () => {
+    mocks.fetch.mockResolvedValueOnce(reply({ token: "secret-canary" }, 500));
+    await expect(resolveZcodeBusinessSession(credentials)).rejects.toThrow("code 500); reconnect this account through Z.AI OAuth");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([403, 429, 500])("does not exchange credentials after an ambiguous business failure (HTTP %s)", async (status) => {
+    mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ code: status }), { status }));
+    await expect(resolveZcodeBusinessSession({ ...credentials, accessToken: "saved-business-token" })).rejects.toThrow("rejected");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([{}, { access_token: "unexpected-token" }])("stops without login on malformed saved-session customer data (%j)", async (data) => {
+    mocks.fetch.mockResolvedValueOnce(reply(data));
+    await expect(resolveZcodeBusinessSession({ ...credentials, accessToken: "saved-business-token" })).rejects.toThrow("Invalid Z.AI customer info");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 
   it.each([{}, { access_token: "" }, { access_token: 123 }, { accessToken: {} }])("stops on a missing fresh business token (%j)", async (data) => {
@@ -113,6 +171,29 @@ describe("native ZCode provisioning credential boundaries", () => {
     });
     expect(result.expiresAt).toBeUndefined();
     expect(fetch.mock.calls[3][1].body).toBe(JSON.stringify({ name: "zcode-api-key", usageScene: 1 }));
+  });
+
+  it("routes every OAuth credential exchange request through the selected proxy", async () => {
+    const proxy = { connectionProxyEnabled: true, connectionProxyUrl: "http://proxy.test:3128", strictProxy: true };
+    mocks.fetch
+      .mockResolvedValueOnce(reply({ access_token: "business-token" }))
+      .mockResolvedValueOnce(reply(info))
+      .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "native-key" }]))
+      .mockResolvedValueOnce(reply({ secretKey: "native-secret" }));
+    const result = await new ZaiAuthFlow(undefined, null, proxy).exchangeForConnection("zai-oauth-token", "login-jwt");
+    expect(result.apiKey).toBe("native-key.native-secret");
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+    for (const [, options, route] of mocks.fetch.mock.calls) {
+      expect(route).toBe(proxy);
+      expect(options).toMatchObject({ redirect: "error", strictTls: true });
+    }
+  });
+
+  it("sanitizes OAuth proxy transport errors without falling back", async () => {
+    mocks.fetch.mockRejectedValueOnce(new Error("http://user:proxy-secret@proxy.test:3128"));
+    await expect(new ZaiAuthFlow(undefined, null, { strictProxy: true }).exchangeForConnection("oauth", "jwt"))
+      .rejects.toThrow(/^Z.AI network request failed or timed out on the selected route$/);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("logs API stages and empty balance under one attempt without credential values", async () => {

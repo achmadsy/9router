@@ -3,6 +3,7 @@ import config from "./config.js";
 import { buildZcodeGuiRequestHeaders } from "./headers.js";
 import { prepareOriginalStartPlan } from "./plans.js";
 import { ZCODE_ZAI_DEFAULT_EXPIRES_IN } from "./constants.js";
+import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -132,7 +133,8 @@ function safeStartPlanReason(value, fallback) {
  * Mint coding-plan API key afterward for standard Anthropic endpoint use.
  */
 export class ZaiAuthFlow {
-  constructor(apiBaseUrl = ZCODE_API_BASE, pollToken = null) {
+  constructor(apiBaseUrl = ZCODE_API_BASE, pollToken = null, proxyOptions = null) {
+    this.proxyOptions = proxyOptions;
     this.apiBaseUrl = apiBaseUrl;
     this.pollToken = pollToken || crypto.randomBytes(32).toString("hex");
     this.provider = "zai";
@@ -144,12 +146,23 @@ export class ZaiAuthFlow {
     this._closed = false;
   }
 
+  async _fetch(url, options) {
+    // Preserve the legacy default for callers without an explicit route.
+    const requestOptions = { ...options, redirect: "error", signal: options?.signal || AbortSignal.timeout(15_000), strictTls: true };
+    try {
+      return await (this.proxyOptions ? proxyAwareFetch(url, requestOptions, this.proxyOptions) : fetch(url, requestOptions));
+    } catch {
+      // Proxy URLs can contain credentials; never surface transport messages.
+      throw new Error("Z.AI network request failed or timed out on the selected route");
+    }
+  }
+
   /**
    * Start CLI login flow. Returns server-provided authorize_url
    * (redirect_uri is zcode.z.ai's own callback — no local server).
    */
   async start() {
-    const res = await fetch(`${this.apiBaseUrl}/oauth/cli/init`, {
+    const res = await this._fetch(`${this.apiBaseUrl}/oauth/cli/init`, {
       method: "POST",
       headers: buildZcodeGuiRequestHeaders(
         {
@@ -165,7 +178,7 @@ export class ZaiAuthFlow {
     const json = safeJson(text);
     if (!res.ok || !json || typeof json.code !== "number" || json.code !== 0) {
       throw new Error(
-        `Z.AI OAuth init failed: ${res.status} ${json?.msg || text.slice(0, 300)}`
+        `Z.AI OAuth init failed (HTTP ${res.status}, code ${Number.isFinite(json?.code) ? json.code : "unknown"})`
       );
     }
 
@@ -231,7 +244,7 @@ export class ZaiAuthFlow {
 
     let res;
     try {
-      res = await fetch(
+      res = await this._fetch(
         `${this.apiBaseUrl}/oauth/cli/poll/${encodeURIComponent(this.flowId)}`,
         {
           method: "GET",
@@ -252,7 +265,7 @@ export class ZaiAuthFlow {
     const json = safeJson(text);
     if (!res.ok || !json || typeof json.code !== "number" || json.code !== 0) {
       throw new Error(
-        `Z.AI OAuth poll failed: ${res.status} ${json?.msg || text.slice(0, 300)}`
+        `Z.AI OAuth poll failed (HTTP ${res.status}, code ${Number.isFinite(json?.code) ? json.code : "unknown"})`
       );
     }
 
@@ -314,7 +327,7 @@ export class ZaiAuthFlow {
   }
 
   /** Match native enrollment, then verify only the original daily entitlement. */
-  async initializeStartPlan(credentials, proxyOptions = null) {
+  async initializeStartPlan(credentials, proxyOptions = this.proxyOptions) {
     try {
       const result = await prepareOriginalStartPlan(credentials, proxyOptions);
       console.info("[Start Plan] Original daily plan verified active", {
@@ -408,7 +421,7 @@ export class ZaiAuthFlow {
   }
 
   async _fetchBizToken(accessToken) {
-    const loginRes = await fetch("https://api.z.ai/api/auth/z/login", {
+    const loginRes = await this._fetch("https://api.z.ai/api/auth/z/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: accessToken }),
@@ -421,7 +434,7 @@ export class ZaiAuthFlow {
   }
 
   async _getOrgAndProject(bizToken) {
-    const infoRes = await fetch("https://api.z.ai/api/biz/customer/getCustomerInfo", {
+    const infoRes = await this._fetch("https://api.z.ai/api/biz/customer/getCustomerInfo", {
       method: "GET",
       headers: { Authorization: bizToken },
     });
@@ -453,8 +466,8 @@ export class ZaiAuthFlow {
   }
 
   async _getOrCreateApiKey(bizToken, orgId, projId) {
-    const keyUrl = `https://api.z.ai/api/biz/v1/organization/${orgId}/projects/${projId}/api_keys`;
-    const keysRes = await fetch(keyUrl, {
+    const keyUrl = `https://api.z.ai/api/biz/v1/organization/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projId)}/api_keys`;
+    const keysRes = await this._fetch(keyUrl, {
       method: "GET",
       headers: { Authorization: `Bearer ${bizToken}` },
     });
@@ -464,7 +477,7 @@ export class ZaiAuthFlow {
 
     let keyObj = keys.find((k) => k.name === "zcode-api-key");
     if (!keyObj) {
-      const createRes = await fetch(keyUrl, {
+      const createRes = await this._fetch(keyUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${bizToken}`,
@@ -480,7 +493,7 @@ export class ZaiAuthFlow {
     const apiKey = keyObj?.apiKey;
     if (!apiKey) throw new Error("Failed to obtain API Key");
 
-    const copyRes = await fetch(`${keyUrl}/copy/${encodeURIComponent(apiKey)}`, {
+    const copyRes = await this._fetch(`${keyUrl}/copy/${encodeURIComponent(apiKey)}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${bizToken}` },
     });

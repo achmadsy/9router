@@ -9,6 +9,7 @@ vi.mock("@/lib/usageDb.js", () => ({
 const { FORMATS } = await import("../../open-sse/translator/formats.js");
 const { translateNonStreamingResponse } = await import("../../open-sse/handlers/chatCore/nonStreamingHandler.js");
 const { handleForcedSSEToJson } = await import("../../open-sse/handlers/chatCore/sseToJsonHandler.js");
+const { saveRequestDetail, saveRequestUsage } = await import("@/lib/usageDb.js");
 
 // A chat.completion body as returned by a chat-native upstream (e.g. op-ericding)
 const CHAT_TOOL_BODY = {
@@ -136,6 +137,39 @@ describe("forced-SSE JSON path for a Responses-API client behind a chat upstream
       name: "shell",
       input: "{\"cmd\":\"pwd\"}"
     });
+  });
+
+  it.each([FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES])("preserves Responses cache details without adding them to input for %s", async (sourceFormat) => {
+    vi.clearAllMocks();
+    const usage = {
+      input_tokens: 550_010,
+      output_tokens: 50,
+      total_tokens: 550_060,
+      input_tokens_details: { cached_tokens: 550_000 },
+    };
+    const event = { type: "response.completed", response: {
+      id: "resp_cache", status: "completed", usage,
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] }],
+    } };
+    const ctx = sseCtx(sourceFormat, FORMATS.OPENAI_RESPONSES);
+    ctx.providerResponse = new Response(`event: response.completed\ndata: ${JSON.stringify(event)}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+    const result = await handleForcedSSEToJson(ctx);
+    expect(result.success).toBe(true);
+    const json = await result.response.json();
+    if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
+      expect(json.usage).toEqual(usage);
+    } else {
+      expect(json.usage.prompt_tokens).toBe(550_010);
+      expect(json.usage.prompt_tokens_details.cached_tokens).toBe(550_000);
+    }
+    expect(saveRequestDetail).toHaveBeenCalledWith(expect.objectContaining({
+      tokens: expect.objectContaining({ prompt_tokens: 550_010, cached_tokens: 550_000 }),
+    }));
+    expect(saveRequestUsage).toHaveBeenCalledWith(expect.objectContaining({
+      tokens: expect.objectContaining({ prompt_tokens: 550_010, cached_tokens: 550_000 }),
+    }));
   });
 
   it("still returns chat.completion for a plain chat client", async () => {

@@ -4,9 +4,11 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   nodes: new Map(),
   sessions: new Map(),
+  pool: { id: "pool-test", name: "Private pool", isActive: true, type: "http", proxyUrl: "http://user:proxy-password@proxy.test:8080" },
+  flowOptions: vi.fn(),
 }));
 vi.mock("next/server", () => ({ NextResponse: { json: (body, init) => ({ status: init?.status || 200, json: async () => body }) } }));
-vi.mock("@/models", () => ({ getProviderNodeById: async (id) => mocks.nodes.get(id), createProviderConnection: mocks.save }));
+vi.mock("@/models", () => ({ getProviderNodeById: async (id) => mocks.nodes.get(id), createProviderConnection: mocks.save, getProxyPoolById: async (id) => mocks.pool?.id === id ? mocks.pool : null }));
 vi.mock("@/lib/oauth/providers", () => ({ extractCodexAccountInfo: () => ({ email: "test@example.test" }) }));
 vi.mock("@/lib/oauth/services/cursor", () => ({ CursorService: class {
   async validateImportToken() { return { accessToken: "fake", machineId: "machine-test", expiresIn: 3600 }; }
@@ -19,9 +21,10 @@ vi.mock("@/lib/oauth/services/kiro", () => ({ KiroService: class {
   extractEmailFromJWT() { return "test@example.test"; }
 } }));
 vi.mock("@/lib/zcode/auth", () => ({ ZaiAuthFlow: class {
+  constructor(...args) { mocks.flowOptions(...args); }
   async start() { return { flowId: "flow-test", pollToken: "fake-poll", provider: "zai", authorizeUrl: "https://example.test" }; }
   async poll() { return { status: "ready", token: "fake-jwt", zai: { access_token: "fake" } }; }
-  async initializeStartPlan(token) { return mocks.initializeStartPlan(token); }
+  async initializeStartPlan(...args) { return mocks.initializeStartPlan(...args); }
   async exchangeForConnection() { return { accessToken: "fake-key", providerSpecificData: { username: "user-test", zcodeJwtToken: "fake-jwt" } }; }
 } }));
 vi.mock("@/lib/zcode/sessions", () => ({
@@ -58,7 +61,8 @@ const bodies = {
 };
 const req = (path, as, body = {}) => new Request(`http://localhost/api/oauth/${path}${as == null ? "" : `?as=${as}`}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 beforeEach(() => {
-  mocks.nodes.clear(); mocks.sessions.clear();
+  mocks.nodes.clear(); mocks.sessions.clear(); mocks.flowOptions.mockClear();
+  mocks.pool = { id: "pool-test", name: "Private pool", isActive: true, type: "http", proxyUrl: "http://user:proxy-password@proxy.test:8080" };
   for (const base of ["codex", "grok-cli", "cursor", "kiro", "glm"]) mocks.nodes.set(`${base}-clone-test`, { type: "provider-clone", baseProvider: base, prefix: `${base}-2`, name: "Duplicate" });
   mocks.initializeStartPlan.mockReset().mockResolvedValue({ code: 0 });
   mocks.save.mockReset().mockImplementation(async (data) => ({ id: "conn-test", ...data }));
@@ -93,7 +97,40 @@ describe("provider-specific clone authentication", () => {
     expect(await response.json()).toMatchObject({ startPlanInitialized: true });
     expect(mocks.initializeStartPlan).toHaveBeenCalledWith(expect.objectContaining({
       accessToken: "fake-key", providerSpecificData: expect.objectContaining({ zcodeJwtToken: "fake-jwt" }),
+    }), expect.objectContaining({ strictProxy: true }));
+  });
+
+  it("binds the selected pool through OAuth and Start Plan before saving the account", async () => {
+    const init = await initGlm(req("zai/init", "glm-clone-test", { networkRoute: "pool-test" }));
+    expect(init.status).toBe(200);
+    expect(JSON.stringify(await init.json())).not.toContain("proxy-password");
+    expect(mocks.sessions.get("flow-test").networkRoute).toBe("pool-test");
+    const response = await pollGlm(req("zai/poll", "glm-clone-test", {
+      flowId: "flow-test", initializeStartPlan: true, networkRoute: "direct",
     }));
+    expect(response.status).toBe(200);
+    expect(mocks.flowOptions.mock.calls.at(-1)[2]).toMatchObject({ proxyPoolId: "pool-test", strictProxy: true });
+    expect(mocks.initializeStartPlan).toHaveBeenCalledWith(expect.objectContaining({
+      providerSpecificData: expect.objectContaining({ proxyPoolId: "pool-test" }),
+    }), expect.objectContaining({ proxyPoolId: "pool-test", strictProxy: true }));
+    expect(mocks.save.mock.calls[0][0].providerSpecificData.proxyPoolId).toBe("pool-test");
+  });
+
+  it("refuses a selected pool that becomes inactive before poll without writing credentials", async () => {
+    await initGlm(req("zai/init", "glm", { networkRoute: "pool-test" }));
+    mocks.pool.isActive = false;
+    expect((await pollGlm(req("zai/poll", "glm", { flowId: "flow-test" }))).status).toBe(400);
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.initializeStartPlan).not.toHaveBeenCalled();
+  });
+
+  it("persists an explicit direct control-plane choice without changing inference proxy settings", async () => {
+    await initGlm(req("zai/init", "glm", { networkRoute: "direct" }));
+    const result = await pollGlm(req("zai/poll", "glm", { flowId: "flow-test", initializeStartPlan: true }));
+    expect(result.status).toBe(200);
+    expect(mocks.initializeStartPlan.mock.calls[0][1]).toEqual({ forceDirect: true, connectionProxyEnabled: false });
+    expect(mocks.save.mock.calls[0][0].providerSpecificData).toMatchObject({ zaiPlanNetworkRoute: "direct" });
+    expect(mocks.save.mock.calls[0][0].providerSpecificData.proxyPoolId).toBeUndefined();
   });
 
   it("saves GLM credentials when Start Plan initialization fails", async () => {

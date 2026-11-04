@@ -231,9 +231,13 @@ function processSSEMessage(msg, state) {
     state.status = "completed";
     const usage = data.response?.usage;
     if (usage && typeof usage === "object") {
-      state.usage.input_tokens = usage.input_tokens || 0;
-      state.usage.output_tokens = usage.output_tokens || 0;
-      state.usage.total_tokens = usage.total_tokens || 0;
+      // Retain cache/reasoning detail counters when collapsing the stream.
+      state.usage = {
+        ...usage,
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+        total_tokens: usage.total_tokens || 0,
+      };
     }
     if (Array.isArray(data.response?.output)) {
       data.response.output.forEach((item, index) => {

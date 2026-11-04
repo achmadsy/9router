@@ -14,7 +14,7 @@ export function planInspectionKey(jwt, proxyOptions, accountScope = "") {
     accountScope, jwt, zcodeDeviceMidForAccount(jwt, readZcodeDeviceMid() || ensureZcodeDeviceMid()) || null,
     config.appVersion, config.userAgent, config.startPlanBalanceUrl,
     config.startPlanPreviewUrl, config.marketingTouchUrl,
-    ...["proxyPoolId", "connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy", "strictProxy", "enabled", "url", "noProxy", "vercelRelayUrl"]
+    ...["proxyPoolId", "connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy", "strictProxy", "forceDirect", "enabled", "url", "noProxy", "vercelRelayUrl"]
       .map((key) => proxyOptions?.[key] ?? null),
     ...["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]
       .map((key) => process.env[key] || null),

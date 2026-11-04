@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { getProviderConnectionById, getProviderConnections } from "@/models";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveZaiNetwork, validateZaiNetworkRoute, zaiCaptchaProxyUrl } from "@/lib/zcode/network";
 import { claimZaiPlan, hasActiveStartPlan, inspectZaiPlans, invalidateZaiPlanInspection, prepareOriginalStartPlan, summarizePlanError } from "@/lib/zcode/plans";
 import { planCooldownError, planErrorDetails, planRequestCoordinator } from "@/lib/zcode/planRequests";
 import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
@@ -17,8 +17,8 @@ function accountLabel(connection, index = 0) {
   return connection.name || connection.email || `Account ${index + 1}`;
 }
 
-async function resolvePlanProxy(connection) {
-  return resolveConnectionProxyConfig(connection.providerSpecificData, { excludeRelay: true });
+async function resolvePlanProxy(connection, route = "account") {
+  return resolveZaiNetwork(route, connection.providerSpecificData);
 }
 
 function planDiagnostics(batchId, connectionId = null) {
@@ -30,7 +30,7 @@ function planDiagnostics(batchId, connectionId = null) {
   };
 }
 
-async function inspectConnection(connection, index, signal, inspectionId) {
+async function inspectConnection(connection, index, signal, inspectionId, route) {
   const diagnostics = planDiagnostics(inspectionId, connection.id);
   const base = {
     connectionId: connection.id,
@@ -52,7 +52,10 @@ async function inspectConnection(connection, index, signal, inspectionId) {
   }
 
   try {
-    const plans = await inspectZaiPlans(jwt, await resolvePlanProxy(connection), undefined, {
+    const { proxyOptions, network } = await resolvePlanProxy(connection, route);
+    base.network = network;
+    diagnostics.event("network", "selected", network);
+    const plans = await inspectZaiPlans(jwt, proxyOptions, undefined, {
       includeCampaigns: true, coordinator: planRequestCoordinator,
       cacheScope: `${connection.provider}:${connection.id}`, signal, diagnostics,
     });
@@ -119,21 +122,27 @@ export async function GET(_request, { params }) {
     const totalPages = Math.max(1, Math.ceil(matching.length / pageSize));
     const page = Math.min(totalPages, Math.max(1, Math.floor(requestedPage)));
     const visible = matching.slice((page - 1) * pageSize, page * pageSize);
+    const route = validateZaiNetworkRoute(url.searchParams.get("networkRoute") ?? "account");
     const inspectionId = randomUUID();
     const inspect = url.searchParams.get("inspect") === "true";
     const connectionId = url.searchParams.get("connectionId");
-    const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, (connection, index) =>
-      inspect && (!connectionId || connection.id === connectionId)
-        ? inspectConnection(connection, index, _request.signal, inspectionId)
-        : ({
+    const accounts = await mapConcurrent(visible, INSPECTION_CONCURRENCY, async (connection, index) => {
+      if (inspect && (!connectionId || connection.id === connectionId)) {
+        return inspectConnection(connection, index, _request.signal, inspectionId, route);
+      }
+      let network;
+      try { network = (await resolvePlanProxy(connection, route)).network; }
+      catch (error) { network = { route, source: "unavailable", label: error.message }; }
+      return ({
         connectionId: connection.id,
         name: accountLabel(connection, index),
         email: connection.email || null,
         isActive: connection.isActive !== false,
         eligible: !!connection.providerSpecificData?.zcodeJwtToken?.trim(),
-        inspectionStatus: "unchecked",
+        inspectionStatus: "unchecked", network,
         activePlans: [], offers: [], balances: [],
-      }));
+      });
+    });
     return NextResponse.json({
       providerId: id,
       totalAccounts: connections.length,
@@ -146,7 +155,7 @@ export async function GET(_request, { params }) {
   } catch (error) {
     return NextResponse.json(
       { error: summarizePlanError(error, "Failed to retrieve account plans") },
-      { status: 500 }
+      { status: error.status === 400 ? 400 : 500 }
     );
   }
 }
@@ -165,6 +174,7 @@ export async function POST(request, { params }) {
         ? [body.connectionId.trim()]
         : [];
     const planId = typeof body.planId === "string" ? body.planId.trim() : "";
+    const route = validateZaiNetworkRoute(body.networkRoute ?? "account");
 
     const prepareOriginal = body.action === "prepare_original_start_plan";
     if ((!planId && !prepareOriginal) || connectionIds.length === 0) {
@@ -210,11 +220,11 @@ export async function POST(request, { params }) {
       const cacheScope = `${connection.provider}:${connection.id}`;
       try {
         // CloakBrowser captcha solver must share the claim's egress IP.
-        proxyOptions = await resolvePlanProxy(connection);
+        const selected = await resolvePlanProxy(connection, route);
+        proxyOptions = selected.proxyOptions;
+        diagnostics.event("network", "selected", selected.network);
         invalidateZaiPlanInspection(jwt, proxyOptions, cacheScope);
-        const captchaProxyUrl = proxyOptions?.connectionProxyEnabled === true
-          ? String(proxyOptions.connectionProxyUrl || "").trim()
-          : "";
+        const captchaProxyUrl = zaiCaptchaProxyUrl(proxyOptions);
         const claimed = prepareOriginal
           ? await prepareOriginalStartPlan(connection, proxyOptions, undefined, { coordinator: planRequestCoordinator, accountScope: cacheScope })
           : await claimZaiPlan(jwt, planId, proxyOptions, undefined, captchaProxyUrl, diagnostics, { coordinator: planRequestCoordinator, accountScope: cacheScope });
@@ -278,7 +288,7 @@ export async function POST(request, { params }) {
     console.warn("[Plan Management] request: failed", { reason, ...planErrorDetails(error) });
     return NextResponse.json(
       { error: reason },
-      { status: 500 }
+      { status: error.status === 400 ? 400 : 500 }
     );
   }
 }

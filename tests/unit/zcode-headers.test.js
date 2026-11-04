@@ -39,10 +39,10 @@ describe("zcode headers", () => {
     expect(headers["Content-Type"]).toBe("application/json");
   });
 
-  it("builds ZCode 3.16.3 headers with native fingerprint", () => {
+  it("builds ZCode 3.17.2 headers with native fingerprint", () => {
     const headers = buildZcodeCodingPlanHeaders(credentials);
-    expect(headers["User-Agent"]).toBe("ZCode/3.16.3");
-    expect(headers["X-ZCode-App-Version"]).toBe("3.16.3");
+    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
+    expect(headers["X-ZCode-App-Version"]).toBe("3.17.2");
     expect(headers["anthropic-version"]).toBe("2023-06-01");
     expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
     expect(headers["X-Release-Channel"]).toBe("production");
@@ -55,7 +55,7 @@ describe("zcode headers", () => {
 
   it("normalizes source headers and conditionally emits optional fields", () => {
     const headers = buildZcodeSourceHeadersFromContext({
-      appVersion: " 3.16.3 ",
+      appVersion: " 3.17.2 ",
       arch: " x64 ",
       clientLanguage: "in\nvalid",
       clientTimezone: " Europe/Berlin ",
@@ -69,8 +69,8 @@ describe("zcode headers", () => {
 
     expect(headers).toMatchObject({
       "HTTP-Referer": "https://example.test",
-      "User-Agent": "ZCode/3.16.3",
-      "X-ZCode-App-Version": "3.16.3",
+      "User-Agent": "ZCode/3.17.2",
+      "X-ZCode-App-Version": "3.17.2",
       "X-Title": "Z Code@electron",
       "X-Platform": "linux-x64",
       "X-Release-Channel": "production",
@@ -104,8 +104,8 @@ describe("zcode headers", () => {
     const headers = buildZcodeBalanceHeaders("jwt-token");
 
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["User-Agent"]).toBe("ZCode/3.16.3");
-    expect(headers["X-ZCode-App-Version"]).toBe("3.16.3");
+    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
+    expect(headers["X-ZCode-App-Version"]).toBe("3.17.2");
     expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
     expect(headers["X-Release-Channel"]).toBe("production");
     expect(headers["X-Device-Mid"]).toBeTruthy();
@@ -144,7 +144,7 @@ describe("zcode headers", () => {
     expect(headers["X-Aliyun-Captcha-Verify-Param"]).toBe("verify-123");
     expect(headers["X-Aliyun-Captcha-Verify-Region"]).toBeUndefined();
     expect(headers["anthropic-version"]).toBe("2023-06-01");
-    expect(headers["User-Agent"]).toBe("ZCode/3.16.3");
+    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
   });
 
   it("applyZcodeApiKeyHeaders strips Claude beta headers", () => {

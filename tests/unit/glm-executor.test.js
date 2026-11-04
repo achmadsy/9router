@@ -71,8 +71,8 @@ describe("GlmExecutor", () => {
     );
     expect(headers.Authorization).toBe("Bearer jwt-token");
     expect(headers["x-api-key"]).toBeUndefined();
-    expect(headers["User-Agent"]).toBe("ZCode/3.16.3");
-    expect(headers["X-ZCode-App-Version"]).toBe("3.16.3");
+    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
+    expect(headers["X-ZCode-App-Version"]).toBe("3.17.2");
     expect(headers["X-ZCode-Agent"]).toBe("glm");
     expect(headers["X-Title"]).toBe("Z Code@electron");
     expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
@@ -112,8 +112,8 @@ describe("GlmExecutor", () => {
     );
     expect(headers["x-api-key"]).toBe("org.key.secret");
     expect(headers.Authorization).toBeUndefined();
-    expect(headers["User-Agent"]).toBe("ZCode/3.16.3");
-    expect(headers["X-ZCode-App-Version"]).toBe("3.16.3");
+    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
+    expect(headers["X-ZCode-App-Version"]).toBe("3.17.2");
     expect(headers["X-ZCode-Agent"]).toBe("glm");
     expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
     expect(headers["anthropic-version"]).toBe("2023-06-01");
@@ -137,7 +137,7 @@ describe("GlmExecutor", () => {
     });
     expect(headers["x-api-key"]).toBe("org.key.secret");
     expect(headers["X-Aliyun-Captcha-Verify-Param"]).toBe("verify-abc");
-    expect(headers["User-Agent"]).toBe("ZCode/3.16.3");
+    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
     expect(headers["Anthropic-Beta"]).toBeUndefined();
     expect(headers["x-zcode-trace-id"]).toBeUndefined();
   });

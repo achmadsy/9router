@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZaiAuthFlow } from "@/lib/zcode/auth";
 import { createZaiSession } from "@/lib/zcode/sessions";
 import { resolveSavedProviderId, readAsParam } from "@/lib/oauth/utils/savedProvider";
+import { resolveZaiNetwork, validateZaiNetworkRoute } from "@/lib/zcode/network";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +14,10 @@ export const dynamic = "force-dynamic";
 export async function POST(request) {
   try {
     const saved = await resolveSavedProviderId(request ? readAsParam(request) : null, "glm");
-    const flow = new ZaiAuthFlow();
+    const body = await request.json().catch(() => ({}));
+    const networkRoute = validateZaiNetworkRoute(body.networkRoute ?? "account");
+    const { proxyOptions, network } = await resolveZaiNetwork(networkRoute);
+    const flow = new ZaiAuthFlow(undefined, null, proxyOptions);
     const init = await flow.start();
 
     await createZaiSession({
@@ -21,6 +25,7 @@ export async function POST(request) {
       pollToken: init.pollToken,
       provider: init.provider,
       targetProviderId: saved.provider,
+      networkRoute,
       expiresAtMs: flow.expiresAt || undefined,
     });
 
@@ -29,6 +34,7 @@ export async function POST(request) {
       authorizeUrl: init.authorizeUrl,
       provider: init.provider,
       pollAfterMs: flow.nextPollDelayMs,
+      network,
     });
   } catch (error) {
     console.error("[Z.AI OAuth] init error:", error);

@@ -1,5 +1,5 @@
 const apiBaseUrl = process.env.ZCODE_API_BASE_URL || "https://zcode.z.ai/api/v1";
-const appVersion = process.env.ZCODE_APP_VERSION || "3.16.3";
+const appVersion = process.env.ZCODE_APP_VERSION || "3.17.2";
 
 const RELEASE_TARGETS = {
   darwin: "darwin",

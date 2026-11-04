@@ -9,6 +9,7 @@ async function requestBusiness(url, options, proxyOptions, fetchImpl, diagnostic
     response = await fetchImpl(url, {
       ...options,
       redirect: "error",
+      strictTls: true,
       signal: AbortSignal.timeout(15_000),
     }, proxyOptions);
   } catch (error) {
@@ -17,7 +18,10 @@ async function requestBusiness(url, options, proxyOptions, fetchImpl, diagnostic
     throw new Error("ZCode provisioning network request failed");
   }
   const json = await response.json().catch(() => null);
-  const accepted = response.ok && !!json && json.success !== false && [0, 200].includes(json.code);
+  // Native 3.17.2 accepts omitted codes and numeric/string 0 or 200.
+  const code = json?.code;
+  const successfulCode = code == null || [0, 200, "0", "200"].includes(code);
+  const accepted = response.ok && !!json && json.success !== false && successfulCode;
   diagnostics?.event(step, accepted ? "response" : "failed", {
     endpoint, httpStatus: response.status,
     providerCode: Number.isFinite(json?.code) ? json.code : null,
@@ -25,30 +29,68 @@ async function requestBusiness(url, options, proxyOptions, fetchImpl, diagnostic
   });
   if (!accepted) {
     // Never propagate upstream bodies: these endpoints return credentials.
-    throw new Error(`ZCode provisioning rejected (HTTP ${response.status}, code ${Number.isFinite(json?.code) ? json.code : "unknown"})`);
+    const safeCode = (typeof code === "number" || typeof code === "string") && Number.isFinite(Number(code)) ? Number(code) : null;
+    throw Object.assign(new Error(`ZCode provisioning rejected (HTTP ${response.status}, code ${safeCode ?? "unknown"})`), {
+      httpStatus: response.status,
+      providerCode: safeCode,
+      authenticationRejected: response.status === 401 || code === 401 || code === "401",
+    });
   }
   return json.data;
 }
 
-/** Native Coding Plan enrollment. The expiring project token is never persisted or returned. */
-export async function enrollZcodeProject(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
+const customerInfoEndpoint = "https://api.z.ai/api/biz/customer/getCustomerInfo";
+
+/** Native persists the exchanged business token, not the short-lived OAuth
+ * source token. Validate that saved credential before considering re-exchange.
+ * This read-only helper never creates keys, enrolls projects or changes storage.
+ */
+export async function resolveZcodeBusinessSession(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
   const oauthToken = credentials?.providerSpecificData?.zaiAccessToken?.trim();
-  if (!oauthToken) throw new Error("Z.AI OAuth token is required for fresh business login; reconnect this account");
+  const saved = typeof credentials?.accessToken === "string" ? credentials.accessToken.trim() : "";
+  const readInfo = (token) => requestBusiness(customerInfoEndpoint, {
+    method: "GET",
+    headers: { Authorization: token, "Content-Type": "application/json" },
+  }, proxyOptions, fetchImpl, diagnostics, "customer-info", customerInfoEndpoint);
+
+  if (saved && saved !== oauthToken && saved !== credentials?.providerSpecificData?.zcodeJwtToken) {
+    diagnostics?.event("business-session", "validating", { source: "saved-business-token" });
+    try {
+      const info = await readInfo(saved);
+      if (!info || !Array.isArray(info.organizations)) throw new Error("Invalid Z.AI customer info response; preparation stopped");
+      diagnostics?.event("business-session", "validated", { source: "saved-business-token", credentialsChanged: false });
+      return { businessToken: saved, info };
+    } catch (error) {
+      // Only an explicit authentication rejection permits credential exchange.
+      // Network/429/malformed responses must not trigger another login attempt.
+      if (!error.authenticationRejected) throw error;
+      diagnostics?.event("business-session", "rejected", { source: "saved-business-token" });
+    }
+  }
+  if (!oauthToken) throw new Error("Z.AI OAuth login is required; reconnect this account to renew the business session");
   const loginEndpoint = "https://api.z.ai/api/auth/z/login";
-  const login = await requestBusiness(loginEndpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: oauthToken }),
-  }, proxyOptions, fetchImpl, diagnostics, "business-login", loginEndpoint);
+  let login;
+  try {
+    login = await requestBusiness(loginEndpoint, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: oauthToken }),
+    }, proxyOptions, fetchImpl, diagnostics, "business-login", loginEndpoint);
+  } catch (error) {
+    if (error.httpStatus === 429 || !error.httpStatus) throw error;
+    throw new Error(`Z.AI business login was rejected (HTTP ${error.httpStatus}, code ${error.providerCode ?? "unknown"}); reconnect this account through Z.AI OAuth`);
+  }
   const businessToken = (typeof login?.access_token === "string" ? login.access_token.trim() : "")
     || (typeof login?.accessToken === "string" ? login.accessToken.trim() : "");
-  if (!businessToken) throw new Error("Z.AI business login response is missing access_token");
+  if (!businessToken) throw new Error("Z.AI business login response is missing access_token; reconnect this account");
   diagnostics?.event("business-login", "result", { tokenReturned: true, persisted: false });
+  const info = await readInfo(businessToken);
+  if (!info || !Array.isArray(info.organizations)) throw new Error("Invalid Z.AI customer info response; preparation stopped");
+  return { businessToken, info };
+}
 
-  const info = await requestBusiness("https://api.z.ai/api/biz/customer/getCustomerInfo", {
-    method: "GET",
-    headers: { Authorization: businessToken, "Content-Type": "application/json" },
-  }, proxyOptions, fetchImpl, diagnostics, "customer-info", "https://api.z.ai/api/biz/customer/getCustomerInfo");
+/** Native Coding Plan enrollment. The expiring project token is never persisted or returned. */
+export async function enrollZcodeProject(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
+  const { businessToken, info } = await resolveZcodeBusinessSession(credentials, proxyOptions, fetchImpl, diagnostics);
   const organizations = Array.isArray(info?.organizations) ? info.organizations : [];
   const organization = organizations.find((org) => org.organizationName?.includes("默认机构") && org.projects?.length)
     || organizations.find((org) => org.projects?.length);

@@ -74,6 +74,7 @@ export async function requestBilling(
       {
         ...requestOptions,
         redirect: "error",
+        strictTls: true,
         headers: {
           ...buildZcodeBillingHeaders(jwt, url.toString()),
           ...requestOptions.headers,

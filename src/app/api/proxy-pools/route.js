@@ -55,6 +55,11 @@ export async function GET(request) {
 
     const proxyPools = await getProxyPools(filter);
 
+    // Selectors need only identity/type, never proxy URLs or embedded passwords.
+    if (searchParams.get("metadataOnly") === "true") {
+      return NextResponse.json({ proxyPools: proxyPools.map(({ id, name, type }) => ({ id, name, type })) });
+    }
+
     if (!includeUsage) {
       return NextResponse.json({ proxyPools });
     }

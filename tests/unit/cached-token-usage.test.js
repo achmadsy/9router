@@ -61,6 +61,56 @@ describe("canonicalizeUsage", () => {
     expect(out.cached_tokens).toBe(200);
   });
 
+  it("does not add cache again to mixed translator state", () => {
+    const out = canonicalizeUsage({
+      prompt_tokens: 550_010,
+      input_tokens: 10,
+      completion_tokens: 50,
+      output_tokens: 50,
+      cache_read_input_tokens: 550_000,
+    });
+    expect(out.prompt_tokens).toBe(550_010);
+    expect(out.cached_tokens).toBe(550_000);
+    expect(canonicalizeUsage(out)).toEqual(out);
+  });
+
+  it.each([
+    { prompt_tokens_details: { cached_tokens: 550_000 } },
+    { input_tokens_details: { cached_tokens: 550_000 } },
+  ])("recognizes nested cache details alongside native aliases: %j", (details) => {
+    const out = canonicalizeUsage({
+      prompt_tokens: 550_030,
+      completion_tokens: 50,
+      cache_read_input_tokens: 550_000,
+      cache_creation_input_tokens: 20,
+      ...details,
+    });
+    expect(out.prompt_tokens).toBe(550_030);
+    expect(out.cached_tokens).toBe(550_000);
+    expect(out.cache_creation_input_tokens).toBe(20);
+    expect(canonicalizeUsage(out)).toEqual(out);
+  });
+
+  it("does not fold cache creation twice when buildUsage reports only a cache write", () => {
+    const out = canonicalizeUsage({
+      ...buildUsage({ promptTokens: 600, completionTokens: 20, totalTokens: 620, cacheCreationTokens: 500 }),
+      cache_creation_input_tokens: 500,
+    });
+    expect(out.prompt_tokens).toBe(600);
+    expect(out.cached_tokens).toBe(0);
+    expect(out.cache_creation_input_tokens).toBe(500);
+  });
+
+  it("handles raw Responses usage without treating nested cache as extra input", () => {
+    const out = canonicalizeUsage({
+      input_tokens: 550_010,
+      output_tokens: 50,
+      input_tokens_details: { cached_tokens: 550_000 },
+    });
+    expect(out.prompt_tokens).toBe(550_010);
+    expect(out.cached_tokens).toBe(550_000);
+  });
+
   it("handles no-cache usage", () => {
     const out = canonicalizeUsage({ prompt_tokens: 100, completion_tokens: 50 });
     expect(out.prompt_tokens).toBe(100);

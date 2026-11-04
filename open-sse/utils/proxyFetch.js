@@ -336,6 +336,19 @@ async function createBypassRequest(parsedUrl, realIP, options) {
 export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   const targetUrl = typeof url === "string" ? url : url.toString();
 
+  // Explicit caller-selected direct mode must bypass both account and env
+  // proxies. Never infer it from connectionProxyEnabled:false (legacy callers
+  // still expect environment proxies in that case). Reject contradictory policy.
+  if (proxyOptions?.forceDirect === true) {
+    if (proxyOptions.strictProxy === true || proxyOptions.proxyPoolId
+        || proxyOptions.enabled === true || proxyOptions.connectionProxyEnabled === true
+        || normalizeString(proxyOptions.url ?? proxyOptions.connectionProxyUrl)
+        || normalizeString(proxyOptions.vercelRelayUrl)) {
+      throw new Error("[ProxyFetch] Direct mode conflicts with configured proxy policy");
+    }
+    return fetchWithTlsFallback(url, options, null);
+  }
+
   // Vercel relay: forward request via relay headers
   const vercelRelayUrl = normalizeString(proxyOptions?.vercelRelayUrl);
   if (vercelRelayUrl) {

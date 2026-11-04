@@ -54,6 +54,20 @@ function restoreToolName(stateOrData, name) {
   return map && typeof map.get === "function" && map.has(raw) ? map.get(raw) : raw;
 }
 
+function toClaudeUsage(usage) {
+  const prompt = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0;
+  const cacheRead = usage.cache_read_input_tokens ?? usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens;
+  const cacheCreation = usage.cache_creation_input_tokens ?? usage.prompt_tokens_details?.cache_creation_tokens;
+  const result = {
+    // The executor emits an OpenAI-inclusive prompt; Claude input excludes cache.
+    input_tokens: Math.max(0, prompt - (typeof cacheRead === "number" ? cacheRead : 0) - (typeof cacheCreation === "number" ? cacheCreation : 0)),
+    output_tokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : 0,
+  };
+  if (typeof cacheRead === "number") result.cache_read_input_tokens = cacheRead;
+  if (typeof cacheCreation === "number") result.cache_creation_input_tokens = cacheCreation;
+  return result;
+}
+
 export function kiroToClaudeResponse(chunk, state) {
   // KiroExecutor emits chat.completion.chunk objects; tolerate string chunks
   // by attempting a parse (defensive — the direct path is always objects).
@@ -76,22 +90,7 @@ export function kiroToClaudeResponse(chunk, state) {
 
   // Track usage if present on the chunk.
   if (data.usage && typeof data.usage === "object") {
-    const promptTokens =
-      typeof data.usage.prompt_tokens === "number" ? data.usage.prompt_tokens : 0;
-    const outputTokens =
-      typeof data.usage.completion_tokens === "number"
-        ? data.usage.completion_tokens
-        : 0;
-    state.usage = { input_tokens: promptTokens, output_tokens: outputTokens };
-    // Claude clients read cache_read/cache_creation to price a turn and to size
-    // their prompt cache. Both spellings are accepted because the Kiro executor
-    // emits the Chat shape and passthrough responses use the nested details form.
-    const cacheRead = data.usage.cache_read_input_tokens
-      ?? data.usage.prompt_tokens_details?.cached_tokens;
-    const cacheCreation = data.usage.cache_creation_input_tokens
-      ?? data.usage.prompt_tokens_details?.cache_creation_tokens;
-    if (typeof cacheRead === "number") state.usage.cache_read_input_tokens = cacheRead;
-    if (typeof cacheCreation === "number") state.usage.cache_creation_input_tokens = cacheCreation;
+    state.usage = toClaudeUsage(data.usage);
   }
 
   // First chunk → emit message_start.
@@ -268,17 +267,7 @@ export function kiroToClaudeNonStreaming(data) {
     content,
     model: data?.model || "kiro",
     stop_reason: convertFinishReason(choice?.finish_reason || "stop"),
-    usage: {
-      input_tokens: usage.prompt_tokens || 0,
-      output_tokens: usage.completion_tokens || 0,
-      // Same cache preservation as the streaming path above.
-      ...(typeof (usage.cache_read_input_tokens ?? usage.prompt_tokens_details?.cached_tokens) === "number"
-        ? { cache_read_input_tokens: usage.cache_read_input_tokens ?? usage.prompt_tokens_details.cached_tokens }
-        : {}),
-      ...(typeof (usage.cache_creation_input_tokens ?? usage.prompt_tokens_details?.cache_creation_tokens) === "number"
-        ? { cache_creation_input_tokens: usage.cache_creation_input_tokens ?? usage.prompt_tokens_details.cache_creation_tokens }
-        : {}),
-    },
+    usage: toClaudeUsage(usage),
   };
 }
 

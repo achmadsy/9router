@@ -75,6 +75,56 @@ beforeEach(() => {
 });
 
 describe("Z.AI plan operations", () => {
+  it("reports the assigned route without sending upstream inspection requests", async () => {
+    mocks.pools.own = { id: "own", name: "Account pool", isActive: true, proxyUrl: "http://user:secret-canary@proxy.test:3128" };
+    mocks.connections = [{ id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "jwt", proxyPoolId: "own" } }];
+    const data = await (await GET(new Request("http://localhost/api/providers/glm/zai-plans"), { params: Promise.resolve({ id: "glm" }) })).json();
+    expect(data.accounts[0].network).toMatchObject({ source: "pool", poolId: "own", label: "Proxy pool: Account pool" });
+    expect(JSON.stringify(data)).not.toMatch(/secret-canary|proxy.test/);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["direct", "alternative"])("uses the explicit %s route for all plan queries without changing account settings", async (networkRoute) => {
+    mocks.pools.own = { id: "own", name: "Account pool", isActive: true, proxyUrl: "http://own.test:3128" };
+    mocks.pools.alternative = { id: "alternative", name: "Other pool", isActive: true, proxyUrl: "http://other.test:3128" };
+    const account = { id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "jwt", proxyPoolId: "own" } };
+    mocks.connections = [account];
+    const before = structuredClone(account);
+    mocks.fetch.mockImplementation(async (url, _options, proxy) => {
+      if (networkRoute === "direct") expect(proxy).toMatchObject({ forceDirect: true, connectionProxyEnabled: false });
+      else expect(proxy).toMatchObject({ proxyPoolId: "alternative", connectionProxyUrl: "http://other.test:3128", strictProxy: true });
+      return response({ code: 0, data: String(url).includes("marketing") ? { deliveries: [] } : { plans: [], balances: [] } });
+    });
+    const result = await GET(new Request(`http://localhost/api/providers/glm/zai-plans?inspect=true&networkRoute=${networkRoute}`), { params: Promise.resolve({ id: "glm" }) });
+    expect(result.status).toBe(200);
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+    expect(account).toEqual(before);
+  });
+
+  it("uses an explicit direct route for Add Start Plan without modifying the account proxy", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const connection = { id: "one", provider: "glm", providerSpecificData: { zcodeJwtToken: "login-jwt", zaiAccessToken: "oauth-token", proxyPoolId: "unavailable-account-pool" } };
+    mocks.connections = [connection];
+    const before = structuredClone(connection);
+    mocks.fetch
+      .mockResolvedValueOnce(response({ code: 200, data: { access_token: "fresh-business-token" } }))
+      .mockResolvedValueOnce(response({ code: 200, data: { organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] } }))
+      .mockResolvedValueOnce(response({ code: 200, data: [{ name: "zcode-api-key", apiKey: "existing-key" }] }))
+      .mockResolvedValueOnce(response({ code: 200, data: { enabled: true, accessToken: "discarded-project-token" } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "zcode-v3-start-plan-0817", status: "active" }], balances: [] } }));
+    const result = await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionIds: ["one"], action: "prepare_original_start_plan", networkRoute: "direct" }),
+    }), { params: Promise.resolve({ id: "glm" }) });
+    expect((await result.json()).succeeded).toBe(1);
+    expect(mocks.fetch).toHaveBeenCalledTimes(5);
+    for (const [, options, proxy] of mocks.fetch.mock.calls) {
+      expect(proxy).toEqual({ forceDirect: true, connectionProxyEnabled: false });
+      expect(options.strictTls).toBe(true);
+    }
+    expect(connection).toEqual(before);
+  });
+
   it("retrieves balance and account-specific offers without raw response fields", async () => {
     mocks.fetch
       .mockResolvedValueOnce(response({
@@ -497,7 +547,6 @@ describe("Z.AI plan management API", () => {
     mocks.connections = [connection];
     const before = structuredClone(connection);
     mocks.fetch
-      .mockResolvedValueOnce(response({ code: 200, data: { access_token: "fresh-business-token" } }))
       .mockResolvedValueOnce(response({ code: 200, data: { organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] } }))
       .mockResolvedValueOnce(response({ code: 200, data: [{ name: "zcode-api-key", apiKey: "key" }] }))
       .mockResolvedValueOnce(response({ code: 200, data: { enabled: true, accessToken: "five-hour-project-token", expiresIn: 18000 } }))
@@ -510,7 +559,8 @@ describe("Z.AI plan management API", () => {
     expect(body.results[0]).toMatchObject({ ok: true, planId: "zcode-v3-start-plan-0817" });
     expect(connection).toEqual(before);
     expect(JSON.stringify(body)).not.toMatch(/permanent-jwt|business-token|five-hour-project-token|existing-key/);
-    expect(mocks.fetch.mock.calls[4][1].headers.Authorization).toBe("Bearer permanent-jwt");
+    expect(mocks.fetch.mock.calls[3][1].headers.Authorization).toBe("Bearer permanent-jwt");
+    expect(mocks.fetch.mock.calls.some(([url]) => url.endsWith("/auth/z/login"))).toBe(false);
     expect(mocks.fetch.mock.calls.some(([url]) => url.includes("/billing/claim"))).toBe(false);
   });
 

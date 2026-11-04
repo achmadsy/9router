@@ -9,6 +9,7 @@ import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { isClaudeClassifierRequest, openAICompletionToClaudeMessage } from "./claudeMessageResponse.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
 import { resolveRuntimeProviderId } from "../../providers/clones.js";
+import { canonicalizeUsage } from "../../utils/usageTracking.js";
 import { extractReasoningText } from "../../translator/concerns/reasoning.js";
 import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
 
@@ -269,11 +270,9 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         await onRequestSuccess();
       }
 
-      // Same cache-inclusive total for the recorded detail, so the DB and the
-      // client-facing usage can never disagree.
-      const inTokensForLog = (usage.input_tokens || 0)
-        + (usage.cache_read_input_tokens || usage.cached_tokens || 0)
-        + (usage.cache_creation_input_tokens || 0);
+      // Responses input_tokens includes cache. Normalize once for both the
+      // detail record and translated client response; never add cache again.
+      const tokens = canonicalizeUsage(usage);
       const { msgItem, textContent } = pickAssistantMessageForChatCompletion(jsonResponse.output);
       const reasoningText = reasoningTextFromResponsesOutput(jsonResponse.output);
       const totalLatency = Date.now() - requestStartTime;
@@ -285,7 +284,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       saveRequestDetail(buildRequestDetail({
         ...ctx,
         latency: { ttft: totalLatency, total: totalLatency },
-        tokens: { prompt_tokens: inTokensForLog, completion_tokens: usage.output_tokens || 0 },
+        tokens,
         response: {
           content: textContent,
           thinking: reasoningText || null,
@@ -301,16 +300,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         return { success: true, response: new Response(JSON.stringify(restoredResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
-      // Build client-format response.
-      // input_tokens EXCLUDES cached tokens on cache-capable upstreams, so summing
-      // only input+output under-reports prompt_tokens — measured: 2012 reported
-      // where the real prompt was ~5344 with 5332 served from cache. Fold the cache
-      // counters in, and keep them visible in prompt_tokens_details so a client can
-      // tell a cache hit from a small prompt.
-      const cacheRead = usage.cache_read_input_tokens || usage.cached_tokens || 0;
-      const cacheCreate = usage.cache_creation_input_tokens || 0;
-      const inTokens = (usage.input_tokens || 0) + cacheRead + cacheCreate;
-      const outTokens = usage.output_tokens || 0;
+      // Build client-format response from the same cache-inclusive convention.
+      const cacheRead = tokens.cached_tokens;
+      const cacheCreate = tokens.cache_creation_input_tokens;
+      const inTokens = tokens.prompt_tokens;
+      const outTokens = tokens.completion_tokens;
       const cacheDetails = (cacheRead > 0 || cacheCreate > 0)
         ? { prompt_tokens_details: {
               ...(cacheRead > 0 ? { cached_tokens: cacheRead } : {}),

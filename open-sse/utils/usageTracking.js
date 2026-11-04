@@ -152,9 +152,12 @@ export function normalizeUsage(usage) {
  *   cache_creation_input_tokens = cache-write portion (subset of prompt_tokens)
  *   completion_tokens, reasoning_tokens, total_tokens
  *
- * Discriminator: Claude reports cache_read_input_tokens with a prompt that
- * EXCLUDES cache, so we fold cache into prompt. OpenAI/Gemini report
- * cached_tokens already counted inside prompt, so we pass through. Idempotent:
+ * Discriminator: native Claude cache counters accompany cache-exclusive input.
+ * OpenAI/Responses/Gemini and canonical usage identify cache as a subset with
+ * cached_tokens or nested token details, so we pass their input total through.
+ * Mixed translator state can carry both exclusive input_tokens and inclusive
+ * prompt_tokens; fold from input_tokens, never from the already-folded total.
+ * Idempotent:
  * once folded the output carries cached_tokens (not cache_read_input_tokens),
  * so re-running takes the passthrough branch and does not double-add.
  *
@@ -176,24 +179,21 @@ export function canonicalizeUsage(usage) {
   let prompt = num(usage.prompt_tokens ?? usage.input_tokens);
   let cached;
 
-  // Claude path: prompt excludes cache; cache_read_input_tokens and/or
-  // cache_creation_input_tokens are separate. A cache-miss "first write" only
-  // carries cache_creation_input_tokens (no cache_read_input_tokens yet), so
-  // check both fields — otherwise a first-write request falls through to the
-  // OpenAI passthrough branch below and cache_creation never gets folded in.
-  // Guard on the absence of `cached_tokens`: our own canonical output always
-  // sets that key (even to 0), so re-running canonicalizeUsage on an already-
-  // folded result takes the passthrough branch instead of folding again.
-  if (usage.cached_tokens === undefined &&
+  const explicitCached = usage.cached_tokens
+    ?? usage.prompt_tokens_details?.cached_tokens
+    ?? usage.input_tokens_details?.cached_tokens;
+  const hasInclusiveDetails = usage.prompt_tokens_details != null || usage.input_tokens_details != null;
+
+  if (explicitCached == null && !hasInclusiveDetails &&
       (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined)) {
+    // Native Claude (including first-write-only usage). Extracted native usage
+    // aliases input_tokens as prompt_tokens, but translator state may contain
+    // both fields: always fold from the exclusive input when it is available.
     cached = num(usage.cache_read_input_tokens);
-    prompt = prompt + cached + cacheCreation;
+    prompt = num(usage.input_tokens ?? usage.prompt_tokens) + cached + cacheCreation;
   } else {
-    // OpenAI/Gemini path (or already-canonical input): prompt already includes cached_tokens.
-    // Mirror the cacheCreation fallback above: buildUsage() only ever emits the
-    // nested prompt_tokens_details.cached_tokens shape, so without this the
-    // cache-read count is silently dropped on every buildUsage()-derived usage.
-    cached = num(usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens);
+    // OpenAI/Responses/Gemini or canonical usage: cache is already in the total.
+    cached = num(explicitCached ?? usage.cache_read_input_tokens);
   }
 
   const result = {

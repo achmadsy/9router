@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { Badge, Button, Modal } from "@/shared/components";
 import Pagination from "@/shared/components/Pagination";
+import ZaiNetworkSelect from "@/shared/components/ZaiNetworkSelect";
 
 function accountClaimableOffers(account) {
   return (account.offers || []).filter((offer) => offer.claimable);
@@ -15,6 +16,7 @@ function formatUnits(value) {
 
 export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) {
   const [accounts, setAccounts] = useState([]);
+  const [networkRoute, setNetworkRoute] = useState("account");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [claimingKey, setClaimingKey] = useState("");
@@ -50,7 +52,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
     setError("");
     try {
       const response = await fetch(
-        `/api/providers/${encodeURIComponent(providerId)}/zai-plans?${new URLSearchParams({ page: String(page), search, inspect: String(inspect), ...(connectionId ? { connectionId } : {}) })}`,
+        `/api/providers/${encodeURIComponent(providerId)}/zai-plans?${new URLSearchParams({ page: String(page), search, networkRoute, inspect: String(inspect), ...(connectionId ? { connectionId } : {}) })}`,
         { cache: "no-store", signal: controller.signal }
       );
       const data = await response.json();
@@ -68,7 +70,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
       signal?.removeEventListener("abort", abort);
       if (loadController.current === controller) setLoading(false);
     }
-  }, [providerId, page, search]);
+  }, [providerId, page, search, networkRoute]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -122,7 +124,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ connectionIds: connectionIds.slice(i, i + BATCH_SIZE), planId, action }),
+            body: JSON.stringify({ connectionIds: connectionIds.slice(i, i + BATCH_SIZE), planId, action, networkRoute }),
           }
         );
         const data = await response.json();
@@ -214,6 +216,12 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
           </Button>
         </div>
 
+        <ZaiNetworkSelect value={networkRoute} disabled={navigationDisabled} onChange={(route) => {
+          setAccounts([]);
+          setResults({});
+          setNetworkRoute(route);
+        }} />
+
         <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); applySearch(searchInput); }}>
           <label className="min-w-0 flex-1 text-xs text-text-muted">
             Search accounts
@@ -300,6 +308,7 @@ export default function ZaiPlanManagementModal({ isOpen, onClose, providerId }) 
                       {!account.eligible && <Badge variant="warning">OAuth required</Badge>}
                     </div>
                     {account.email && <p className="truncate text-xs text-text-muted">{account.email}</p>}
+                    {account.network && <p className="text-xs text-text-muted">Network: {account.network.label}</p>}
                     {account.checkedAt && <p className="text-xs text-text-muted">
                       {account.cached ? "Cached check" : "Checked"}: {new Date(account.checkedAt).toLocaleTimeString()}
                     </p>}

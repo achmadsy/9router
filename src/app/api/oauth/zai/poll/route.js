@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZaiAuthFlow } from "@/lib/zcode/auth";
 import { getZaiSession, updateZaiSession, deleteZaiSession } from "@/lib/zcode/sessions";
 import { saveOAuthConnection, sessionDestination, readAsParam } from "@/lib/oauth/utils/savedProvider";
+import { resolveZaiNetwork, zaiNetworkConnectionData } from "@/lib/zcode/network";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,8 +40,11 @@ export async function POST(request) {
       }
     }
 
-    // Rebuild flow handle from session (CLI poll needs Bearer pollToken only).
-    const flow = new ZaiAuthFlow(undefined, session.pollToken);
+    // The route is bound at init, never changed by polling input. Re-resolve
+    // the saved pool so a removed/inactive proxy fails closed before credentials.
+    const networkRoute = session.networkRoute || "account";
+    const { proxyOptions, network } = await resolveZaiNetwork(networkRoute);
+    const flow = new ZaiAuthFlow(undefined, session.pollToken, proxyOptions);
     flow.flowId = session.flowId;
     flow.expiresAt = session.expiresAt;
 
@@ -83,10 +87,15 @@ export async function POST(request) {
       );
     }
 
+    tokenData = {
+      ...tokenData,
+      providerSpecificData: { ...tokenData.providerSpecificData, ...zaiNetworkConnectionData(networkRoute) },
+    };
+
     let startPlanWarning;
     if (session.initializeStartPlan) {
       try {
-        await flow.initializeStartPlan(tokenData);
+        await flow.initializeStartPlan(tokenData, proxyOptions);
       } catch (err) {
         startPlanWarning = err.message || "Start Plan initialization failed";
       }
@@ -110,6 +119,7 @@ export async function POST(request) {
         email: connection.email,
         name: connection.name,
       },
+      network,
       startPlanInitialized: Boolean(session.initializeStartPlan && !startPlanWarning),
       ...(startPlanWarning ? { warning: startPlanWarning } : {}),
     });

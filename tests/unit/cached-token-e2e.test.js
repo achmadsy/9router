@@ -59,6 +59,29 @@ describe("cached-token end-to-end (persist + aggregate + cost)", () => {
     expect(hist[0].tokens.cache_creation_input_tokens).toBe(30);
   });
 
+  it("translated stream usage: records about 550k input, not 1.1m, in model totals", async () => {
+    const canonical = canonicalizeUsage({
+      prompt_tokens: 550_010,
+      input_tokens: 10,
+      completion_tokens: 50,
+      cache_read_input_tokens: 550_000,
+    });
+    await db.saveRequestUsage({
+      provider: "glm",
+      model: "glm-5.3-flash",
+      connectionId: "c-glm-cache",
+      tokens: canonical,
+      endpoint: "/v1/chat/completions",
+      status: "ok",
+    });
+    const stats = await db.getUsageStats("24h");
+    expect(stats.byProvider.glm.promptTokens).toBe(550_010);
+    expect(stats.byProvider.glm.cachedTokens).toBe(550_000);
+    const history = await db.getUsageHistory({ provider: "glm" });
+    expect(history[0].tokens.prompt_tokens).toBe(550_010);
+    expect(history[0].tokens.cached_tokens).toBe(550_000);
+  });
+
   it("OpenAI cache usage: inclusive prompt passes through, cached counted once", async () => {
     const canonical = canonicalizeUsage({
       prompt_tokens: 1000,        // already includes cached

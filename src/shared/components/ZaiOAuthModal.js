@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import useOAuthDestination from "@/shared/hooks/useOAuthDestination";
 import { Modal, Button } from "@/shared/components";
+import ZaiNetworkSelect from "./ZaiNetworkSelect";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 150;
@@ -12,6 +13,8 @@ const SESSION_NOT_FOUND_RETRIES = 5;
 export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose, targetProviderId }) {
   const withAs = useOAuthDestination(targetProviderId);
   const [step, setStep] = useState("idle");
+  const [networkRoute, setNetworkRoute] = useState("account");
+  const [networkLabel, setNetworkLabel] = useState("");
   const [flowId, setFlowId] = useState(null);
   const [authorizeUrl, setAuthorizeUrl] = useState(null);
   const [initializeStartPlan, setInitializeStartPlan] = useState(false);
@@ -41,6 +44,8 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     sessionMissRef.current = 0;
     stopPolling();
     setStep("idle");
+    setNetworkRoute("account");
+    setNetworkLabel("");
     setFlowId(null);
     setAuthorizeUrl(null);
     initializeStartPlanRef.current = false;
@@ -160,6 +165,8 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     try {
       const res = await fetch(withAs("/api/oauth/zai/init"), {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ networkRoute }),
         signal: abortController.signal,
       });
       const data = await res.json();
@@ -170,6 +177,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
         throw new Error(data.error || "Failed to start OAuth");
       }
 
+      setNetworkLabel(data.network?.label || "");
       activeFlowIdRef.current = data.flowId;
       setFlowId(data.flowId);
       setAuthorizeUrl(data.authorizeUrl);
@@ -180,12 +188,13 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
       setError(err.message);
       setStep("error");
     }
-  }, [stopPolling, withAs]);
+  }, [stopPolling, withAs, networkRoute]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
 
-    const startTimer = setTimeout(() => startOAuth(false), 0);
+    // Choose the route before init: no account proxy exists at this point.
+    const startTimer = setTimeout(() => setStep("configure"), 0);
 
     return () => {
       clearTimeout(startTimer);
@@ -231,6 +240,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
             <div className="p-3 bg-error/10 border border-error/20 rounded-lg">
               <p className="text-sm text-error">{error}</p>
             </div>
+            <ZaiNetworkSelect value={networkRoute} onChange={setNetworkRoute} onboarding />
             <div className="flex gap-3">
               <Button variant="secondary" onClick={handleClose} fullWidth>
                 Cancel
@@ -246,6 +256,13 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
               Sign in with your Z.AI account to connect a Coding Plan subscription. Authorization
               uses ZCode&apos;s server callback — no local redirect needed.
             </p>
+
+            {step === "configure" && (
+              <div className="space-y-3">
+                <ZaiNetworkSelect value={networkRoute} onChange={setNetworkRoute} onboarding />
+                <Button onClick={() => startOAuth(false)} fullWidth>Continue to authorization</Button>
+              </div>
+            )}
 
             {step === "init" && (
               <div className="flex items-center justify-center py-6 gap-2 text-text-muted">
@@ -264,6 +281,9 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
                     <li>Return here — connection completes automatically</li>
                   </ol>
                 </div>
+
+                {networkLabel && <p className="text-xs text-text-muted">Server route: {networkLabel}</p>}
+                {step === "authorize" && <Button variant="ghost" size="sm" onClick={() => setStep("configure")}>Change network and restart OAuth</Button>}
 
                 <label className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-text-primary cursor-pointer hover:bg-black/[0.03] dark:hover:bg-white/[0.03]">
                   <input
