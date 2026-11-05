@@ -13,7 +13,7 @@ import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 const CLAUDE_OAUTH_TOOL_PREFIX = "";
 
 // Convert OpenAI request to Claude format
-export function openaiToClaudeRequest(model, body, stream) {
+export function openaiToClaudeRequest(model, body, stream, credentials = null, options = {}) {
   // Tool name mapping for Claude OAuth (capitalizedName → originalName)
   const toolNameMap = new Map();
   // Cap max_tokens at the model's real output ceiling (e.g. Opus 4.8 = 128000),
@@ -34,17 +34,27 @@ export function openaiToClaudeRequest(model, body, stream) {
   // Messages
   result.messages = [];
   const systemParts = [];
+  const preserveSystemMessages = options.preserveSystemMessages === true;
+  let leadingSystemCount = 0;
 
   if (body.messages && Array.isArray(body.messages)) {
+    if (preserveSystemMessages) {
+      while (leadingSystemCount < body.messages.length && isSystemInstruction(body.messages[leadingSystemCount])) {
+        systemParts.push(...systemInstructionBlocks(body.messages[leadingSystemCount]));
+        leadingSystemCount++;
+      }
+    }
     // Extract system messages
     for (const msg of body.messages) {
-      if (msg.role === ROLE.SYSTEM) {
+      if (!preserveSystemMessages && msg.role === ROLE.SYSTEM) {
         systemParts.push(typeof msg.content === "string" ? msg.content : extractTextContent(msg.content, "\n"));
       }
     }
 
     // Filter out system messages for separate processing
-    const nonSystemMessages = body.messages.filter(m => m.role !== ROLE.SYSTEM);
+    const nonSystemMessages = preserveSystemMessages
+      ? body.messages.slice(leadingSystemCount)
+      : body.messages.filter(m => m.role !== ROLE.SYSTEM);
 
     // Process messages with merging logic
     // CRITICAL: tool_result must be in separate message immediately after tool_use
@@ -59,6 +69,13 @@ export function openaiToClaudeRequest(model, body, stream) {
     };
 
     for (const msg of nonSystemMessages) {
+      if (preserveSystemMessages && isSystemInstruction(msg)) {
+        flushCurrentMessage();
+        currentRole = undefined;
+        const content = systemInstructionBlocks(msg);
+        if (content.length) result.messages.push({ role: ROLE.SYSTEM, content });
+        continue;
+      }
       const newRole = (msg.role === ROLE.USER || msg.role === ROLE.TOOL) ? ROLE.USER : ROLE.ASSISTANT;
       const blocks = getContentBlocksFromMessage(msg, toolNameMap);
       const hasToolUse = blocks.some(b => b.type === CLAUDE_BLOCK.TOOL_USE);
@@ -132,7 +149,11 @@ Respond ONLY with the JSON object, no other text.`);
   // System with Claude Code prompt and cache_control
   const claudeCodePrompt = { type: CLAUDE_BLOCK.TEXT, text: CLAUDE_SYSTEM_PROMPT };
 
-  if (systemParts.length > 0) {
+  if (preserveSystemMessages) {
+    if (systemParts.length) {
+      result.system = systemParts.map(part => typeof part === "string" ? { type: CLAUDE_BLOCK.TEXT, text: part } : part);
+    }
+  } else if (systemParts.length > 0) {
     const systemText = systemParts.join("\n");
     result.system = [
       claudeCodePrompt,
@@ -195,6 +216,24 @@ Respond ONLY with the JSON object, no other text.`);
   }
 
   return result;
+}
+
+function isSystemInstruction(message) {
+  return message.role === ROLE.SYSTEM || message.role === ROLE.DEVELOPER;
+}
+
+function systemInstructionBlocks(message) {
+  const parts = Array.isArray(message.content)
+    ? message.content
+    : message.content && typeof message.content === "object"
+      ? [message.content]
+      : [{ type: CLAUDE_BLOCK.TEXT, text: typeof message.content === "string" ? message.content : "" }];
+  return parts.filter(part => part?.type === CLAUDE_BLOCK.TEXT && typeof part.text === "string" && part.text.trim())
+    .map(part => ({
+      type: CLAUDE_BLOCK.TEXT,
+      text: part.text,
+      ...(part.cache_control || message.cache_control ? { cache_control: { ...(part.cache_control || message.cache_control) } } : {}),
+    }));
 }
 
 // A tool message may carry an OpenAI content array (text + image_url parts).

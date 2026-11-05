@@ -3,6 +3,8 @@ import { DefaultExecutor } from "./default.js";
 import zcodeConfig from "../../src/lib/zcode/config.js";
 import { GLM_CODING_PLAN_MODEL_MAP, GLM_EFFORT_MODELS } from "../../src/lib/zcode/constants.js";
 import { FORMATS } from "../translator/formats.js";
+import { injectZcodeSystemPrompt } from "../../src/lib/zcode/systemPrompt.js";
+import { capCacheControlBlocks } from "../translator/formats/claude.js";
 import { isZaiStartPlan, isZaiAccountCodingPlan, normalizeZaiCredentials } from "../../src/lib/zcode/access.js";
 import { getZcodeProjectToken, invalidateZcodeProjectToken } from "../../src/lib/zcode/provisioning.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
@@ -152,10 +154,12 @@ export class GlmExecutor extends DefaultExecutor {
         delete transformed.top_p;
         delete transformed.top_k;
       }
+      const withSystem = injectZcodeSystemPrompt(transformed);
+      capCacheControlBlocks(withSystem, true);
       const userId = buildZcodeAnthropicMetadataUserId(credentials);
       return userId
-        ? { ...transformed, metadata: { ...transformed.metadata, user_id: userId } }
-        : transformed;
+        ? { ...withSystem, metadata: { ...withSystem.metadata, user_id: userId } }
+        : withSystem;
     }
 
     return transformed;

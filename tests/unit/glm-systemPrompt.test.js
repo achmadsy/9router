@@ -11,10 +11,12 @@ import {
   injectZcodeSystemPrompt,
   ZCODE_SYSTEM_IDENTITY_MARKER,
   buildZcodeEnvironmentBlock,
+  buildZcodeMainSystemPrompt,
+  buildZcodeIdentityPrompt,
 } from "../../src/lib/zcode/systemPrompt.js";
 
 describe("injectZcodeSystemPrompt", () => {
-  it("replaces Claude Code system prompt with ZCode blocks", () => {
+  it("adds ZCode context without removing caller-authored product instructions", () => {
     const body = {
       model: "GLM-5.2",
       system: [
@@ -26,9 +28,11 @@ describe("injectZcodeSystemPrompt", () => {
     const out = injectZcodeSystemPrompt(body, { modelRef: "builtin:zai-start-plan/GLM-5.2" });
 
     expect(JSON.stringify(out.system)).toContain(ZCODE_SYSTEM_IDENTITY_MARKER);
-    expect(JSON.stringify(out.system)).not.toContain("Claude Code");
+    expect(out.system[2].text).toContain("You are Claude Code, Anthropic's official CLI for Claude.");
     expect(out.system).toHaveLength(3);
-    expect(out.system[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(out.system[0].cache_control).toBeUndefined();
+    expect(out.system[1].cache_control).toEqual({ type: "ephemeral" });
+    expect(out.system[2].cache_control).toEqual({ type: "ephemeral" });
   });
 
   it("is idempotent when ZCode blocks are already present", () => {
@@ -40,7 +44,7 @@ describe("injectZcodeSystemPrompt", () => {
     expect(again.system).toEqual(body.system);
   });
 
-  it("folds non-Claude caller instructions into the final native block", () => {
+  it("folds all caller instructions into the final native block in order", () => {
     const out = injectZcodeSystemPrompt({
       model: "GLM-5.2",
       system: [
@@ -79,6 +83,46 @@ describe("injectZcodeSystemPrompt", () => {
   });
 });
 
+describe("ZCode 3.17.2 main-agent system builder", () => {
+  it("matches the current native default prefix and identity lengths", () => {
+    const blocks = buildZcodeMainSystemPrompt();
+    expect(blocks.map(block => block.text.length)).toEqual([35, 1229, 1538]);
+    expect(blocks[0].text).toBe("You are ZCode, an interactive agent");
+    expect(blocks[0].cache_control).toBeUndefined();
+    expect(blocks.slice(1).map(block => block.cache_control)).toEqual([{ type: "ephemeral" }, { type: "ephemeral" }]);
+    expect(blocks[2].text).toMatch(/^\n\nWrite code/);
+    expect(JSON.stringify(blocks)).not.toContain("# Environment");
+  });
+
+  it("includes Skill guidance only when that tool and skills are available", () => {
+    const withGuidance = buildZcodeMainSystemPrompt({ guidanceToolNames: ["Skill"], hasSkills: true });
+    expect(withGuidance[2].text.length).toBe(1703);
+    expect(withGuidance[2].text).toContain("# Session-specific guidance");
+    expect(buildZcodeMainSystemPrompt({ hasSkills: true })[2].text).not.toContain("# Session-specific guidance");
+    expect(buildZcodeMainSystemPrompt({ guidanceToolNames: ["Skill"] })[2].text).not.toContain("# Session-specific guidance");
+  });
+
+  it("supports the native custom-system branch without forcing three blocks", () => {
+    const blocks = buildZcodeMainSystemPrompt({ customSystemPrompt: "Custom caller policy" });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[1].text).toBe("\nCustom caller policy");
+    expect(JSON.stringify(blocks)).not.toContain("# Context management");
+  });
+
+  it("selects the current identity variants without altering source input", () => {
+    expect(buildZcodeIdentityPrompt({ prompt: " " })).toBe(buildZcodeIdentityPrompt());
+    expect(buildZcodeIdentityPrompt({ prompt: "Respond briefly" })).toContain('according to your "Output Style"');
+    expect(buildZcodeIdentityPrompt(null, { midConversationSystem: false })).toContain("tags in messages and tool results are injected by the harness");
+    const stableSections = ["Stable fixture"];
+    const dynamicSections = ["Dynamic fixture"];
+    const blocks = buildZcodeMainSystemPrompt({ stableSections, dynamicSections });
+    expect(blocks[1].text).toContain("Stable fixture");
+    expect(blocks[2].text).toContain("Dynamic fixture");
+    expect(stableSections).toEqual(["Stable fixture"]);
+    expect(dynamicSections).toEqual(["Dynamic fixture"]);
+  });
+});
+
 describe("GlmExecutor ZCode system prompt", () => {
   const codingPlanCreds = {
     apiKey: "org.key.secret",
@@ -102,7 +146,7 @@ describe("GlmExecutor ZCode system prompt", () => {
       codingPlanCreds
     ));
 
-    expect(JSON.stringify(body.system)).not.toContain(ZCODE_SYSTEM_IDENTITY_MARKER);
+    expect(body.system[0].text).toBe(ZCODE_SYSTEM_IDENTITY_MARKER);
     expect(JSON.stringify(body.system)).toContain("Claude Code");
   });
 

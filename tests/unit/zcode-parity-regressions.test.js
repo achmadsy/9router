@@ -66,7 +66,11 @@ describe("native-shaped ZCode contracts", () => {
     expect(out.transformedBody.temperature).toBeUndefined();
     expect(out.transformedBody.top_p).toBeUndefined();
     expect(JSON.stringify(out.transformedBody.system)).toContain("Caller policy");
-    expect(JSON.stringify(out.transformedBody.system)).not.toContain("You are ZCode");
+    expect(out.transformedBody.system).toHaveLength(3);
+    expect(out.transformedBody.system[0].text).toBe("You are ZCode, an interactive agent");
+    expect(out.transformedBody.system[0].cache_control).toBeUndefined();
+    expect(out.transformedBody.system[1].cache_control).toEqual({ type: "ephemeral" });
+    expect(out.transformedBody.system[2].cache_control).toEqual({ type: "ephemeral" });
     expect(out.headers["x-session-id"]).toBe("actual-conversation");
     const wire = new Headers(ex.fetchUpstream.mock.calls[0][1].headers);
     expect(wire.get("authorization")).toBe("Bearer fixture-login");

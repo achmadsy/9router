@@ -9,6 +9,7 @@ import { PROVIDERS } from "../../providers/index.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import { isDeepSeekModel } from "../../providers/models/helpers.js";
 import { DEFAULT_MAX_TOKENS } from "../../config/runtimeConfig.js";
+import { resolveRuntimeProviderId } from "../../providers/clones.js";
 
 const CACHE_CONTROL_5M = { type: "ephemeral" };
 const CACHE_CONTROL_1H = { type: "ephemeral", ttl: "1h" };
@@ -88,7 +89,15 @@ function countCacheControlBlocks(body) {
 // of the other markers in document order. A plain "keep the last 4 in document
 // order" rule would drop the head anchors first — they lead document order, yet
 // they are exactly what re-anchoring exists to pin.
-function capCacheControlBlocks(body) {
+export function capCacheControlBlocks(body, preserveSystemMessages = false) {
+  const preserved = new Set();
+  if (preserveSystemMessages) {
+    for (const block of Array.isArray(body.system) ? body.system : []) preserved.add(block);
+    for (const message of Array.isArray(body.messages) ? body.messages : []) {
+      if (message.role !== ROLE.SYSTEM || !Array.isArray(message.content)) continue;
+      for (const block of message.content) preserved.add(block);
+    }
+  }
   const isHead = (b) => {
     const sys = Array.isArray(body?.system) ? body.system : [];
     if (sys.length && sys[sys.length - 1] === b) return true;
@@ -104,8 +113,8 @@ function capCacheControlBlocks(body) {
       if (Array.isArray(m?.content)) for (const b of m.content) if (b?.cache_control) marked.push(b);
     }
   }
-  const head = marked.filter(isHead);
-  const rest = marked.filter(b => !isHead(b));
+  const head = marked.filter(b => preserved.has(b) || (!preserveSystemMessages && isHead(b)));
+  const rest = marked.filter(b => !head.includes(b));
   const keep = Math.max(0, 4 - head.length);
   for (const b of rest.slice(0, Math.max(0, rest.length - keep))) delete b.cache_control;
 }
@@ -546,8 +555,20 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
   // its requested lower limit. All clients still clamp to upstream ceiling.
   applyClaudeMaxTokens(body, provider, clientTool === "claude", capabilityModel || body.model);
 
+  // GLM accepts caller-owned system blocks and their cache policy unchanged.
+  const preserveSystemMessages = !!PROVIDERS[resolveRuntimeProviderId(provider)]?.quirks?.preserveSystemMessages;
+  if (preserveSystemMessages && Array.isArray(body.messages)) {
+    body.messages = body.messages.map(message => {
+      if (message.role !== ROLE.SYSTEM) return message;
+      const content = message.content && !Array.isArray(message.content) && typeof message.content === "object"
+        ? [{ ...message.content }]
+        : Array.isArray(message.content) ? message.content.map(block => ({ ...block })) : message.content;
+      return { ...message, content };
+    });
+  }
+
   // 1. System: remove all cache_control, add only to last block with ttl 1h
-  if (body.system && Array.isArray(body.system)) {
+  if (!preserveSystemMessages && body.system && Array.isArray(body.system)) {
     body.system = body.system.map((block, i) => {
       const { cache_control, ...rest } = block;
       if (i === body.system.length - 1) {
@@ -569,7 +590,7 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
       normalizeMessageContent(msg);
 
       // Remove cache_control from content blocks
-      if (Array.isArray(msg.content)) {
+      if (Array.isArray(msg.content) && !(preserveSystemMessages && msg.role === ROLE.SYSTEM)) {
         for (const block of msg.content) {
           delete block.cache_control;
         }
@@ -734,6 +755,9 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
 
   // A tool loop's final tool results: cached now, so the next step reads them.
   markFinalToolResults(body);
+  if (preserveSystemMessages && countCacheControlBlocks(body) > 4) {
+    capCacheControlBlocks(body, true);
+  }
 
   // Apply cloaking for OAuth tokens (billing header + fake user ID)
   // session_id in user_id must match X-Claude-Code-Session-Id for fingerprint consistency

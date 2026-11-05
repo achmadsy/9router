@@ -42,6 +42,7 @@ export default {
     format: "claude",
     urlSuffix: "?beta=true",
     headers: { ...CLAUDE_API_HEADERS },
+    quirks: { preserveSystemMessages: true },
     auth: {
       combined: true,
       header: "x-api-key",

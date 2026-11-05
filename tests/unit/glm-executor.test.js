@@ -328,7 +328,7 @@ describe("GlmExecutor", () => {
       )
     );
     expect(body.model).toBe("GLM-5.2");
-    expect(JSON.stringify(body.system)).not.toContain("You are ZCode");
+    expect(body.system[0].text).toBe("You are ZCode, an interactive agent");
     expect(JSON.stringify(body.system)).toContain("Claude Code");
   });
 });
