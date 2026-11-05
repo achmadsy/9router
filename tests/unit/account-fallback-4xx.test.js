@@ -50,6 +50,25 @@ describe("checkFallbackError — request-scoped vs account-scoped failures", () 
     });
   });
 
+  it.each([
+    "request has been blocked due to unusual activity.",
+    "[405]: Z.AI activity block (code 3012): request rejected",
+    "Unusual activity detected; rate limit reached",
+  ])("stops GLM activity-block fallback before generic quota rules: %s", (message) => {
+    expect(checkFallbackError(405, message, 0, "glm")).toEqual({
+      shouldFallback: false, cooldownMs: 0,
+    });
+  });
+
+  it("does not classify unrelated provider or method failures as GLM activity blocks", () => {
+    expect(checkFallbackError(405, "Method not allowed", 0, "glm")).toEqual({
+      shouldFallback: false, cooldownMs: 0, requestScoped: true,
+    });
+    expect(checkFallbackError(405, "unusual activity", 0, "openai")).toEqual({
+      shouldFallback: false, cooldownMs: 0, requestScoped: true,
+    });
+  });
+
   it("keeps the transient cooldown for unmatched server errors", () => {
     const result = checkFallbackError(503, "upstream exploded");
 

@@ -66,7 +66,7 @@ describe("GLM force max thinking", () => {
       { providerSpecificData: { zcodeJwtToken: "jwt", useCodingPlan: true } }
     );
 
-    expect(transformed.thinking).toMatchObject({ type: "enabled", budgetTokens: 32000 });
+    expect(transformed.thinking).toEqual({ type: "enabled", budget_tokens: 32000 });
     expect(transformed.output_config).toMatchObject({ effort: "max" });
   });
 
@@ -91,7 +91,7 @@ describe("GLM force max thinking", () => {
       { providerSpecificData: { zcodeJwtToken: "jwt", useCodingPlan: true } }
     );
 
-    expect(transformed.thinking).toMatchObject({ type: "enabled", budgetTokens: 32000 });
+    expect(transformed.thinking).toEqual({ type: "enabled", budget_tokens: 32000 });
     expect(transformed.output_config).toMatchObject({ effort: "max" });
   });
 
@@ -107,7 +107,7 @@ describe("GLM force max thinking", () => {
       true,
       { providerSpecificData: { zcodeJwtToken: "jwt", useCodingPlan: true } }
     );
-    expect(transformed.thinking).toMatchObject({ type: "enabled", budgetTokens: 32000 });
+    expect(transformed.thinking).toEqual({ type: "enabled", budget_tokens: 32000 });
     expect(transformed.output_config).toMatchObject({ effort: "max" });
   });
 });

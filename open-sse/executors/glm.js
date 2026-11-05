@@ -4,6 +4,7 @@ import zcodeConfig from "../../src/lib/zcode/config.js";
 import { GLM_CODING_PLAN_MODEL_MAP } from "../../src/lib/zcode/constants.js";
 import { injectZcodeSystemPrompt } from "../../src/lib/zcode/systemPrompt.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
+import { GLM_ACTIVITY_BLOCK } from "../config/errorConfig.js";
 import {
   getCaptchaManager,
   getZcodeCaptchaPort,
@@ -148,7 +149,7 @@ export class GlmExecutor extends DefaultExecutor {
     }
 
     if (this.usesCodingPlan(credentials) && this.getUrlIndex() === 0) {
-      // Native GLM-5.3 Start Plan: thinking.budgetTokens + output_config.effort
+      // Native SDK uses budgetTokens internally but serializes budget_tokens on the wire.
       if (bareId === "glm-5.3" || bareId === "glm-5.3-flash") {
         const disabled = transformed.thinking?.type === "disabled";
         // The translator rebuilds `thinking` without budget_tokens for the zai
@@ -160,7 +161,7 @@ export class GlmExecutor extends DefaultExecutor {
               ? 32000
               : 8000;
         if (!disabled) {
-          transformed.thinking = { type: "enabled", budgetTokens: budget };
+          transformed.thinking = { type: "enabled", budget_tokens: budget };
           transformed.output_config = {
             ...transformed.output_config,
             effort:
@@ -218,6 +219,17 @@ export class GlmExecutor extends DefaultExecutor {
       const err = json?.error;
       const code = err?.code ?? json?.code;
       const message = err?.message ?? json?.msg ?? json?.message;
+
+      if (response.status === GLM_ACTIVITY_BLOCK.status &&
+          (String(code) === String(GLM_ACTIVITY_BLOCK.code) ||
+           (typeof message === "string" && message.toLowerCase().includes(GLM_ACTIVITY_BLOCK.text)))) {
+        return {
+          status: response.status,
+          message: `${GLM_ACTIVITY_BLOCK.label}: request blocked due to unusual activity. ` +
+            "Automatic fallback stopped; pause requests and contact Z.AI support if the block persists.",
+          noCooldown: true,
+        };
+      }
 
       if (code === "1113" || (typeof message === "string" && message.includes("1113"))) {
         return {

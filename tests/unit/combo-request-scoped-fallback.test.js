@@ -83,6 +83,24 @@ describe("combo fallback — request-scoped 4xx from a member", () => {
     expect(handleSingleModel).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    "[405]: request has been blocked due to unusual activity.",
+    "Z.AI activity block (code 3012): request rejected",
+  ])("does not replay a GLM activity block through another combo member: %s", async (message) => {
+    const blocked = jsonResponse({ error: { message } }, 405);
+    const handleSingleModel = vi.fn().mockResolvedValue(blocked);
+    const result = await handleComboChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models: ["glm/glm-5.3-flash", "glm/glm-5.3", "openai/gpt-5"],
+      handleSingleModel, log: silentLog, comboStrategy: "fallback",
+    });
+
+    expect(result).toBe(blocked);
+    expect(result.status).toBe(405);
+    expect(handleSingleModel).toHaveBeenCalledTimes(1);
+    expect((await result.json()).error.message).toBe(message);
+  });
+
   it("returns the rejected member's response when a later member fails differently", async () => {
     // Boundary case: member 1 rejected the request, member 2 failed for an
     // unrelated reason. No member served it, so the request-scoped failure is the

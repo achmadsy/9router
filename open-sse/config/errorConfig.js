@@ -35,6 +35,14 @@ export const BACKOFF_CONFIG = {
   maxLevel: 15
 };
 
+// Z.AI returns this admission block separately from CAPTCHA (3007) and quota.
+export const GLM_ACTIVITY_BLOCK = {
+  status: 405,
+  code: 3012,
+  text: "unusual activity",
+  label: "Z.AI activity block (code 3012)",
+};
+
 // Default cooldown for transient/unknown errors
 export const TRANSIENT_COOLDOWN_MS = 30 * 1000;
 

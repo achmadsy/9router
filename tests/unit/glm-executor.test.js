@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GlmExecutor, glmRequestContext } from "../../open-sse/executors/glm.js";
 import { createErrorResult, parseUpstreamError } from "../../open-sse/utils/error.js";
 import { __test__ as headerTest } from "../../src/lib/zcode/headers.js";
@@ -156,6 +156,56 @@ describe("GlmExecutor", () => {
     );
     expect(parsed.message).toContain("GLM quota exhausted");
     expect(parsed.message).not.toContain('{"type":"error"');
+  });
+
+  it.each([3012, "3012"])("identifies GLM activity block %s without suggesting credential or route changes", async (code) => {
+    const parsed = await parseUpstreamError(new Response(JSON.stringify({
+      code, msg: "request has been blocked due to unusual activity.", logid: "provider-log-canary",
+    }), { status: 405, headers: { "Retry-After": "60" } }), executor);
+
+    expect(parsed.statusCode).toBe(405);
+    expect(parsed.noCooldown).toBe(true);
+    expect(createErrorResult(parsed.statusCode, parsed.message, parsed).noCooldown).toBe(true);
+    expect(parsed.message).toContain("Z.AI activity block (code 3012)");
+    expect(parsed.message).toContain("unusual activity");
+    expect(parsed.message).toContain("contact Z.AI support");
+    expect(parsed.message).not.toContain("provider-log-canary");
+    expect(parsed.message).not.toMatch(/reconnect|captcha|expired/i);
+  });
+
+  it("does not retry a Start Plan activity block or switch to the API-key endpoint", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: 3012, msg: "request has been blocked due to unusual activity.",
+    }), { status: 405 }));
+    executor.fetchUpstream = fetch;
+    const proxy = { connectionProxyEnabled: true, connectionProxyUrl: "http://proxy.test:3128", strictProxy: true };
+    const result = await executor.execute({
+      model: "glm-5.3-flash", body: { model: "glm-5.3-flash", messages: [] }, stream: true,
+      credentials: codingPlanCreds, proxyOptions: proxy,
+    });
+
+    expect(result.response.status).toBe(405);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages");
+    expect(fetch.mock.calls[0][2]).toBe(proxy);
+  });
+
+  it.each(["glm-5.3", "glm-5.3-flash"])("serializes %s thinking budget using the native HTTP field name", async (model) => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ content: [] }), { status: 200 }));
+    executor.fetchUpstream = fetch;
+    await executor.execute({
+      model, body: { model, messages: [], thinking: { type: "enabled", budget_tokens: 16000 } },
+      stream: false, credentials: codingPlanCreds,
+    });
+
+    const sent = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(sent.thinking).toEqual({ type: "enabled", budget_tokens: 16000 });
+    expect(sent.output_config.effort).toBe("high");
+  });
+
+  it("leaves an unrelated 405 method error unchanged", () => {
+    expect(executor.parseError({ status: 405 }, JSON.stringify({ msg: "Method not allowed" })))
+      .toEqual({ status: 405, message: "Method not allowed" });
   });
 
   it.each([3009, "3009", 3010, "3010"])("marks GLM %s concurrency errors as no-cooldown", async (code) => {
