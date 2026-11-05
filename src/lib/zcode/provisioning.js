@@ -1,5 +1,7 @@
 import config from "./config.js";
 import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
+import { normalizeZaiCredentials, resolveZaiPlanMode, ZAI_PLAN_MODES } from "./access.js";
+import { createHash } from "node:crypto";
 
 async function requestBusiness(url, options, proxyOptions, fetchImpl, diagnostics, step, endpoint) {
   const started = Date.now();
@@ -46,6 +48,7 @@ const customerInfoEndpoint = "https://api.z.ai/api/biz/customer/getCustomerInfo"
  * This read-only helper never creates keys, enrolls projects or changes storage.
  */
 export async function resolveZcodeBusinessSession(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
+  credentials = normalizeZaiCredentials(credentials);
   const oauthToken = credentials?.providerSpecificData?.zaiAccessToken?.trim();
   const saved = typeof credentials?.accessToken === "string" ? credentials.accessToken.trim() : "";
   const readInfo = (token) => requestBusiness(customerInfoEndpoint, {
@@ -88,14 +91,36 @@ export async function resolveZcodeBusinessSession(credentials, proxyOptions = nu
   return { businessToken, info };
 }
 
-/** Native Coding Plan enrollment. The expiring project token is never persisted or returned. */
-export async function enrollZcodeProject(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
+export function parseZcodeProjectToken(data, now = Date.now()) {
+  if (!data || data.enable === false) throw new Error("ZCode project token is disabled");
+  const token = typeof data.accessToken === "string" ? data.accessToken.trim() : "";
+  if ((data.enable !== undefined && data.enable !== true) || !token || data.tokenType !== "Bearer"
+      || !Number.isFinite(data.expiresIn) || data.expiresIn <= 0
+      || !Number.isFinite(data.expiresAt) || data.expiresAt <= 0) {
+    throw new Error("Invalid ZCode project token response");
+  }
+  const absolute = data.expiresAt < 1e12 ? data.expiresAt * 1000 : data.expiresAt;
+  const expiresAt = Math.min(absolute, now + data.expiresIn * 1000);
+  if (expiresAt <= now) throw new Error("ZCode project token has expired");
+  return { token, expiresAt };
+}
+
+async function requestProjectToken(credentials, proxyOptions, fetchImpl, diagnostics) {
   const { businessToken, info } = await resolveZcodeBusinessSession(credentials, proxyOptions, fetchImpl, diagnostics);
   const organizations = Array.isArray(info?.organizations) ? info.organizations : [];
-  const organization = organizations.find((org) => org.organizationName?.includes("默认机构") && org.projects?.length)
-    || organizations.find((org) => org.projects?.length);
-  const project = organization?.projects.find((entry) => entry.projectName?.includes("默认项目"))
-    || organization?.projects[0];
+  const psd = credentials?.providerSpecificData || {};
+  const team = resolveZaiPlanMode(credentials) === ZAI_PLAN_MODES.TEAM;
+  const available = team ? organizations : organizations.map((org) => ({ ...org,
+    projects: (org.projects || []).filter((entry) => String(entry.projectType ?? "").trim() !== "2"),
+  }));
+  const organization = team
+    ? available.find((org) => org.organizationId === psd.zaiOrganizationId)
+    : available.find((org) => /默认机构|^default$/i.test(org.organizationName || "") && org.projects?.length)
+      || available.find((org) => org.projects?.length);
+  const project = team
+    ? organization?.projects?.find((entry) => entry.projectId === psd.zaiProjectId)
+    : organization?.projects?.find((entry) => /默认项目|^default$/i.test(entry.projectName || ""))
+      || organization?.projects?.[0];
   diagnostics?.event("project-selection", "result", {
     organizations: organizations.length, organizationFound: !!organization?.organizationId, projectFound: !!project?.projectId,
   });
@@ -131,15 +156,50 @@ export async function enrollZcodeProject(credentials, proxyOptions = null, fetch
     body: JSON.stringify({ clientType: "zcode", clientVersion: config.appVersion }),
   }, proxyOptions, fetchImpl, diagnostics, "project-token", `${keyEndpoint}/{key}/access_tokens`);
   diagnostics?.event("project-token", "result", {
-    enabled: projectToken?.enabled === true,
+    enabled: projectToken?.enable !== false,
     tokenReturned: typeof projectToken?.accessToken === "string" && !!projectToken.accessToken.trim(),
     expiresIn: Number.isFinite(projectToken?.expiresIn) ? projectToken.expiresIn : null,
     persisted: false,
   });
-  if (projectToken?.enabled !== true || typeof projectToken.accessToken !== "string" || !projectToken.accessToken.trim()) {
-    throw new Error("ZCode provisioning did not return an enabled project token");
-  }
-  // Inference continues using the login JWT / existing API key. In particular,
-  // do not copy this five-hour token or its expiry into connection credentials.
+  return parseZcodeProjectToken(projectToken);
+}
+
+/** Preparation validates issuance without persisting a model credential. */
+export async function enrollZcodeProject(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch, diagnostics = null) {
+  await requestProjectToken(credentials, proxyOptions, fetchImpl, diagnostics);
   return { enrolled: true };
+}
+
+const projectTokens = new Map();
+function projectTokenScope(credentials, proxyOptions) {
+  const normalized = normalizeZaiCredentials(credentials);
+  const psd = normalized.providerSpecificData || {};
+  return createHash("sha256").update(JSON.stringify([
+    normalized.connectionId || normalized.id, normalized.accessToken, psd.zcodeJwtToken, psd.zaiAccessToken,
+    resolveZaiPlanMode(normalized), psd.zaiOrganizationId, psd.zaiProjectId, proxyOptions,
+  ])).digest("hex");
+}
+
+export async function getZcodeProjectToken(credentials, proxyOptions = null, fetchImpl = proxyAwareFetch) {
+  const key = projectTokenScope(credentials, proxyOptions);
+  let entry = projectTokens.get(key);
+  if (entry?.value?.expiresAt > Date.now() + 120_000) return entry.value.token;
+  if (entry?.pending) return (await entry.pending).token;
+  if (projectTokens.size >= 1000) projectTokens.delete(projectTokens.keys().next().value);
+  entry = {};
+  entry.pending = requestProjectToken(credentials, proxyOptions, fetchImpl, null);
+  projectTokens.set(key, entry);
+  try {
+    entry.value = await entry.pending;
+    return entry.value.token;
+  } catch (error) {
+    if (projectTokens.get(key) === entry) projectTokens.delete(key);
+    throw error;
+  } finally {
+    delete entry.pending;
+  }
+}
+
+export function invalidateZcodeProjectToken(credentials, proxyOptions = null) {
+  projectTokens.delete(projectTokenScope(credentials, proxyOptions));
 }

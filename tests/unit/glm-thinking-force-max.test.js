@@ -66,11 +66,11 @@ describe("GLM force max thinking", () => {
       { providerSpecificData: { zcodeJwtToken: "jwt", useCodingPlan: true } }
     );
 
-    expect(transformed.thinking).toEqual({ type: "enabled", budget_tokens: 32000 });
+    expect(transformed.thinking).toEqual({ type: "enabled" });
     expect(transformed.output_config).toMatchObject({ effort: "max" });
   });
 
-  it("keeps the 32k budget through the full translator → executor pipeline", () => {
+  it("converts the intermediate 32k budget into final max effort", () => {
     const overridden = applyProviderThinkingOverride(
       { model: "glm-5.3", messages: [{ role: "user", content: "hello" }], reasoning_effort: "low" },
       "glm",
@@ -91,11 +91,11 @@ describe("GLM force max thinking", () => {
       { providerSpecificData: { zcodeJwtToken: "jwt", useCodingPlan: true } }
     );
 
-    expect(transformed.thinking).toEqual({ type: "enabled", budget_tokens: 32000 });
+    expect(transformed.thinking).toEqual({ type: "enabled" });
     expect(transformed.output_config).toMatchObject({ effort: "max" });
   });
 
-  it("recovers 32000 from reasoning_effort max when no budget survives translation", () => {
+  it("preserves explicit max effort when no budget survives translation", () => {
     // Transports whose thinkingFormat resolves to "zai" rebuild `thinking`
     // without budget_tokens but keep reasoning_effort — the executor must not
     // fall back to the 8k default there.
@@ -107,7 +107,7 @@ describe("GLM force max thinking", () => {
       true,
       { providerSpecificData: { zcodeJwtToken: "jwt", useCodingPlan: true } }
     );
-    expect(transformed.thinking).toEqual({ type: "enabled", budget_tokens: 32000 });
+    expect(transformed.thinking).toEqual({ type: "enabled" });
     expect(transformed.output_config).toMatchObject({ effort: "max" });
   });
 });

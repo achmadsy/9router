@@ -21,13 +21,15 @@ vi.mock("@/lib/oauth/services/kiro", () => ({ KiroService: class {
   extractEmailFromJWT() { return "test@example.test"; }
 } }));
 vi.mock("@/lib/zcode/auth", () => ({ ZaiAuthFlow: class {
-  constructor(...args) { mocks.flowOptions(...args); }
+  constructor(...args) { mocks.flowOptions(...args); this.pollIntervalSec = 2; }
+  get nextPollDelayMs() { return this.pollIntervalSec * 1000; }
   async start() { return { flowId: "flow-test", pollToken: "fake-poll", provider: "zai", authorizeUrl: "https://example.test" }; }
   async poll() { return { status: "ready", token: "fake-jwt", zai: { access_token: "fake" } }; }
   async initializeStartPlan(...args) { return mocks.initializeStartPlan(...args); }
   async exchangeForConnection() { return { accessToken: "fake-key", providerSpecificData: { username: "user-test", zcodeJwtToken: "fake-jwt" } }; }
 } }));
-vi.mock("@/lib/zcode/sessions", () => ({
+vi.mock("@/lib/zcode/sessions", async (importOriginal) => ({
+  withZaiSessionLock: (await importOriginal()).withZaiSessionLock,
   createZaiSession: async (data) => mocks.sessions.set(data.flowId, data),
   getZaiSession: async (id) => mocks.sessions.get(id),
   updateZaiSession: async (id, updates) => {

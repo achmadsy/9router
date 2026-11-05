@@ -8,6 +8,7 @@ const { ZaiAuthFlow } = await import("../../src/lib/zcode/auth.js");
 const { prepareOriginalStartPlan } = await import("../../src/lib/zcode/plans.js");
 
 const reply = (data, code = 200) => new Response(JSON.stringify({ code, data }), { status: 200 });
+const projectToken = (accessToken) => ({ enable: true, accessToken, tokenType: "Bearer", expiresIn: 18000, expiresAt: Date.now() + 18_000_000 });
 const info = { organizations: [{ organizationId: "org/id", projects: [{ projectId: "project/id" }] }] };
 const credentials = {
   apiKey: "existing-key.secret",
@@ -29,7 +30,7 @@ describe("native ZCode provisioning credential boundaries", () => {
       .mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([]))
       .mockResolvedValueOnce(reply({ name: "zcode-api-key", apiKey: "native/key" }))
-      .mockResolvedValueOnce(reply({ enabled: true, accessToken: "ephemeral-project-token", expiresIn: 18000 }));
+      .mockResolvedValueOnce(reply(projectToken("ephemeral-project-token")));
     expect(await enrollZcodeProject(credentials, proxy)).toEqual({ enrolled: true });
     expect(credentials).toEqual(snapshot);
     expect(mocks.fetch.mock.calls[0][0]).toBe("https://api.z.ai/api/auth/z/login");
@@ -52,7 +53,7 @@ describe("native ZCode provisioning credential boundaries", () => {
       .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
       .mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "generic-key", usageScene: -1 }]))
-      .mockResolvedValueOnce(reply({ enabled: true, accessToken: "ephemeral-project-token" }));
+      .mockResolvedValueOnce(reply(projectToken("ephemeral-project-token")));
     await enrollZcodeProject(credentials);
     expect(mocks.fetch).toHaveBeenCalledTimes(4);
     expect(mocks.fetch.mock.calls[3][0]).toContain("/generic-key/access_tokens");
@@ -77,7 +78,7 @@ describe("native ZCode provisioning credential boundaries", () => {
     const before = structuredClone(saved);
     mocks.fetch.mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "native-key" }]))
-      .mockResolvedValueOnce(reply({ enabled: true, accessToken: "discarded-project-token" }));
+      .mockResolvedValueOnce(reply(projectToken("discarded-project-token")));
     await expect(enrollZcodeProject(saved)).resolves.toEqual({ enrolled: true });
     expect(saved).toEqual(before);
     expect(mocks.fetch).toHaveBeenCalledTimes(3);
@@ -141,7 +142,7 @@ describe("native ZCode provisioning credential boundaries", () => {
       mocks.fetch.mockResolvedValueOnce(reply({ accessToken: `fresh-${id}` }))
         .mockResolvedValueOnce(reply(info))
         .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: `key-${id}` }]))
-        .mockResolvedValueOnce(reply({ enabled: true, accessToken: "discarded-project-token" }));
+        .mockResolvedValueOnce(reply(projectToken("discarded-project-token")));
       await enrollZcodeProject({ ...credentials, providerSpecificData: { zaiAccessToken: `oauth-${id}` } });
     }
     expect(mocks.fetch.mock.calls[0][1].body).toBe(JSON.stringify({ token: "oauth-one" }));
@@ -203,7 +204,7 @@ describe("native ZCode provisioning credential boundaries", () => {
       .mockResolvedValueOnce(reply({ access_token: "fresh-business-token" }))
       .mockResolvedValueOnce(reply(info))
       .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "key-secret-canary", usageScene: -1 }]))
-      .mockResolvedValueOnce(reply({ enabled: true, accessToken: "project-secret-canary", expiresIn: 18000 }))
+      .mockResolvedValueOnce(reply(projectToken("project-secret-canary")))
       .mockResolvedValueOnce(reply({ plans: [], balances: [] }, 0));
     await expect(prepareOriginalStartPlan({ ...credentials, id: "selected-connection" })).rejects.toThrow("not active");
     const calls = [...infoLog.mock.calls, ...warnLog.mock.calls];

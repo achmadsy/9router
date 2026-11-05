@@ -13,6 +13,9 @@ export const ZCODE_ZAI_DEFAULT_EXPIRES_IN = 3600;
 /** Original daily GLM-5.3 / Flash entitlement, not the 1029 one-time promotion. */
 export const ZCODE_ORIGINAL_START_PLAN_ID = "zcode-v3-start-plan-0817";
 
+/** Native GLM-5.3 model options use effort rather than numeric thinking budgets. */
+export const GLM_EFFORT_MODELS = Object.freeze(["glm-5.3", "glm-5.3-flash"]);
+
 /** Upstream model IDs for Coding Plan (case-sensitive). */
 export const GLM_CODING_PLAN_MODEL_MAP = {
   "glm-5.3": "GLM-5.3",

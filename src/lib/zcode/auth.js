@@ -394,8 +394,8 @@ export class ZaiAuthFlow {
         ? zai.expires_in
         : ZCODE_ZAI_DEFAULT_EXPIRES_IN;
 
-    // Coding Plan models → minted API key on api.z.ai (no captcha).
-    // Start Plan models (glm-5.3*) → JWT on zcode.z.ai (captcha-gated; executor handles).
+    // Keep distinct credentials: the selected entitlement, not the model name,
+    // determines whether inference uses the login JWT, a project token, or the saved key.
     return {
       apiKey: fullKey,
       accessToken: bizToken,
@@ -410,7 +410,7 @@ export class ZaiAuthFlow {
       name: email || undefined,
       providerSpecificData: {
         authMethod: "zcode_oauth",
-        // Native ZCode OAuth inference uses zcode-plan with the login JWT.
+        zaiPlanMode: "start-plan",
         useCodingPlan: true,
         zcodeJwtToken: zcodeJwtToken || undefined,
         zaiAccessToken: accessToken,
@@ -426,22 +426,39 @@ export class ZaiAuthFlow {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: accessToken }),
     });
-    if (!loginRes.ok) throw new Error("Failed to exchange business token");
-    const loginJson = await loginRes.json();
-    const bizToken = loginJson.data?.access_token || loginJson.data?.accessToken;
+    const loginJson = await loginRes.json().catch(() => null);
+    const code = loginJson?.code;
+    if (!loginRes.ok || !loginJson || loginJson.success === false
+        || (code != null && ![0, 200, "0", "200"].includes(code))) {
+      const safeCode = (typeof code === "number" || typeof code === "string") && Number.isFinite(Number(code)) ? Number(code) : "unknown";
+      throw new Error(`Z.AI business login rejected (HTTP ${loginRes.status}, code ${safeCode})`);
+    }
+    const bizToken = (typeof loginJson.data?.access_token === "string" ? loginJson.data.access_token.trim() : "")
+      || (typeof loginJson.data?.accessToken === "string" ? loginJson.data.accessToken.trim() : "");
     if (!bizToken) throw new Error("Business credentials missing from response");
     return { bizToken, loginData: loginJson.data || {} };
+  }
+
+  async _readBusinessData(response, stage) {
+    const json = await response.json().catch(() => null);
+    const code = json?.code;
+    if (!response.ok || !json || json.success === false
+        || (code != null && ![0, 200, "0", "200"].includes(code))) {
+      const safeCode = (typeof code === "number" || typeof code === "string") && Number.isFinite(Number(code)) ? Number(code) : "unknown";
+      throw new Error(`Z.AI ${stage} rejected (HTTP ${response.status}, code ${safeCode})`);
+    }
+    return json.data;
   }
 
   async _getOrgAndProject(bizToken) {
     const infoRes = await this._fetch("https://api.z.ai/api/biz/customer/getCustomerInfo", {
       method: "GET",
-      headers: { Authorization: bizToken },
+      headers: { Authorization: bizToken, "Content-Type": "application/json" },
     });
-    if (!infoRes.ok) throw new Error("Failed to fetch organization info");
-    const infoJson = await infoRes.json();
-
-    const orgs = infoJson.data?.organizations || [];
+    const customerInfo = await this._readBusinessData(infoRes, "customer info");
+    const orgs = Array.isArray(customerInfo?.organizations) ? customerInfo.organizations.map((org) => ({ ...org,
+      projects: Array.isArray(org.projects) ? org.projects.filter((project) => String(project.projectType ?? "") !== "2") : [],
+    })) : [];
     if (!orgs.length) throw new Error("No available organization found");
     let targetOrg = null;
     for (const o of orgs) {
@@ -461,7 +478,7 @@ export class ZaiAuthFlow {
     return {
       orgId: targetOrg.organizationId,
       projId: targetProj.projectId,
-      customerInfo: infoJson.data || {},
+      customerInfo,
     };
   }
 
@@ -471,9 +488,8 @@ export class ZaiAuthFlow {
       method: "GET",
       headers: { Authorization: `Bearer ${bizToken}` },
     });
-    if (!keysRes.ok) throw new Error("Failed to fetch API Keys");
-    const keysJson = await keysRes.json();
-    const keys = keysJson.data || [];
+    const keys = await this._readBusinessData(keysRes, "API key list");
+    if (!Array.isArray(keys)) throw new Error("Invalid Z.AI API key list");
 
     let keyObj = keys.find((k) => k.name === "zcode-api-key");
     if (!keyObj) {
@@ -485,22 +501,19 @@ export class ZaiAuthFlow {
         },
         body: JSON.stringify({ name: "zcode-api-key", usageScene: 1 }),
       });
-      if (!createRes.ok) throw new Error("Failed to create API Key");
-      const createJson = await createRes.json();
-      keyObj = createJson.data;
+      keyObj = await this._readBusinessData(createRes, "API key creation");
     }
 
     const apiKey = keyObj?.apiKey;
-    if (!apiKey) throw new Error("Failed to obtain API Key");
+    if (typeof apiKey !== "string" || !apiKey.trim()) throw new Error("Failed to obtain API Key");
 
     const copyRes = await this._fetch(`${keyUrl}/copy/${encodeURIComponent(apiKey)}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${bizToken}` },
     });
-    if (!copyRes.ok) throw new Error("Failed to fetch Secret Key");
-    const copyJson = await copyRes.json();
-    const secretKey = copyJson.data?.secretKey;
-    if (!secretKey) throw new Error("Failed to decrypt Secret Key");
+    const copied = await this._readBusinessData(copyRes, "API key copy");
+    const secretKey = copied?.secretKey;
+    if (typeof secretKey !== "string" || !secretKey.trim()) throw new Error("Failed to decrypt Secret Key");
 
     return `${apiKey}.${secretKey}`;
   }

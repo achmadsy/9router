@@ -28,7 +28,7 @@ describe("Z.AI OAuth modal", () => {
   it("chooses a server route before OAuth and freezes it for the login session", () => {
     expect(source).toContain('setStep("configure")');
     expect(source).toContain("<ZaiNetworkSelect");
-    expect(source).toContain("body: JSON.stringify({ networkRoute })");
+    expect(source).toContain("body: JSON.stringify({ networkRoute, zaiPlanMode })");
     expect(source).toContain("Change network and restart OAuth");
     expect(source).not.toContain("setTimeout(() => startOAuth(false)");
   });

@@ -60,6 +60,11 @@ describe("checkFallbackError — request-scoped vs account-scoped failures", () 
     });
   });
 
+  it("does not rotate accounts for interactive verification", () => {
+    expect(checkFallbackError(403, "Z.AI interactive verification required", 0, "glm"))
+      .toEqual({ shouldFallback: false, cooldownMs: 0 });
+  });
+
   it("does not classify unrelated provider or method failures as GLM activity blocks", () => {
     expect(checkFallbackError(405, "Method not allowed", 0, "glm")).toEqual({
       shouldFallback: false, cooldownMs: 0, requestScoped: true,

@@ -15,13 +15,15 @@ vi.mock("@/lib/oauth/utils/ideDetect", () => ({ detectIdeInstalled: vi.fn() }));
 import { GET, POST } from "../../src/app/api/oauth/[provider]/[action]/route.js";
 import * as server from "../../src/lib/oauth/utils/server.js";
 import { resolveSavedProviderId, applySavedProvider } from "../../src/lib/oauth/utils/savedProvider.js";
+import { createZaiSession, deleteZaiSession } from "../../src/lib/zcode/sessions.js";
 let callback;
 const providers = ["codex", "xai", "trae", "windsurf", "zed", "github", "kiro", "qwen", "gitlab", "glm", "xiaomi-mimo"];
 const tokens = { accessToken: "fake", email: "same@example.test", providerSpecificData: { workspaceId: "workspace", clientSecret: "fake-secret", systemId: "test-system" } };
 const request = (provider, action, body = {}, as = `${provider}-clone-test`) => POST(new Request(`http://localhost/api/oauth/${provider}/${action}?as=${as}`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 }), { params: Promise.resolve({ provider, action }) });
-beforeEach(() => {
+beforeEach(async () => {
+  await createZaiSession({ flowId: "fake", pollToken: "fake-poll", targetProviderId: "glm-clone-test" });
   mocks.nodes.clear();
   providers.forEach((provider) => mocks.nodes.set(`${provider}-clone-test`, { type: "provider-clone", baseProvider: provider, prefix: `${provider}-2`, name: "Duplicate" }));
   mocks.save.mockReset().mockImplementation(async (data) => ({ id: "test-connection", ...data }));
@@ -32,7 +34,8 @@ beforeEach(() => {
     return { listen: (_port, _host, ready) => ready(), address: () => ({ port: 12345 }), on: vi.fn(), close: vi.fn() };
   });
 });
-afterEach(() => {
+afterEach(async () => {
+  await deleteZaiSession("fake");
   for (const name of ["Codex", "Xai", "Trae", "Windsurf", "Zed"]) {
     server[`stop${name}Proxy`]();
     server[`clear${name}Session`]( "test-state");
@@ -56,7 +59,9 @@ describe("global provider clone OAuth destination", () => {
   });
 
   it.each(["github", "kiro", "qwen", "glm"])("preserves %s device-code metadata", async (provider) => {
-    const res = await request(provider, "poll", { deviceCode: "fake", codeVerifier: "fake" });
+    const res = await request(provider, "poll", { deviceCode: "fake", codeVerifier: "fake",
+      ...(provider === "glm" ? { extraData: { _zcodePollToken: "fake-poll" } } : {}),
+    });
     expect(res.status).toBe(200);
     expect(mocks.save.mock.calls[0][0]).toMatchObject({ provider: `${provider}-clone-test`, providerSpecificData: { ...tokens.providerSpecificData, baseProvider: provider } });
   });

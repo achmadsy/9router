@@ -229,7 +229,9 @@ export function injectZcodeSystemPrompt(body, options = {}) {
   if (!body || typeof body !== "object") return body;
 
   const next = { ...body };
-  const existing = Array.isArray(next.system) ? [...next.system] : [];
+  const existing = typeof next.system === "string"
+    ? [{ type: "text", text: next.system }]
+    : Array.isArray(next.system) ? [...next.system] : [];
 
   if (hasZcodeSystemMarker(existing)) {
     return next;
@@ -250,10 +252,7 @@ export function injectZcodeSystemPrompt(body, options = {}) {
     agentKind: options.agentKind,
   });
 
-  // Native ZCode 3.16.3 sends exactly three system blocks for the main agent.
-  // A fourth block is rejected by upstream risk control (code 3012), even when
-  // empty. Preserve caller instructions by folding them into the final native
-  // dynamic block instead of appending another block.
+  // Keep caller instructions together without discarding them or changing their order.
   if (preservedText && system.length > 0) {
     const index = system.length - 1;
     system[index] = {

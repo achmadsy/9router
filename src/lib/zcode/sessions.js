@@ -3,6 +3,18 @@ import { makeKv } from "../db/helpers/kvStore.js";
 const TTL_MS = 10 * 60 * 1000;
 const SESSIONS_KEY = Symbol.for("9router.zcode.oauthSessions");
 const kv = makeKv("zaiOAuthSessions");
+const locks = globalThis[Symbol.for("9router.zcode.oauthLocks")] ||= new Map();
+
+export async function withZaiSessionLock(flowId, run) {
+  const previous = locks.get(flowId) || Promise.resolve();
+  const pending = previous.catch(() => {}).then(run);
+  locks.set(flowId, pending);
+  try {
+    return await pending;
+  } finally {
+    if (locks.get(flowId) === pending) locks.delete(flowId);
+  }
+}
 
 function getSessionMap() {
   if (!globalThis[SESSIONS_KEY]) {
@@ -41,6 +53,8 @@ export async function createZaiSession({
   expiresAtMs,
   targetProviderId = "glm",
   networkRoute = "account",
+  pollIntervalSec = 2,
+  zaiPlanMode = "start-plan",
 }) {
   const now = Date.now();
   pruneMemory(now);
@@ -52,6 +66,8 @@ export async function createZaiSession({
     provider,
     targetProviderId,
     networkRoute,
+    pollIntervalSec,
+    zaiPlanMode,
     expiresAt: expiresAtMs || now + TTL_MS,
   };
 

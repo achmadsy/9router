@@ -1,6 +1,7 @@
 import { launch as launchBrowser, close as closeBrowser } from "./browser.js";
 import config, { buildZcodeClientConfigUrl } from "./config.js";
 import { buildZcodeGuiRequestHeaders } from "./headers.js";
+import { proxyAwareFetch } from "../../../open-sse/utils/proxyFetch.js";
 
 export class CaptchaManager {
   constructor() {
@@ -13,6 +14,7 @@ export class CaptchaManager {
     this.captchaPage = null;
     this.captchaConfigCache = null;
     this.captchaConfigCacheTime = 0;
+    this.captchaConfigRoute = "";
     this._clearCacheTimer = null;
     this._captchaTimeoutId = null;
     this._headlessTimeoutId = null;
@@ -29,42 +31,45 @@ export class CaptchaManager {
   setProxy(proxyUrl) {
     const next = String(proxyUrl || "").trim();
     if (next === (this._proxyUrl || "")) return;
+    if (this.pendingPromise) throw new Error("Verification is already pending on another route; wait for it to finish");
     this._proxyUrl = next;
     this.invalidate();
   }
 
-  async fetchCaptchaConfig() {
+  async fetchCaptchaConfig(proxyOptions = null) {
     const now = Date.now();
-    if (this.captchaConfigCache && now - this.captchaConfigCacheTime < config.captchaConfigCacheTTL) {
+    const route = JSON.stringify(proxyOptions);
+    if (this.captchaConfigCache && this.captchaConfigRoute === route && now - this.captchaConfigCacheTime < config.captchaConfigCacheTTL) {
       return this.captchaConfigCache;
     }
 
     try {
       const url = buildZcodeClientConfigUrl();
-      const res = await fetch(url, {
-        method: "GET",
+      const res = await proxyAwareFetch(url, {
+        method: "GET", strictTls: true, signal: AbortSignal.timeout(15_000),
         credentials: "omit",
         redirect: "error",
         headers: buildZcodeGuiRequestHeaders({}, url),
-      });
+      }, proxyOptions);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const captchaConfig = json.data?.configs?.captcha;
+      if (json.success === false || (json.code != null && ![0, 200, "0", "200"].includes(json.code))
+          || !captchaConfig || typeof captchaConfig !== "object" || Array.isArray(captchaConfig)
+          || (captchaConfig.enabled !== undefined && typeof captchaConfig.enabled !== "boolean")
+          || (captchaConfig.skip_model_request !== undefined && typeof captchaConfig.skip_model_request !== "boolean")) {
+        throw new Error("Invalid verification configuration");
+      }
       if (captchaConfig) {
+        this.captchaConfigRoute = route;
         this.captchaConfigCache = captchaConfig;
         this.captchaConfigCacheTime = now;
         return captchaConfig;
       }
     } catch {
-      // Config endpoint may 400; fall back to defaults without noisy error.
+      throw new Error("Z.AI verification configuration is unavailable; use the official app to complete verification");
     }
-
-    return {
-      enabled: true,
-      prefix: "no8xfe",
-      region: "sgp",
-      sceneId: "11xygtvd",
-    };
+    throw new Error("Z.AI verification configuration is missing");
   }
 
   _clearVerificationTimers() {

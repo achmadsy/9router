@@ -101,6 +101,18 @@ describe("combo fallback — request-scoped 4xx from a member", () => {
     expect((await result.json()).error.message).toBe(message);
   });
 
+  it("does not replay an interactive verification requirement through another member", async () => {
+    const blocked = jsonResponse({ error: { message: "Z.AI interactive verification required" } }, 403);
+    const handleSingleModel = vi.fn().mockResolvedValue(blocked);
+    const result = await handleComboChat({
+      body: { messages: [{ role: "user", content: "offline" }] },
+      models: ["glm/glm-5.3-flash", "openai/gpt-5"],
+      handleSingleModel, log: silentLog, comboStrategy: "fallback",
+    });
+    expect(result).toBe(blocked);
+    expect(handleSingleModel).toHaveBeenCalledTimes(1);
+  });
+
   it("returns the rejected member's response when a later member fails differently", async () => {
     // Boundary case: member 1 rejected the request, member 2 failed for an
     // unrelated reason. No member served it, so the request-scoped failure is the

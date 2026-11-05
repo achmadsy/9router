@@ -47,6 +47,7 @@ import {
 } from "@/lib/oauth/utils/server";
 import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
 import { ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
+import { getZaiSession, updateZaiSession, withZaiSessionLock } from "@/lib/zcode/sessions";
 
 async function completeXaiManualCode(code, state, asParam = null) {
   const session = state ? getXaiSessionStatus(state) : null;
@@ -296,6 +297,10 @@ export async function GET(request, { params }) {
         deviceData = await requestDeviceCode(provider, authData.codeChallenge, deviceOptions);
       }
 
+      if (provider === "glm") {
+        const saved = await resolveSavedProviderId(searchParams.get("as"), "glm");
+        await updateZaiSession(deviceData.device_code, { targetProviderId: saved.provider });
+      }
       return NextResponse.json({
         ...deviceData,
         // Prefer the verifier the provider's requestDeviceCode generated for
@@ -609,6 +614,32 @@ export async function POST(request, { params }) {
         return NextResponse.json({ error: "Missing device code" }, { status: 400 });
       }
 
+      if (provider === "glm") {
+        const session = await getZaiSession(deviceCode);
+        if (!session || extraData?._zcodePollToken !== session.pollToken) {
+          return NextResponse.json({ error: "OAuth session expired or invalid" }, { status: 400 });
+        }
+        sessionDestination(session, asParam, "glm");
+        if (session.result) return NextResponse.json({ success: true, connection: session.result.connection });
+        const result = await pollForToken(provider, deviceCode, null, extraData);
+        if (!result.success) {
+          const completed = await getZaiSession(deviceCode);
+          if (completed?.result) return NextResponse.json({ success: true, connection: completed.result.connection });
+          return NextResponse.json({ ...result, pending: !!result.pending });
+        }
+        return await withZaiSessionLock(deviceCode, async () => {
+          const current = await getZaiSession(deviceCode);
+          if (!current) return NextResponse.json({ error: "OAuth session expired or invalid" }, { status: 400 });
+          if (current.result) return NextResponse.json({ success: true, connection: current.result.connection });
+          const saved = await resolveSavedProviderId(sessionDestination(current, asParam, "glm"), "glm");
+          const connection = await createProviderConnection({ ...result.tokens, provider: saved.provider,
+            authType: "oauth", testStatus: "active",
+            providerSpecificData: { ...result.tokens.providerSpecificData, ...saved.providerSpecificData } });
+          const response = { success: true, connection: { id: connection.id, provider: connection.provider } };
+          await updateZaiSession(deviceCode, { result: response, tokenData: null, authorization: null });
+          return NextResponse.json(response);
+        });
+      }
       // Providers that don't use PKCE for device code
       const noPkceProviders = ["github", "kimi", "kimi-coding", "kilocode", "codebuddy-cn", "codebuddy-intl", "freebuff", "glm", "nous"];
       let result;

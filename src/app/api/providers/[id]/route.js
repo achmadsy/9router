@@ -7,6 +7,8 @@ import {
 } from "@/models";
 import { isRelayPoolType, supportsNormalProxyOnly } from "@/lib/network/connectionProxy";
 import { sanitizeConnectionForResponse } from "@/lib/providerNormalization";
+import { validateZaiPlanMode, ZAI_PLAN_MODES } from "@/lib/zcode/access";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
 
 
 function normalizeProxyConfig(body = {}) {
@@ -114,6 +116,20 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
+    if (resolveRuntimeProviderId(existing.provider) === "glm" && providerSpecificData
+        && ["zaiPlanMode", "zaiOrganizationId", "zaiProjectId"].some((key) => Object.hasOwn(providerSpecificData, key))) {
+      try {
+        const selection = { ...existing.providerSpecificData, ...providerSpecificData };
+        validateZaiPlanMode(selection.zaiPlanMode);
+        if (selection.zaiPlanMode === ZAI_PLAN_MODES.TEAM
+            && (![selection.zaiOrganizationId, selection.zaiProjectId]
+              .every((value) => typeof value === "string" && value.trim() && value.length <= 200))) {
+          throw new Error("Team Coding Plan requires organization and project IDs");
+        }
+      } catch (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+    }
     const proxyConfig = normalizeProxyConfig(body);
     if (proxyConfig.error) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });

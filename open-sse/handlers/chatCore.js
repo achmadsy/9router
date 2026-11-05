@@ -20,6 +20,7 @@ import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
+import { resolveZaiPlanMode, isZaiAccountCodingPlan, ZAI_PLAN_MODES } from "../../src/lib/zcode/access.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { takeRenamedToolNames } from "../utils/opencodeFingerprint.js";
 import { injectCaveman, formatCavemanTag } from "../rtk/caveman.js";
@@ -122,20 +123,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     ? runtimeTransport
     : modelTargetTransport;
 
-  // GLM Start Plan (glm-5.3*) JWT only speaks Anthropic Messages on zcode-plan.
-  // Force claude translation so OpenAI clients are converted; never point
-  // runtimeTransport at api.z.ai (Coding Plan) — that package lacks glm-5.3*.
-  const glmHasJwt = !!(
-    runtimeProvider === "glm" &&
-    (credentials?.providerSpecificData?.zcodeJwtToken || credentials?.accessToken)
-  );
-  const glmStartPlan =
-    glmHasJwt &&
-    (["glm-5.3", "glm-5.3-flash"].some((m) => {
-      const id = String(model || "");
-      return id === m || id.endsWith(`/${m}`);
-    }));
-  if (glmStartPlan || (runtimeProvider === "glm" && credentials?.providerSpecificData?.useCodingPlan && glmHasJwt)) {
+  // Account plan mode owns the endpoint and wire format, not the model name.
+  const glmHasJwt = runtimeProvider === "glm" && !!credentials?.providerSpecificData?.zcodeJwtToken;
+  const glmPlanMode = runtimeProvider === "glm" ? resolveZaiPlanMode(credentials) : null;
+  const glmStartPlan = glmHasJwt && glmPlanMode === ZAI_PLAN_MODES.START;
+  if (glmStartPlan || (runtimeProvider === "glm" && isZaiAccountCodingPlan(credentials))) {
     useTransport = resolveTransport(runtimeProvider, "claude") || useTransport;
   }
   // A source-format-matched endpoint keeps the request lossless. Prefer it
@@ -168,6 +160,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
   }
 
+  // Capture intent before translators consume reasoning fields or synthesize budgets.
+  const glmEffort = body.output_config?.effort || body.reasoning_effort;
   const upstreamModel = getModelUpstreamId(alias, model, body);
 
   const clientRequestedStreaming = body.stream === true
@@ -215,6 +209,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // outbound request to this routed model's metadata limit before any format
   // conversion, including Claude → OpenAI provider paths.
   if (clientTool === "claude") applyClaudeMaxTokens(body, runtimeProvider, true, model);
+  const glmMaxTokens = runtimeProvider === "glm" ? (body.max_tokens ?? body.max_completion_tokens) : undefined;
 
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
@@ -478,7 +473,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
 
   // Execute request
-  let providerResponse, providerUrl, providerHeaders, finalBody;
+  let providerResponse, providerUrl, providerHeaders, finalBody, skipCredentialRefresh;
   // Most executors return their registry format. Cursor AgentService is an
   // exception: it is decoded by the executor into OpenAI-compatible output.
   let providerResponseFormat = targetFormat;
@@ -489,6 +484,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       stream,
       credentials,
       providerSessionId: sessionSeed,
+      glmEffort,
+      glmMaxTokens,
       clientTool,
       signal: streamController.signal,
       log,
@@ -496,6 +493,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       providerOverrides,
     });
     providerResponse = result.response;
+    skipCredentialRefresh = result.skipCredentialRefresh === true;
     providerUrl = result.url;
     providerHeaders = result.headers;
     finalBody = result.transformedBody;
@@ -531,7 +529,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
 
   // Handle 401/403 - try token refresh (skip for noAuth providers)
-  if (!executor.noAuth && (providerResponse.status === HTTP_STATUS.UNAUTHORIZED || providerResponse.status === HTTP_STATUS.FORBIDDEN)) {
+  if (!skipCredentialRefresh && !executor.noAuth && (providerResponse.status === HTTP_STATUS.UNAUTHORIZED || providerResponse.status === HTTP_STATUS.FORBIDDEN)) {
     try {
       // Mutate credentials after each successful refresh: rotating refresh_token
       // providers (xAI/grok-cli) issue a new RT on every refresh; without this,
@@ -558,6 +556,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             stream,
             credentials,
             providerSessionId: sessionSeed,
+            glmEffort,
+            glmMaxTokens,
             clientTool,
             signal: streamController.signal,
             log,

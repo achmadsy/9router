@@ -35,6 +35,8 @@ export const BACKOFF_CONFIG = {
   maxLevel: 15
 };
 
+export const GLM_VERIFICATION_REQUIRED = "Z.AI interactive verification required";
+
 // Z.AI returns this admission block separately from CAPTCHA (3007) and quota.
 export const GLM_ACTIVITY_BLOCK = {
   status: 405,

@@ -100,6 +100,19 @@ describe("zcode headers", () => {
     expect(headers["x-query-id"]).toBe("test-123");
   });
 
+  it("preserves a deterministic device identity for each distinct JWT", () => {
+    const gui = buildZcodeGuiRequestHeaders();
+    const first = buildZcodeBalanceHeaders("jwt-one")["X-Device-Mid"];
+    const second = buildZcodeBalanceHeaders("jwt-two")["X-Device-Mid"];
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(buildZcodeBalanceHeaders("jwt-one")["X-Device-Mid"]).toBe(first);
+    expect(buildZcodeBalanceHeaders("jwt-two")["X-Device-Mid"]).toBe(second);
+    expect(first).not.toBe(second);
+    expect(first).not.toBe(gui["X-Device-Mid"]);
+    expect(second).not.toBe(gui["X-Device-Mid"]);
+  });
+
   it("builds native billing/balance headers without inference-only fields", () => {
     const headers = buildZcodeBalanceHeaders("jwt-token");
 

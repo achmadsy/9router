@@ -8,6 +8,8 @@ import Button from "@/shared/components/Button";
 import Badge from "@/shared/components/Badge";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import Select from "@/shared/components/Select";
+import { resolveRuntimeProviderId } from "open-sse/providers/clones.js";
+import { resolveZaiPlanMode } from "@/lib/zcode/access";
 
 export default function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }) {
   const [formData, setFormData] = useState({
@@ -25,6 +27,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const [awsData, setAwsData] = useState({ profile: "", region: "", accessKeyId: "", sessionToken: "" });
   const [clearAwsSessionToken, setClearAwsSessionToken] = useState(false);
   const [region, setRegion] = useState("");
+  const [zaiPlanMode, setZaiPlanMode] = useState("start-plan");
+  const [zaiOrganizationId, setZaiOrganizationId] = useState("");
+  const [zaiProjectId, setZaiProjectId] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [validating, setValidating] = useState(false);
@@ -66,12 +71,18 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         const savedRegion = connection.providerSpecificData?.region || providerCfg.defaultRegion || providerCfg.regions[0]?.id || "";
         setRegion(savedRegion);
       }
+      if (resolveRuntimeProviderId(connection.provider) === "glm") {
+        setZaiPlanMode(resolveZaiPlanMode(connection));
+        setZaiOrganizationId(connection.providerSpecificData?.zaiOrganizationId || "");
+        setZaiProjectId(connection.providerSpecificData?.zaiProjectId || "");
+      }
       setTestResult(null);
       setValidationResult(null);
     }
   }, [connection, isOpen]);
 
   const isOAuth = connection?.authType === "oauth";
+  const isZaiOAuth = isOAuth && resolveRuntimeProviderId(connection?.provider) === "glm";
   const isAzure = connection?.provider === "azure";
   const isCloudflareAi = connection?.provider === "cloudflare-ai";
   const usesAwsCredentialForm = AI_PROVIDERS?.[connection?.provider]?.credentialForm === "aws";
@@ -199,6 +210,10 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         updates.providerSpecificData = buildRegionSpecificData();
       }
       
+      if (isZaiOAuth) {
+        updates.providerSpecificData = { zaiPlanMode,
+          zaiOrganizationId: zaiOrganizationId.trim(), zaiProjectId: zaiProjectId.trim() };
+      }
       await onSave(updates);
     } finally {
       setSaving(false);
@@ -221,6 +236,23 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
             <p className="text-sm text-text-muted mb-1">Email</p>
             <p className="font-medium">{connection.email}</p>
           </div>
+        )}
+        {isZaiOAuth && (
+          <>
+            <Select label="Inference plan" value={zaiPlanMode} onChange={(event) => setZaiPlanMode(event.target.value)} options={[
+              { value: "start-plan", label: "Start Plan" },
+              { value: "individual-coding-plan", label: "Individual Coding Plan" },
+              { value: "team-coding-plan", label: "Team Coding Plan" },
+              { value: "api-key", label: "Saved API key" },
+            ]} />
+            {zaiPlanMode === "team-coding-plan" && (
+              <>
+                <Input label="Organization ID" value={zaiOrganizationId} onChange={(event) => setZaiOrganizationId(event.target.value)} />
+                <Input label="Project ID" value={zaiProjectId} onChange={(event) => setZaiProjectId(event.target.value)} />
+              </>
+            )}
+            <p className="text-xs text-text-muted">No automatic fallback to a different plan or API key.</p>
+          </>
         )}
         <Input
           label="Priority"

@@ -24,7 +24,7 @@ function mockEnrollment() {
   mocks.proxyFetch
     .mockResolvedValueOnce(reply({ organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] }))
     .mockResolvedValueOnce(reply([{ name: "zcode-api-key", apiKey: "key-id", usageScene: -1 }]))
-    .mockResolvedValueOnce(reply({ enabled: true, accessToken: "expiring-project-token", expiresIn: 18000 }));
+    .mockResolvedValueOnce(reply({ enable: true, accessToken: "expiring-project-token", tokenType: "Bearer", expiresIn: 18000, expiresAt: Date.now() + 18_000_000 }));
 }
 
 describe("zcode CLI poll oauth (zcode-api method)", () => {

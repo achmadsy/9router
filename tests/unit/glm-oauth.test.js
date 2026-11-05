@@ -9,11 +9,12 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 
 import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
 import glmOauthProvider from "../../src/lib/oauth/providers/glm.js";
-import { getProvider } from "../../src/lib/oauth/providers";
+import { getProvider, pollForToken } from "../../src/lib/oauth/providers";
 import { PROVIDERS as TRANSPORTS, PROVIDER_OAUTH } from "../../open-sse/providers/index.js";
 import { USAGE_SUPPORTED_PROVIDERS } from "../../src/shared/constants/providers.js";
 import { getUsageForProvider } from "../../open-sse/services/usage.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
+import { createZaiSession, deleteZaiSession, getZaiSession, withZaiSessionLock } from "../../src/lib/zcode/sessions.js";
 
 const ANTHROPIC_URL = "https://api.z.ai/api/anthropic/v1/messages";
 const PLAN_KEY = "key123.secret456";
@@ -54,8 +55,10 @@ describe("glm registry entry (dual-auth)", () => {
 describe("glm OAuth flow (ZCode CLI poll protocol)", () => {
   let calls;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     calls = [];
+    await createZaiSession({ flowId: "flow-123", pollToken: "t", networkRoute: "direct" });
+    proxyAwareFetch.mockImplementation((url, options) => globalThis.fetch(url, options));
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url, init = {}) => {
@@ -67,7 +70,7 @@ describe("glm OAuth flow (ZCode CLI poll protocol)", () => {
           return jsonResponse({
             code: 0,
             data: {
-              authorize_url: "https://chat.z.ai/api/oauth/authorize?x=1",
+              authorize_url: "https://chat.z.ai/api/oauth/authorize?state=fixture-state",
               flow_id: "flow-123",
               poll_interval_sec: 2,
               expires_at: Math.floor(Date.now() / 1000) + 300,
@@ -120,7 +123,8 @@ describe("glm OAuth flow (ZCode CLI poll protocol)", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await deleteZaiSession("flow-123");
     vi.unstubAllGlobals();
     delete globalThis.__glmPollState;
   });
@@ -128,7 +132,8 @@ describe("glm OAuth flow (ZCode CLI poll protocol)", () => {
   it("init returns the server-generated authorize URL + flow id", async () => {
     const device = await glmOauthProvider.requestDeviceCode(glmOauthProvider.config);
     expect(device.device_code).toBe("flow-123");
-    expect(device.verification_uri).toBe("https://chat.z.ai/api/oauth/authorize?x=1");
+    expect(new URL(device.verification_uri).searchParams.get("state")).toBe("fixture-state");
+    expect(new URL(device.verification_uri).searchParams.get("redirect_uri")).toContain("/app/oauth/login");
     expect(device._zcodePollToken).toEqual(expect.any(String));
     expect(calls[0].init.headers.Authorization).toMatch(/^Bearer /);
     expect(JSON.parse(calls[0].init.body)).toEqual({ provider: "zai" });
@@ -148,8 +153,9 @@ describe("glm OAuth flow (ZCode CLI poll protocol)", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.data.access_token).toBe(PLAN_KEY);
-    expect(result.data._zcodeJwtToken).toBe("zcode-jwt");
+    expect(result.data.connection.apiKey).toBe(PLAN_KEY);
+    expect(result.data.connection.accessToken).toBe("zai-business-jwt");
+    expect(result.data.connection.providerSpecificData.zcodeJwtToken).toBe("zcode-jwt");
 
     // derivation chain: business login → customer info → api_keys create → copy
     const urls = calls.map((c) => c.url);
@@ -161,27 +167,29 @@ describe("glm OAuth flow (ZCode CLI poll protocol)", () => {
     );
   });
 
-  it("mapTokens stores the plan key + account identity (no refresh token)", () => {
-    const tokens = glmOauthProvider.mapTokens({
-      access_token: PLAN_KEY,
-      _zcodeJwtToken: "zcode-jwt",
-      _zaiBusinessToken: "zai-business-jwt",
-      _zaiRefreshToken: "zai-refresh-token",
-      _zcodeUser: { user_id: "u-1", name: "Feavy", email: "feavy@example.com" },
-    });
+  it("returns canonical credentials through the generic polling contract", async () => {
+    const result = await pollForToken("glm", "flow-123", null, { _zcodePollToken: "t" });
+    expect(result).toMatchObject({ success: true, tokens: { apiKey: PLAN_KEY, accessToken: "zai-business-jwt",
+      providerSpecificData: { authMethod: "zcode_oauth", zaiPlanMode: "start-plan" } } });
+    expect((await getZaiSession("flow-123")).tokenData.apiKey).toBe(PLAN_KEY);
+  });
 
-    expect(tokens.accessToken).toBe(PLAN_KEY);
-    expect(tokens.refreshToken).toBeNull();
-    expect(tokens.email).toBe("feavy@example.com");
-    expect(tokens.displayName).toBe("Feavy");
-    expect(tokens.providerSpecificData).toMatchObject({
-      authMethod: "cli_poll",
-      username: "Feavy",
-      userId: "u-1",
-      zcodeJwtToken: "zcode-jwt",
-      zaiBusinessToken: "zai-business-jwt",
-      zaiRefreshToken: "zai-refresh-token",
-    });
+  it("serializes polling and credential exchange for the same flow", async () => {
+    const extra = { _zcodePollToken: "t" };
+    const [first, second] = await Promise.all([
+      glmOauthProvider.pollToken(glmOauthProvider.config, "flow-123", null, extra),
+      glmOauthProvider.pollToken(glmOauthProvider.config, "flow-123", null, extra),
+    ]);
+    expect(first.data.connection).toEqual(second.data.connection);
+    expect(calls.filter((entry) => entry.url.endsWith("/auth/z/login"))).toHaveLength(1);
+    await expect(withZaiSessionLock("test-error-release", () => { throw new Error("fixture failure"); })).rejects.toThrow("fixture failure");
+    expect(await withZaiSessionLock("test-error-release", () => "released")).toBe("released");
+  });
+
+  it("mapTokens preserves the canonical credential layout", () => {
+    const connection = { apiKey: PLAN_KEY, accessToken: "zai-business-jwt", email: "feavy@example.com",
+      providerSpecificData: { authMethod: "zcode_oauth", zcodeJwtToken: "zcode-jwt", zaiAccessToken: "raw-oauth" } };
+    expect(glmOauthProvider.mapTokens({ connection })).toBe(connection);
   });
 
   it("fails cleanly without the poll token (restart required)", async () => {

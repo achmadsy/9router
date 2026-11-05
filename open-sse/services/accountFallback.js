@@ -1,4 +1,4 @@
-import { ERROR_RULES, BACKOFF_CONFIG, TRANSIENT_COOLDOWN_MS, GLM_ACTIVITY_BLOCK } from "../config/errorConfig.js";
+import { ERROR_RULES, BACKOFF_CONFIG, TRANSIENT_COOLDOWN_MS, GLM_ACTIVITY_BLOCK, GLM_VERIFICATION_REQUIRED } from "../config/errorConfig.js";
 
 /**
  * Calculate exponential backoff cooldown for rate limits (429)
@@ -31,6 +31,9 @@ export function checkFallbackError(status, errorText, backoffLevel = 0, provider
     ? (typeof errorText === "string" ? errorText : JSON.stringify(errorText)).toLowerCase()
     : "";
 
+  if (provider === "glm" && lowerError.includes(GLM_VERIFICATION_REQUIRED.toLowerCase())) {
+    return { shouldFallback: false, cooldownMs: 0 };
+  }
   // A provider activity block must not become account or combo-model rotation.
   if (provider === "glm" && status === GLM_ACTIVITY_BLOCK.status &&
       (lowerError.includes(GLM_ACTIVITY_BLOCK.text) || lowerError.includes(GLM_ACTIVITY_BLOCK.label.toLowerCase()))) {

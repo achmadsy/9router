@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+vi.mock("../../src/lib/zcode/captcha-service.js", () => ({
+  getCaptchaManager: () => ({ fetchCaptchaConfig: async () => ({ enabled: false }) }),
+  isCaptchaError: async () => false,
+}));
 import { GlmExecutor, glmRequestContext } from "../../open-sse/executors/glm.js";
 import { createErrorResult, parseUpstreamError } from "../../open-sse/utils/error.js";
 import { __test__ as headerTest } from "../../src/lib/zcode/headers.js";
@@ -187,10 +191,10 @@ describe("GlmExecutor", () => {
     expect(result.response.status).toBe(405);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages");
-    expect(fetch.mock.calls[0][2]).toBe(proxy);
+    expect(fetch.mock.calls[0][2]).toEqual(proxy);
   });
 
-  it.each(["glm-5.3", "glm-5.3-flash"])("serializes %s thinking budget using the native HTTP field name", async (model) => {
+  it.each(["glm-5.3", "glm-5.3-flash"])("applies final native %s effort options without a numeric budget", async (model) => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ content: [] }), { status: 200 }));
     executor.fetchUpstream = fetch;
     await executor.execute({
@@ -199,7 +203,7 @@ describe("GlmExecutor", () => {
     });
 
     const sent = JSON.parse(fetch.mock.calls[0][1].body);
-    expect(sent.thinking).toEqual({ type: "enabled", budget_tokens: 16000 });
+    expect(sent.thinking).toEqual({ type: "enabled" });
     expect(sent.output_config.effort).toBe("high");
   });
 
@@ -237,14 +241,14 @@ describe("GlmExecutor", () => {
 
   it("retries with API key fallback on 401 when apiKey is present", () => {
     withGlmRequest(codingPlanCreds, () => {
-      expect(executor.shouldRetry(401, 0)).toBe(true);
+      expect(executor.shouldRetry(401, 0)).toBe(false);
       expect(executor.shouldRetry(401, 1)).toBe(false);
     });
   });
 
   it("exposes two URL fallbacks only within request scope for coding plan + api key", () => {
     withGlmRequest(codingPlanCreds, () => {
-      expect(executor.getFallbackCount()).toBe(2);
+      expect(executor.getFallbackCount()).toBe(1);
     });
     expect(executor.getFallbackCount()).toBe(1);
   });
@@ -263,7 +267,7 @@ describe("GlmExecutor", () => {
       )
     );
     expect(body.model).toBe("GLM-5.2");
-    expect(JSON.stringify(body.system)).toContain("You are ZCode");
-    expect(JSON.stringify(body.system)).not.toContain("Claude Code");
+    expect(JSON.stringify(body.system)).not.toContain("You are ZCode");
+    expect(JSON.stringify(body.system)).toContain("Claude Code");
   });
 });

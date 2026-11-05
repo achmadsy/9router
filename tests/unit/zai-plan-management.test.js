@@ -110,7 +110,7 @@ describe("Z.AI plan operations", () => {
       .mockResolvedValueOnce(response({ code: 200, data: { access_token: "fresh-business-token" } }))
       .mockResolvedValueOnce(response({ code: 200, data: { organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] } }))
       .mockResolvedValueOnce(response({ code: 200, data: [{ name: "zcode-api-key", apiKey: "existing-key" }] }))
-      .mockResolvedValueOnce(response({ code: 200, data: { enabled: true, accessToken: "discarded-project-token" } }))
+      .mockResolvedValueOnce(response({ code: 200, data: { enable: true, accessToken: "discarded-project-token", tokenType: "Bearer", expiresIn: 18000, expiresAt: Date.now() + 18_000_000 } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "zcode-v3-start-plan-0817", status: "active" }], balances: [] } }));
     const result = await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -549,7 +549,7 @@ describe("Z.AI plan management API", () => {
     mocks.fetch
       .mockResolvedValueOnce(response({ code: 200, data: { organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] } }))
       .mockResolvedValueOnce(response({ code: 200, data: [{ name: "zcode-api-key", apiKey: "key" }] }))
-      .mockResolvedValueOnce(response({ code: 200, data: { enabled: true, accessToken: "five-hour-project-token", expiresIn: 18000 } }))
+      .mockResolvedValueOnce(response({ code: 200, data: { enable: true, accessToken: "five-hour-project-token", tokenType: "Bearer", expiresIn: 18000, expiresAt: Date.now() + 18_000_000 } }))
       .mockResolvedValueOnce(response({ code: 0, data: { plans: [{ plan_id: "zcode-v3-start-plan-0817", status: "active" }] } }));
     const result = await POST(new Request("http://localhost/api/providers/glm/zai-plans", {
       method: "POST", headers: { "Content-Type": "application/json" },

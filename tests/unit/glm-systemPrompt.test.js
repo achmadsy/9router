@@ -102,8 +102,8 @@ describe("GlmExecutor ZCode system prompt", () => {
       codingPlanCreds
     ));
 
-    expect(JSON.stringify(body.system)).toContain(ZCODE_SYSTEM_IDENTITY_MARKER);
-    expect(JSON.stringify(body.system)).not.toContain("Claude Code");
+    expect(JSON.stringify(body.system)).not.toContain(ZCODE_SYSTEM_IDENTITY_MARKER);
+    expect(JSON.stringify(body.system)).toContain("Claude Code");
   });
 
   it("does not inject ZCode system on API key fallback URL", () => {

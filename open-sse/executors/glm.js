@@ -1,13 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DefaultExecutor } from "./default.js";
 import zcodeConfig from "../../src/lib/zcode/config.js";
-import { GLM_CODING_PLAN_MODEL_MAP } from "../../src/lib/zcode/constants.js";
-import { injectZcodeSystemPrompt } from "../../src/lib/zcode/systemPrompt.js";
+import { GLM_CODING_PLAN_MODEL_MAP, GLM_EFFORT_MODELS } from "../../src/lib/zcode/constants.js";
+import { FORMATS } from "../translator/formats.js";
+import { isZaiStartPlan, isZaiAccountCodingPlan, normalizeZaiCredentials } from "../../src/lib/zcode/access.js";
+import { getZcodeProjectToken, invalidateZcodeProjectToken } from "../../src/lib/zcode/provisioning.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
-import { GLM_ACTIVITY_BLOCK } from "../config/errorConfig.js";
+import { GLM_ACTIVITY_BLOCK, GLM_VERIFICATION_REQUIRED } from "../config/errorConfig.js";
+import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import {
   getCaptchaManager,
-  getZcodeCaptchaPort,
   isCaptchaError,
 } from "../../src/lib/zcode/captcha-service.js";
 import {
@@ -16,23 +18,12 @@ import {
   buildZcodeAnthropicMetadataUserId,
 } from "../../src/lib/zcode/headers.js";
 
-const MAX_CAPTCHA_RETRIES = 3;
-
-/**
- * Models that only exist on ZCode **Start Plan** (zcode.z.ai JWT + captcha).
- * Coding Plan API key on api.z.ai returns 1113 for these.
- */
-const START_PLAN_MODELS = new Set(["glm-5.3", "glm-5.3-flash"]);
-
-/** Native casing — Start Plan balance/resource lookup is case-sensitive. */
-const START_PLAN_UPSTREAM_MODEL_IDS = {
-  "glm-5.3": "GLM-5.3",
-  "glm-5.3-flash": "GLM-5.3-Flash",
-};
+/** Compatibility model predicate; entitlement selection is separate. */
+const START_PLAN_MODELS = new Set(GLM_EFFORT_MODELS);
 
 function isStartPlanModel(model) {
   if (!model) return false;
-  const id = String(model);
+  const id = String(model).toLowerCase();
   if (START_PLAN_MODELS.has(id)) return true;
   // Accept "provider/model" and upstream aliases
   const bare = id.includes("/") ? id.split("/").pop() : id;
@@ -56,14 +47,8 @@ export class GlmExecutor extends DefaultExecutor {
     return ctxModel != null && isStartPlanModel(ctxModel);
   }
 
-  usesCodingPlan(credentials, model = null) {
-    const psd = credentials?.providerSpecificData;
-    if (!psd) return false;
-    const hasJwt = !!(psd.zcodeJwtToken || credentials.accessToken);
-    if (!hasJwt) return false;
-    // Start Plan models always need JWT path; others honor stored flag.
-    if (this.isStartPlanRequest(model)) return true;
-    return !!psd.useCodingPlan;
+  usesCodingPlan(credentials) {
+    return isZaiStartPlan(credentials) && !!credentials?.providerSpecificData?.zcodeJwtToken;
   }
 
   usesApiKeyOnly(credentials) {
@@ -88,18 +73,13 @@ export class GlmExecutor extends DefaultExecutor {
     );
   }
 
-  canFallbackToApiKey(credentials) {
-    // Start Plan-only models are absent from Coding Plan resource packages
-    // (api.z.ai returns code 1113). Never fall back to the API-key path.
-    if (this.isStartPlanRequest()) return false;
-    return this.usesCodingPlan(credentials) && !!credentials?.apiKey;
+  canFallbackToApiKey() {
+    // Plan selection is explicit; a failure must not spend a different entitlement.
+    return false;
   }
 
   getFallbackCount() {
-    if (this.isStartPlanRequest()) return 1;
-    const credentials = getGlmRequestContext()?.credentials;
-    if (!credentials) return 1;
-    return this.canFallbackToApiKey(credentials) ? 2 : 1;
+    return 1;
   }
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
@@ -139,7 +119,7 @@ export class GlmExecutor extends DefaultExecutor {
 
     const bareId = modelId.includes("/") ? modelId.split("/").pop() : modelId;
     const mapped =
-      (this.isStartPlanRequest(modelId) && START_PLAN_UPSTREAM_MODEL_IDS[bareId]) ||
+      GLM_CODING_PLAN_MODEL_MAP[bareId.toLowerCase()] ||
       getModelUpstreamId("glm", modelId) ||
       GLM_CODING_PLAN_MODEL_MAP[modelId.toLowerCase()] ||
       modelId;
@@ -148,37 +128,30 @@ export class GlmExecutor extends DefaultExecutor {
       transformed.model = mapped;
     }
 
-    if (this.usesCodingPlan(credentials) && this.getUrlIndex() === 0) {
-      // Native SDK uses budgetTokens internally but serializes budget_tokens on the wire.
-      if (bareId === "glm-5.3" || bareId === "glm-5.3-flash") {
-        const disabled = transformed.thinking?.type === "disabled";
-        // The translator rebuilds `thinking` without budget_tokens for the zai
-        // format, so max-effort requests must recover the 32k ceiling here.
-        const budget =
-          Number.isFinite(transformed.thinking?.budget_tokens) && transformed.thinking.budget_tokens > 0
-            ? transformed.thinking.budget_tokens
-            : transformed.reasoning_effort === "max"
-              ? 32000
-              : 8000;
-        if (!disabled) {
-          transformed.thinking = { type: "enabled", budget_tokens: budget };
-          transformed.output_config = {
-            ...transformed.output_config,
-            effort:
-              transformed.reasoning_effort ||
-              transformed.output_config?.effort ||
-              (budget >= 32000 ? "max" : "high"),
-          };
+    const originalEffort = getGlmRequestContext()?.effort;
+    const anthropic = !credentials?.runtimeTransport || credentials.runtimeTransport.format === FORMATS.CLAUDE;
+    if (anthropic && (this.usesCodingPlan(credentials) || isZaiAccountCodingPlan(credentials)) && this.getUrlIndex() === 0) {
+      if (START_PLAN_MODELS.has(bareId.toLowerCase())) {
+        const budget = transformed.thinking?.budget_tokens;
+        const selectedEffort = originalEffort || body.output_config?.effort || body.reasoning_effort
+          || (Number.isFinite(budget) ? (budget >= 32000 ? "max" : budget <= 4096 ? "low" : "high") : "high");
+        const effort = ["low", "high", "max"].includes(selectedEffort) ? selectedEffort : "high";
+        transformed.thinking = { type: "enabled" };
+        const requestedMaxTokens = getGlmRequestContext()?.maxTokens;
+        if (Number.isFinite(requestedMaxTokens) && requestedMaxTokens > 0) {
+          // Numeric thinking budgets no longer require an inflated output limit.
+          transformed.max_tokens = Math.min(transformed.max_tokens || requestedMaxTokens, requestedMaxTokens);
         }
+        transformed.output_config = { ...transformed.output_config, effort };
         delete transformed.reasoning_effort;
+        delete transformed.temperature;
+        delete transformed.top_p;
+        delete transformed.top_k;
       }
-      const withSystem = injectZcodeSystemPrompt(transformed, {
-        modelRef: `builtin:zai-start-plan/${transformed.model || mapped}`,
-      });
       const userId = buildZcodeAnthropicMetadataUserId(credentials);
       return userId
-        ? { ...withSystem, metadata: { ...withSystem.metadata, user_id: userId } }
-        : withSystem;
+        ? { ...transformed, metadata: { ...transformed.metadata, user_id: userId } }
+        : transformed;
     }
 
     return transformed;
@@ -196,19 +169,6 @@ export class GlmExecutor extends DefaultExecutor {
     return headers;
   }
 
-  shouldRetry(status, urlIndex) {
-    const credentials = getGlmRequestContext()?.credentials;
-    if (
-      status === 401 &&
-      urlIndex === 0 &&
-      credentials &&
-      this.canFallbackToApiKey(credentials)
-    ) {
-      return true;
-    }
-    return super.shouldRetry(status, urlIndex);
-  }
-
   parseError(response, bodyText) {
     if (!bodyText) {
       return super.parseError(response, bodyText);
@@ -220,6 +180,9 @@ export class GlmExecutor extends DefaultExecutor {
       const code = err?.code ?? json?.code;
       const message = err?.message ?? json?.msg ?? json?.message;
 
+      if (typeof message === "string" && message.includes(GLM_VERIFICATION_REQUIRED)) {
+        return { status: 403, message, noCooldown: true };
+      }
       if (response.status === GLM_ACTIVITY_BLOCK.status &&
           (String(code) === String(GLM_ACTIVITY_BLOCK.code) ||
            (typeof message === "string" && message.toLowerCase().includes(GLM_ACTIVITY_BLOCK.text)))) {
@@ -263,68 +226,61 @@ export class GlmExecutor extends DefaultExecutor {
     return super.parseError(response, bodyText);
   }
 
+  verificationResult(url = zcodeConfig.codingPlanUrl) {
+    return { response: new Response(JSON.stringify({ error: {
+      message: `${GLM_VERIFICATION_REQUIRED}: complete the request in the official ZCode app. No automatic replay was sent.`,
+    } }), { status: 403, headers: { "Content-Type": "application/json" } }),
+    url, headers: {}, transformedBody: null, skipCredentialRefresh: true };
+  }
+
+  async fetchUpstream(url, options, proxyOptions) {
+    try {
+      return await proxyAwareFetch(url, { ...options, strictTls: true, redirect: "error" },
+        { ...proxyOptions, strictProxy: proxyOptions?.forceDirect !== true });
+    } catch (error) {
+      if (options?.signal?.aborted) throw error;
+      throw new Error("Z.AI inference network request failed on the selected route");
+    }
+  }
+
   async execute(params) {
-    const { credentials, model } = params;
-    // Lazy captcha: only after Start Plan returns 400/403 captcha — not on every request.
-    return glmRequestContext.run({ credentials, urlIndex: 0, model }, async () => {
+    params = { ...params, proxyOptions: { ...params.proxyOptions, strictProxy: params.proxyOptions?.forceDirect !== true } };
+    let credentials = normalizeZaiCredentials(params.credentials);
+    const { model } = params;
+    if (params.providerSessionId) credentials = { ...credentials, _clientSessionId: params.providerSessionId };
+    if (isZaiStartPlan(credentials) && !credentials?.providerSpecificData?.zcodeJwtToken) {
+      return { ...this.verificationResult(), response: new Response(JSON.stringify({ error: {
+        message: `${GLM_VERIFICATION_REQUIRED}: the selected Start Plan has no login credential. Reconnect this account; no API-key fallback was sent.`,
+      } }), { status: 403, headers: { "Content-Type": "application/json" } }) };
+    }
+    if (isZaiAccountCodingPlan(credentials)) {
+      const token = await getZcodeProjectToken(credentials, params.proxyOptions);
+      credentials = { ...credentials, apiKey: token };
+    }
+    params = { ...params, credentials };
+    if (this.usesCodingPlan(credentials)) {
+      let verification;
+      try { verification = await getCaptchaManager().fetchCaptchaConfig(params.proxyOptions); }
+      catch { return this.verificationResult(); }
+      if (verification.enabled !== false && verification.skip_model_request !== true) {
+        return this.verificationResult();
+      }
+    }
+    return glmRequestContext.run({ credentials, urlIndex: 0, model, effort: params.glmEffort, maxTokens: params.glmMaxTokens }, async () => {
       const result = await super.execute(params);
       const status = result?.response?.status;
+      if (status === 401 && isZaiAccountCodingPlan(credentials)) {
+        invalidateZcodeProjectToken(credentials, params.proxyOptions);
+      }
       if (
-        this.usesCodingPlan(credentials, model) &&
         (await this.isCaptchaResponse(status, result?.response))
       ) {
-        getCaptchaManager()?.invalidate?.();
-        return this.executeWithCaptcha(params);
+        return this.verificationResult(result.url);
       }
       return result;
     });
   }
 
-  /**
-   * On Start Plan captcha (400/403), solve captcha and retry.
-   * Coding Plan API-key path never enters here.
-   */
-  async executeWithCaptcha(params) {
-    const { credentials, model } = params;
-    const captchaManager = getCaptchaManager();
-    const port = getZcodeCaptchaPort();
-    // CloakBrowser must share the same normal proxy as the model request (IP binding).
-    // Relay URLs are already stripped for glm by resolveConnectionProxyConfig.
-    const psd = credentials?.providerSpecificData;
-    const normalProxy =
-      psd?.connectionProxyEnabled === true && psd?.connectionProxyUrl
-        ? String(psd.connectionProxyUrl).trim()
-        : "";
-    captchaManager.setProxy?.(normalProxy);
-
-    for (let attempt = 1; attempt <= MAX_CAPTCHA_RETRIES; attempt++) {
-      let verifyParam;
-      try {
-        verifyParam = await captchaManager.getVerifyParam(port);
-      } catch (err) {
-        throw new Error(`Captcha verification failed: ${err.message}`);
-      }
-
-      const credsWithCaptcha = {
-        ...credentials,
-        providerSpecificData: {
-          ...(credentials.providerSpecificData || {}),
-          _captchaVerifyParam: verifyParam,
-        },
-      };
-
-      const result = await super.execute({ ...params, credentials: credsWithCaptcha });
-
-      if (await this.isCaptchaResponse(result.response?.status, result.response)) {
-        captchaManager.invalidate();
-        continue;
-      }
-
-      return result;
-    }
-
-    throw new Error("Captcha expired multiple times. Restart the service or check CloakBrowser.");
-  }
 }
 
 export default GlmExecutor;

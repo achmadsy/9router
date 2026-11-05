@@ -14,6 +14,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
   const withAs = useOAuthDestination(targetProviderId);
   const [step, setStep] = useState("idle");
   const [networkRoute, setNetworkRoute] = useState("account");
+  const [zaiPlanMode, setZaiPlanMode] = useState("start-plan");
   const [networkLabel, setNetworkLabel] = useState("");
   const [flowId, setFlowId] = useState(null);
   const [authorizeUrl, setAuthorizeUrl] = useState(null);
@@ -45,6 +46,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
     stopPolling();
     setStep("idle");
     setNetworkRoute("account");
+    setZaiPlanMode("start-plan");
     setNetworkLabel("");
     setFlowId(null);
     setAuthorizeUrl(null);
@@ -89,9 +91,14 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
             }),
           });
           const data = await res.json();
+          if (activeFlowIdRef.current !== id) return;
           nextDelayMs = data.pollAfterMs || initialDelayMs;
 
           if (!res.ok) {
+            if (res.status >= 500 && activeFlowIdRef.current === id) {
+              schedule(nextDelayMs);
+              return;
+            }
             if (res.status === 404) {
               sessionMissRef.current += 1;
               if (sessionMissRef.current <= SESSION_NOT_FOUND_RETRIES) {
@@ -134,6 +141,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
             }, 1500);
           }
         } catch (err) {
+          if (activeFlowIdRef.current !== id) return;
           if (pollCountRef.current > MAX_POLLS) {
             stopPolling();
             setError(err.message);
@@ -166,7 +174,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
       const res = await fetch(withAs("/api/oauth/zai/init"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ networkRoute }),
+        body: JSON.stringify({ networkRoute, zaiPlanMode }),
         signal: abortController.signal,
       });
       const data = await res.json();
@@ -188,7 +196,7 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
       setError(err.message);
       setStep("error");
     }
-  }, [stopPolling, withAs, networkRoute]);
+  }, [stopPolling, withAs, networkRoute, zaiPlanMode]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -228,8 +236,8 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
             <p className="text-lg font-medium text-text-primary">Account connected!</p>
             <p className="text-sm text-text-muted mt-2">
               {startPlanInitialized
-                ? "Coding Plan credentials saved and Start Plan initialized"
-                : "Coding Plan credentials saved"}
+                ? "Z.AI credentials saved and Start Plan initialized"
+                : "Z.AI credentials saved"}
             </p>
             {successWarning && (
               <p className="text-xs text-warning mt-2">Connected, but {successWarning}</p>
@@ -260,6 +268,14 @@ export default function ZaiOAuthModal({ isOpen, providerInfo, onSuccess, onClose
             {step === "configure" && (
               <div className="space-y-3">
                 <ZaiNetworkSelect value={networkRoute} onChange={setNetworkRoute} onboarding />
+                <label className="block text-sm">
+                  Inference plan
+                  <select className="mt-1 w-full rounded-lg bg-surface-secondary p-2" value={zaiPlanMode} onChange={(event) => setZaiPlanMode(event.target.value)}>
+                    <option value="start-plan">Start Plan</option>
+                    <option value="individual-coding-plan">Individual Coding Plan</option>
+                  </select>
+                </label>
+                <p className="text-xs text-text-muted">Requests use only the selected entitlement. Security verification must be completed through the provider’s supported flow.</p>
                 <Button onClick={() => startOAuth(false)} fullWidth>Continue to authorization</Button>
               </div>
             )}
