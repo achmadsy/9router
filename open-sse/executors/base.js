@@ -4,6 +4,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { dbg } from "../utils/debugLog.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
+import { applyProviderHeaderOverrides } from "../utils/providerHeaderOverrides.js";
 
 /**
  * BaseExecutor - Base class for provider executors
@@ -130,14 +131,8 @@ export class BaseExecutor {
       const url = this.buildUrl(model, stream, urlIndex, credentials);
       const transformedBody = this.transformRequest(model, body, stream, credentials);
       const headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
-      // Header names are case-insensitive. Remove differently cased defaults
-      // before overlaying validated dashboard values, or fetch combines both.
-      for (const [name, value] of Object.entries(providerOverrides?.headers || {})) {
-        for (const existing of Object.keys(headers)) {
-          if (existing.toLowerCase() === name.toLowerCase()) delete headers[existing];
-        }
-        headers[name] = value;
-      }
+      // Validated dashboard values win case-insensitively; null deletes a default.
+      applyProviderHeaderOverrides(headers, providerOverrides?.headers);
 
       if (!retryAttemptsByUrl[urlIndex]) retryAttemptsByUrl[urlIndex] = 0;
 

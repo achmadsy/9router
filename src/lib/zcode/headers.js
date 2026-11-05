@@ -327,6 +327,22 @@ export function clearZcodeCodingPlanHeaders(headers) {
   return headers;
 }
 
+/** Non-secret defaults shared by inference and the provider Custom Headers UI. */
+export function buildZcodeCodingPlanDefaultHeaders(options = {}) {
+  const userAgent =
+    options.userAgent ||
+    normalizePrintableHeaderValue(zcodeConfig.inferenceUserAgent) ||
+    normalizePrintableHeaderValue(zcodeConfig.userAgent);
+  return {
+    ...buildZcodeAppSourceHeaders(zcodeConfig.codingPlanUrl),
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": options.anthropicBeta || "mid-conversation-system-2026-04-07",
+    "X-ZCode-Agent": "glm",
+    "x-zcode-session-type": options.sessionType || "main",
+    ...(userAgent ? { "User-Agent": userAgent } : {}),
+  };
+}
+
 /**
  * Build ZCode Coding Plan upstream headers (zcode-plan URL fingerprint).
  * Native request auth selects one token for BOTH authentication headers:
@@ -345,30 +361,17 @@ export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
   }
   const verifyParam =
     options.verifyParam ?? credentials?.providerSpecificData?._captchaVerifyParam;
-  const sessionType = options.sessionType || "main";
   const queryId = normalizeZcodeAttributionId(options.queryId, ["query_"]);
-  const userAgent =
-    options.userAgent ||
-    normalizePrintableHeaderValue(zcodeConfig.inferenceUserAgent) ||
-    normalizePrintableHeaderValue(zcodeConfig.userAgent);
 
   const headers = {
-    ...buildZcodeAppSourceHeaders(zcodeConfig.codingPlanUrl),
+    ...buildZcodeCodingPlanDefaultHeaders(options),
     Authorization: `Bearer ${token}`,
     "x-api-key": token,
-    "anthropic-version": "2023-06-01",
-    "anthropic-beta": options.anthropicBeta || "mid-conversation-system-2026-04-07",
-    "X-ZCode-Agent": "glm",
-    "x-zcode-session-type": sessionType,
     "x-request-id": options.requestId || randomUuid(),
     "x-zcode-trace-id": options.traceId || randomUuid(),
     ...(queryId ? { "x-query-id": queryId } : {}),
     "x-session-id": getZcodeSessionId(credentials),
   };
-
-  if (userAgent) {
-    headers["User-Agent"] = userAgent;
-  }
 
   if (verifyParam) {
     headers["X-Aliyun-Captcha-Verify-Param"] = verifyParam;

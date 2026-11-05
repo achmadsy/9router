@@ -4,10 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import { Card, Badge } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
-
-// Mirrors the server-side gate in /api/providers/[id]/overrides — client check is UX only
-const BLOCKED_HEADERS = ["host", "content-length", "content-type", "connection", "transfer-encoding", "authorization", "cookie"];
-const HEADER_NAME_RE = /^[A-Za-z0-9-]+$/;
+import { diffProviderHeaderRows, mergeProviderHeaders } from "open-sse/utils/providerHeaderOverrides.js";
 
 export default function CustomConfigCard({ providerId }) {
   const notify = useNotificationStore();
@@ -15,6 +12,7 @@ export default function CustomConfigCard({ providerId }) {
   const [rows, setRows] = useState([{ name: "", value: "" }]);
   const [builtin, setBuiltin] = useState({});
   const [hasOverride, setHasOverride] = useState(false);
+  const [profile, setProfile] = useState(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -23,13 +21,14 @@ export default function CustomConfigCard({ providerId }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data) return;
-        // Effective set = registry built-ins with user overrides layered on top
+        // Same case-insensitive replacement/deletion semantics as the executor.
         const builtinHeaders = data.builtinHeaders || {};
-        const effective = { ...builtinHeaders, ...(data.headers || {}) };
+        const effective = mergeProviderHeaders(builtinHeaders, data.headers);
         const headerRows = Object.entries(effective).map(([name, value]) => ({ name, value }));
         setBuiltin(builtinHeaders);
         setRows(headerRows.length ? headerRows : [{ name: "", value: "" }]);
         setHasOverride(Object.keys(data.headers || {}).length > 0);
+        setProfile(data.defaultProfile || null);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -40,25 +39,13 @@ export default function CustomConfigCard({ providerId }) {
   };
 
   const save = useCallback(async () => {
-    // Diff-on-save: only rows differing from the registry default become overrides,
-    // so a code-side registry bump still wins for everything the user left alone.
-    const headers = {};
-    for (const r of rows.filter((r) => r.name.trim())) {
-      const name = r.name.trim();
-      if (!HEADER_NAME_RE.test(name)) {
-        notify.error(`Invalid header name: ${name}`);
-        return;
-      }
-      if (BLOCKED_HEADERS.includes(name.toLowerCase())) {
-        notify.error(`Header ${name} cannot be overridden`);
-        return;
-      }
-      if (name in headers) {
-        notify.error(`Duplicate header name: ${name}`);
-        return;
-      }
-      if (r.value !== builtin[name]) headers[name] = r.value;
+    // Missing defaults become null tombstones, not "inherit this header again".
+    const { override, error } = diffProviderHeaderRows(builtin, rows);
+    if (error) {
+      notify.error(error);
+      return;
     }
+    const headers = override?.headers || {};
 
     setSaving(true);
     try {
@@ -72,8 +59,15 @@ export default function CustomConfigCard({ providerId }) {
         notify.error(err.error || "Failed to save");
         return;
       }
-      setHasOverride(Object.keys(headers).length > 0);
+      const saved = await res.json();
+      const savedHeaders = saved.headers || {};
+      const effective = mergeProviderHeaders(builtin, savedHeaders);
+      const headerRows = Object.entries(effective).map(([name, value]) => ({ name, value }));
+      setRows(headerRows.length ? headerRows : [{ name: "", value: "" }]);
+      setHasOverride(Object.keys(savedHeaders).length > 0);
       notify.success("Custom headers saved");
+    } catch {
+      notify.error("Failed to save custom headers");
     } finally {
       setSaving(false);
     }
@@ -83,7 +77,7 @@ export default function CustomConfigCard({ providerId }) {
     setRows(Object.entries(builtin).map(([name, value]) => ({ name, value })));
   };
 
-  // Only render when there is something to customize: registry headers or existing overrides
+  // Only render when there are defaults or saved edits (including deletions).
   if (Object.keys(builtin).length === 0 && !hasOverride) return null;
 
   return (
@@ -107,9 +101,14 @@ export default function CustomConfigCard({ providerId }) {
 
       {expanded && (
         <div className="mt-3 border-t border-border pt-3">
+          <p className="mb-3 text-xs text-text-muted">
+            {profile === "zcode-account-plan" && "Defaults below match ZCode account-plan inference. API-key connections use their own transport defaults. "}
+            Delete + Save suppresses a header; Reset + Save restores current defaults. Authentication headers are managed automatically.
+          </p>
           <div className="flex flex-col gap-2">
             {rows.map((row, i) => {
-              const overridden = row.name.trim() in builtin && row.value !== builtin[row.name.trim()];
+              const builtinName = Object.keys(builtin).find((name) => name.toLowerCase() === row.name.trim().toLowerCase());
+              const overridden = builtinName !== undefined && row.value !== builtin[builtinName];
               return (
                 <div key={i} className="flex items-center gap-2">
                   <input
@@ -124,7 +123,7 @@ export default function CustomConfigCard({ providerId }) {
                     onChange={(e) => setRow(i, "value", e.target.value)}
                     placeholder="Value"
                     spellCheck={false}
-                    title={overridden ? "Overridden" : row.name.trim() in builtin ? "Registry default" : ""}
+                    title={overridden ? "Overridden" : builtinName !== undefined ? "Provider default" : ""}
                     className={`min-w-0 flex-1 rounded-md border bg-background px-2 py-1.5 text-sm focus:border-primary focus:outline-none ${
                       overridden ? "border-amber-400/60" : "border-border"
                     }`}

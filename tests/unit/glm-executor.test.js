@@ -141,6 +141,22 @@ describe("GlmExecutor", () => {
     expect(wire.get("x-api-key")).toBe("jwt-token");
   });
 
+  it("suppresses deleted defaults at send time without serializing null or touching auth", async () => {
+    executor.fetchUpstream = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    await executor.execute({
+      model: "glm-5.3", body: { model: "glm-5.3", messages: [] },
+      credentials: codingPlanCreds, stream: false,
+      providerOverrides: { headers: { "Anthropic-Beta": null, "user-agent": null } },
+    });
+    expect(executor.fetchUpstream).toHaveBeenCalledTimes(1);
+    const wire = new Headers(executor.fetchUpstream.mock.calls[0][1].headers);
+    expect(wire.has("anthropic-beta")).toBe(false);
+    expect(wire.has("user-agent")).toBe(false);
+    expect(wire.get("anthropic-version")).toBe("2023-06-01");
+    expect(wire.get("authorization")).toBe("Bearer jwt-token");
+    expect(wire.get("x-api-key")).toBe("jwt-token");
+  });
+
   it("reuses x-session-id for the same connection", () => {
     const creds = { ...codingPlanCreds, connectionId: "conn-stable" };
     const first = atUrlIndex(executor, 0, creds, () => executor.buildHeaders(creds));
