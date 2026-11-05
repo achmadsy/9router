@@ -68,6 +68,39 @@ describe("native-shaped ZCode contracts", () => {
     expect(JSON.stringify(out.transformedBody.system)).toContain("Caller policy");
     expect(JSON.stringify(out.transformedBody.system)).not.toContain("You are ZCode");
     expect(out.headers["x-session-id"]).toBe("actual-conversation");
+    const wire = new Headers(ex.fetchUpstream.mock.calls[0][1].headers);
+    expect(wire.get("authorization")).toBe("Bearer fixture-login");
+    expect(wire.get("x-api-key")).toBe("fixture-login");
+  });
+  it.each(["individual-coding-plan", "team-coding-plan"])("sends only the minted %s token in both inference auth headers", async (zaiPlanMode) => {
+    const c = { ...credentials, connectionId: `dual-auth-${zaiPlanMode}`, providerSpecificData: {
+      ...credentials.providerSpecificData, zaiPlanMode,
+      ...(zaiPlanMode === "team-coding-plan" ? { zaiOrganizationId: "org", zaiProjectId: "project" } : {}),
+    } };
+    mocks.fetch.mockImplementation(async (url) => url.endsWith("getCustomerInfo")
+      ? reply({ organizations: [{ organizationId: "org", projects: [{ projectId: "project" }] }] })
+      : url.endsWith("access_tokens") ? reply(token()) : reply([{ name: "zcode-api-key", apiKey: "key" }]));
+    const ex = new GlmExecutor();
+    ex.fetchUpstream = vi.fn().mockResolvedValue(reply({}));
+    const result = await ex.execute({ model: "glm-5.3", body: { model: "glm-5.3", messages: [] }, stream: false, credentials: c });
+    expect(result.url).toBe("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages");
+    expect(ex.fetchUpstream).toHaveBeenCalledTimes(1);
+    const wire = new Headers(ex.fetchUpstream.mock.calls[0][1].headers);
+    expect(wire.get("authorization")).toBe("Bearer fixture-project-token");
+    expect(wire.get("x-api-key")).toBe("fixture-project-token");
+    expect(wire.get("anthropic-version")).toBe("2023-06-01");
+    expect(mocks.verification).not.toHaveBeenCalled();
+    expect(c.apiKey).toBe("fixture-static");
+    expect(c.accessToken).toBe("fixture-business");
+    invalidateZcodeProjectToken(c);
+  });
+  it.each([undefined, null, {}])("fails closed when verification config is missing or ambiguous: %j", async (config) => {
+    mocks.verification.mockResolvedValue(config);
+    const ex = new GlmExecutor(); ex.fetchUpstream = vi.fn();
+    const result = await ex.execute({ model: "glm-5.3", body: {}, credentials });
+    expect(result.response.status).toBe(403);
+    expect(result.skipCredentialRefresh).toBe(true);
+    expect(ex.fetchUpstream).not.toHaveBeenCalled();
   });
   it("does not send inference or launch a solver when verification is required", async () => {
     mocks.verification.mockResolvedValue({ enabled: true, skip_model_request: false });

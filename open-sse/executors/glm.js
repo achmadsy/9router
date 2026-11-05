@@ -48,10 +48,10 @@ export class GlmExecutor extends DefaultExecutor {
   }
 
   usesCodingPlan(credentials) {
-    return (
-      (isZaiStartPlan(credentials) || isZaiAccountCodingPlan(credentials)) &&
-      (!!credentials?.providerSpecificData?.zcodeJwtToken || !!credentials?.accessToken)
-    );
+    // Paid plans obtain their own request-scoped project token in execute;
+    // neither a login JWT nor the business token is their inference credential.
+    return isZaiAccountCodingPlan(credentials) ||
+      (isZaiStartPlan(credentials) && !!credentials?.providerSpecificData?.zcodeJwtToken);
   }
 
   usesApiKeyOnly(credentials) {
@@ -89,7 +89,8 @@ export class GlmExecutor extends DefaultExecutor {
     const ctx = getGlmRequestContext();
     if (ctx) ctx.urlIndex = urlIndex;
 
-    // Coding Plan JWT → zcode-plan Anthropic endpoint (desktop quota lives here).
+    // Explicit account plans use the native Anthropic endpoint with a
+    // plan-scoped inference token (login JWT for Start, project token for paid).
     if (this.usesCodingPlan(credentials) && urlIndex === 0) {
       return zcodeConfig.codingPlanUrl;
     }
@@ -265,7 +266,7 @@ export class GlmExecutor extends DefaultExecutor {
       let verification;
       try { verification = await getCaptchaManager().fetchCaptchaConfig(params.proxyOptions); }
       catch { return this.verificationResult(); }
-      if (verification && verification.enabled !== false && verification.skip_model_request !== true) {
+      if (!verification || (verification.enabled !== false && verification.skip_model_request !== true)) {
         return this.verificationResult();
       }
     }

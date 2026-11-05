@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import zcodeConfig from "./config.js";
+import { isZaiAccountCodingPlan } from "./access.js";
 
 const sessionIdByConnection = new Map();
 
@@ -194,10 +195,11 @@ function endpointOrigin(endpoint = zcodeConfig.apiBaseUrl) {
 
 function setHeaders(target, source = {}) {
   for (const [key, value] of Object.entries(source)) {
-    const existing = Object.keys(target).find(
-      (candidate) => candidate.toLowerCase() === key.toLowerCase()
-    );
-    if (existing && existing !== key) delete target[existing];
+    for (const existing of Object.keys(target)) {
+      if (existing !== key && existing.toLowerCase() === key.toLowerCase()) {
+        delete target[existing];
+      }
+    }
     target[key] = value;
   }
   return target;
@@ -327,17 +329,20 @@ export function clearZcodeCodingPlanHeaders(headers) {
 
 /**
  * Build ZCode Coding Plan upstream headers (zcode-plan URL fingerprint).
- * Matches official native ZCode 3.17.2 wire headers captured on zcode-plan endpoint.
+ * Native request auth selects one token for BOTH authentication headers:
+ * Start Plan uses the login JWT; individual/team plans use a minted project token.
+ * Never substitute the business-platform accessToken or a saved static API key
+ * for the selected Start Plan's login credential.
  * @param {object} credentials
- * @param {{ verifyParam?: string, apiKey?: string, userAgent?: string, anthropicBeta?: string }} [options]
+ * @param {{ verifyParam?: string, userAgent?: string, anthropicBeta?: string }} [options]
  */
 export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
-  const jwt =
-    credentials?.providerSpecificData?.zcodeJwtToken || credentials?.accessToken;
-  const apiKey =
-    options.apiKey ||
-    credentials?.apiKey ||
-    credentials?.providerSpecificData?.zcodeApiKey;
+  const token = isZaiAccountCodingPlan(credentials)
+    ? credentials?.apiKey
+    : credentials?.providerSpecificData?.zcodeJwtToken;
+  if (typeof token !== "string" || !token.trim()) {
+    throw new Error("Z.AI plan inference credential is missing");
+  }
   const verifyParam =
     options.verifyParam ?? credentials?.providerSpecificData?._captchaVerifyParam;
   const sessionType = options.sessionType || "main";
@@ -349,7 +354,8 @@ export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
 
   const headers = {
     ...buildZcodeAppSourceHeaders(zcodeConfig.codingPlanUrl),
-    Authorization: `Bearer ${jwt}`,
+    Authorization: `Bearer ${token}`,
+    "x-api-key": token,
     "anthropic-version": "2023-06-01",
     "anthropic-beta": options.anthropicBeta || "mid-conversation-system-2026-04-07",
     "X-ZCode-Agent": "glm",
@@ -364,24 +370,13 @@ export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
     headers["User-Agent"] = userAgent;
   }
 
-  // Native ZCode sends dual auth: both Authorization (Bearer jwt) AND x-api-key (project token)
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-
   if (verifyParam) {
     headers["X-Aliyun-Captcha-Verify-Param"] = verifyParam;
     headers["X-Aliyun-Captcha-Verify-Region"] = "sgp";
   }
 
-  // Support connection-level custom headers overrides if present
-  const customHeaders =
-    options.customHeaders ||
-    credentials?.customHeaders ||
-    credentials?.providerSpecificData?.customHeaders;
-  if (customHeaders && typeof customHeaders === "object") {
-    Object.assign(headers, customHeaders);
-  }
+  // Dashboard overrides are validated and applied last by BaseExecutor.execute.
+  // Do not add an unvalidated connection-level override path here.
 
   return headers;
 }
@@ -389,9 +384,9 @@ export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
 /** Merge ZCode Coding Plan headers into an existing header bag; strips Anthropic CLI headers. */
 export function applyZcodeCodingPlanHeaders(headers, credentials, options = {}) {
   stripAnthropicHeadersForZcodePlan(headers);
-  delete headers["x-api-key"];
-  Object.assign(headers, buildZcodeCodingPlanHeaders(credentials, options));
-  return headers;
+  // Replace inherited auth and fingerprint headers case-insensitively, rather
+  // than letting fetch combine differently cased keys into a comma-list value.
+  return setHeaders(headers, buildZcodeCodingPlanHeaders(credentials, options));
 }
 
 /**

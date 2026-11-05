@@ -130,8 +130,14 @@ export class BaseExecutor {
       const url = this.buildUrl(model, stream, urlIndex, credentials);
       const transformedBody = this.transformRequest(model, body, stream, credentials);
       const headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
-      // User per-provider override wins over registry headers (blocked names filtered at the API)
-      if (providerOverrides?.headers) Object.assign(headers, providerOverrides.headers);
+      // Header names are case-insensitive. Remove differently cased defaults
+      // before overlaying validated dashboard values, or fetch combines both.
+      for (const [name, value] of Object.entries(providerOverrides?.headers || {})) {
+        for (const existing of Object.keys(headers)) {
+          if (existing.toLowerCase() === name.toLowerCase()) delete headers[existing];
+        }
+        headers[name] = value;
+      }
 
       if (!retryAttemptsByUrl[urlIndex]) retryAttemptsByUrl[urlIndex] = 0;
 

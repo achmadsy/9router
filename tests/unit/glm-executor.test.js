@@ -74,7 +74,7 @@ describe("GlmExecutor", () => {
       })
     );
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["x-api-key"]).toBe("org.key.secret");
+    expect(headers["x-api-key"]).toBe("jwt-token");
     expect(headers["User-Agent"]).toBe(
       "ZCode/3.17.2 ai-sdk/provider-utils/4.0.27 runtime/node.js/24"
     );
@@ -100,7 +100,7 @@ describe("GlmExecutor", () => {
     expect(headers["Anthropic-Beta"]).toBeUndefined();
   });
 
-  it("omits x-api-key on Start Plan primary URL when no apiKey is present", () => {
+  it("uses the login JWT as x-api-key on Start Plan even without a saved key", () => {
     const startPlanCreds = {
       accessToken: "jwt-token",
       providerSpecificData: {
@@ -112,24 +112,33 @@ describe("GlmExecutor", () => {
       executor.buildHeaders(startPlanCreds)
     );
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["x-api-key"]).toBe("jwt-token");
     expect(headers["anthropic-beta"]).toBe("mid-conversation-system-2026-04-07");
   });
 
-  it("respects 9Router custom headers overrides layered over native defaults", () => {
-    const headers = executor.buildHeaders(codingPlanCreds);
-    const providerOverrides = {
-      headers: {
-        "User-Agent": "Custom-Agent/1.0",
-        "anthropic-beta": "custom-beta-feature",
+  it.each([
+    ["User-Agent", "anthropic-beta", "anthropic-version"],
+    ["user-agent", "Anthropic-Beta", "Anthropic-Version"],
+  ])("sends case-insensitive dashboard overrides last (%s, %s, %s)", async (agentHeader, betaHeader, versionHeader) => {
+    executor.fetchUpstream = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    await executor.execute({
+      model: "glm-5.3", body: { model: "glm-5.3", messages: [] },
+      credentials: codingPlanCreds, stream: false,
+      providerOverrides: { headers: {
+        [agentHeader]: "Custom-Agent/1.0",
+        [betaHeader]: "custom-beta-feature",
+        [versionHeader]: "custom-version",
         "X-Custom-Tracking": "custom-val-123",
-      },
-    };
-    if (providerOverrides?.headers) Object.assign(headers, providerOverrides.headers);
-    expect(headers["User-Agent"]).toBe("Custom-Agent/1.0");
-    expect(headers["anthropic-beta"]).toBe("custom-beta-feature");
-    expect(headers["X-Custom-Tracking"]).toBe("custom-val-123");
-    expect(headers.Authorization).toBe("Bearer jwt-token");
+      } },
+    });
+    expect(executor.fetchUpstream).toHaveBeenCalledTimes(1);
+    const wire = new Headers(executor.fetchUpstream.mock.calls[0][1].headers);
+    expect(wire.get("user-agent")).toBe("Custom-Agent/1.0");
+    expect(wire.get("anthropic-beta")).toBe("custom-beta-feature");
+    expect(wire.get("anthropic-version")).toBe("custom-version");
+    expect(wire.get("x-custom-tracking")).toBe("custom-val-123");
+    expect(wire.get("authorization")).toBe("Bearer jwt-token");
+    expect(wire.get("x-api-key")).toBe("jwt-token");
   });
 
   it("reuses x-session-id for the same connection", () => {

@@ -56,21 +56,61 @@ describe("zcode headers", () => {
     expect(headers["x-query-id"]).toBeUndefined();
   });
 
-  it("builds ZCode dual-auth headers when apiKey is present", () => {
+  it("uses the Start Plan login JWT in both auth headers, never a saved static key", () => {
     const headers = buildZcodeCodingPlanHeaders({
       ...credentials,
-      apiKey: "project-token-123",
+      accessToken: "business-token-must-not-be-sent",
+      apiKey: "static-key-must-not-be-sent",
     });
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["x-api-key"]).toBe("project-token-123");
+    expect(headers["x-api-key"]).toBe("jwt-token");
     expect(headers["anthropic-beta"]).toBe("mid-conversation-system-2026-04-07");
     expect(headers["User-Agent"]).toContain("ZCode/3.17.2");
   });
 
-  it("omits x-api-key for Start Plan credentials without an apiKey", () => {
+  it("sends the Start Plan JWT as x-api-key even without a saved apiKey", () => {
     const headers = buildZcodeCodingPlanHeaders(credentials);
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["x-api-key"]).toBe("jwt-token");
+  });
+
+  it.each(["individual-coding-plan", "team-coding-plan"])("uses the %s project token in both auth headers", (zaiPlanMode) => {
+    const headers = buildZcodeCodingPlanHeaders({
+      ...credentials,
+      accessToken: "business-token-must-not-be-sent",
+      apiKey: "minted-project-token",
+      providerSpecificData: { ...credentials.providerSpecificData, zaiPlanMode },
+    });
+    expect(headers.Authorization).toBe("Bearer minted-project-token");
+    expect(headers["x-api-key"]).toBe("minted-project-token");
+  });
+
+  it("rejects missing Start Plan auth instead of falling back to business or static tokens", () => {
+    expect(() => buildZcodeCodingPlanHeaders({
+      accessToken: "business-token",
+      apiKey: "static-key",
+      providerSpecificData: { zaiPlanMode: "start-plan" },
+    })).toThrow("plan inference credential is missing");
+  });
+
+  it("rejects missing paid-plan auth instead of using a login or business token", () => {
+    expect(() => buildZcodeCodingPlanHeaders({
+      ...credentials,
+      providerSpecificData: { ...credentials.providerSpecificData, zaiPlanMode: "individual-coding-plan" },
+    })).toThrow("plan inference credential is missing");
+  });
+
+  it("does not accept an unvalidated custom auth path on connection credentials", () => {
+    const headers = buildZcodeCodingPlanHeaders({
+      ...credentials,
+      customHeaders: { Authorization: "Bearer unrelated", "x-api-key": "unrelated" },
+      providerSpecificData: {
+        ...credentials.providerSpecificData,
+        customHeaders: { Authorization: "Bearer unrelated" },
+      },
+    }, { customHeaders: { "x-api-key": "unrelated" } });
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+    expect(headers["x-api-key"]).toBe("jwt-token");
   });
 
   it("normalizes source headers and conditionally emits optional fields", () => {
@@ -154,15 +194,24 @@ describe("zcode headers", () => {
     expect(headers["X-Aliyun-Captcha-Verify-Param"]).toBeUndefined();
   });
 
-  it("applyZcodeCodingPlanHeaders merges into existing headers", () => {
+  it("applyZcodeCodingPlanHeaders replaces inherited auth regardless of casing", () => {
     const headers = {
       "Anthropic-Version": "2023-06-01",
       "Anthropic-Beta": "claude-code-20250219",
       "x-api-key": "should-remove",
+      "X-Api-Key": "should-also-remove",
+      authorization: "Bearer wrong-business-token",
+      "user-agent": "inherited-cli",
     };
     applyZcodeCodingPlanHeaders(headers, credentials);
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["x-api-key"]).toBe("jwt-token");
+    expect(headers.authorization).toBeUndefined();
+    expect(headers["X-Api-Key"]).toBeUndefined();
+    expect(headers["user-agent"]).toBeUndefined();
+    const wireHeaders = new Headers(headers);
+    expect(wireHeaders.get("authorization")).toBe("Bearer jwt-token");
+    expect(wireHeaders.get("x-api-key")).toBe("jwt-token");
     expect(headers["Anthropic-Version"]).toBeUndefined();
     expect(headers["Anthropic-Beta"]).toBeUndefined();
     expect(headers["anthropic-version"]).toBe("2023-06-01");
