@@ -62,7 +62,7 @@ describe("GlmExecutor", () => {
     expect(headers["X-Device-Mid"]).toBeUndefined();
   });
 
-  it("uses full ZCode fingerprint on coding plan primary URL", () => {
+  it("uses full ZCode fingerprint on coding plan primary URL with native dual-auth", () => {
     const headers = atUrlIndex(executor, 0, codingPlanCreds, () =>
       executor.buildHeaders({
         ...codingPlanCreds,
@@ -74,12 +74,16 @@ describe("GlmExecutor", () => {
       })
     );
     expect(headers.Authorization).toBe("Bearer jwt-token");
-    expect(headers["x-api-key"]).toBeUndefined();
-    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
+    expect(headers["x-api-key"]).toBe("org.key.secret");
+    expect(headers["User-Agent"]).toBe(
+      "ZCode/3.17.2 ai-sdk/provider-utils/4.0.27 runtime/node.js/24"
+    );
     expect(headers["X-ZCode-App-Version"]).toBe("3.17.2");
     expect(headers["X-ZCode-Agent"]).toBe("glm");
     expect(headers["X-Title"]).toBe("Z Code@electron");
     expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
+    expect(headers["anthropic-beta"]).toBe("mid-conversation-system-2026-04-07");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
     expect(headers["X-Aliyun-Captcha-Verify-Param"]).toBe("captcha-token");
     expect(headers["X-Aliyun-Captcha-Verify-Region"]).toBe("sgp");
     expect(headers["x-request-id"]).toMatch(
@@ -94,6 +98,38 @@ describe("GlmExecutor", () => {
     );
     expect(headers["Anthropic-Version"]).toBeUndefined();
     expect(headers["Anthropic-Beta"]).toBeUndefined();
+  });
+
+  it("omits x-api-key on Start Plan primary URL when no apiKey is present", () => {
+    const startPlanCreds = {
+      accessToken: "jwt-token",
+      providerSpecificData: {
+        useCodingPlan: true,
+        zcodeJwtToken: "jwt-token",
+      },
+    };
+    const headers = atUrlIndex(executor, 0, startPlanCreds, () =>
+      executor.buildHeaders(startPlanCreds)
+    );
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["anthropic-beta"]).toBe("mid-conversation-system-2026-04-07");
+  });
+
+  it("respects 9Router custom headers overrides layered over native defaults", () => {
+    const headers = executor.buildHeaders(codingPlanCreds);
+    const providerOverrides = {
+      headers: {
+        "User-Agent": "Custom-Agent/1.0",
+        "anthropic-beta": "custom-beta-feature",
+        "X-Custom-Tracking": "custom-val-123",
+      },
+    };
+    if (providerOverrides?.headers) Object.assign(headers, providerOverrides.headers);
+    expect(headers["User-Agent"]).toBe("Custom-Agent/1.0");
+    expect(headers["anthropic-beta"]).toBe("custom-beta-feature");
+    expect(headers["X-Custom-Tracking"]).toBe("custom-val-123");
+    expect(headers.Authorization).toBe("Bearer jwt-token");
   });
 
   it("reuses x-session-id for the same connection", () => {

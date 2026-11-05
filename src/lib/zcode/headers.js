@@ -327,21 +327,31 @@ export function clearZcodeCodingPlanHeaders(headers) {
 
 /**
  * Build ZCode Coding Plan upstream headers (zcode-plan URL fingerprint).
+ * Matches official native ZCode 3.17.2 wire headers captured on zcode-plan endpoint.
  * @param {object} credentials
- * @param {{ verifyParam?: string }} [options]
+ * @param {{ verifyParam?: string, apiKey?: string, userAgent?: string, anthropicBeta?: string }} [options]
  */
 export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
   const jwt =
     credentials?.providerSpecificData?.zcodeJwtToken || credentials?.accessToken;
+  const apiKey =
+    options.apiKey ||
+    credentials?.apiKey ||
+    credentials?.providerSpecificData?.zcodeApiKey;
   const verifyParam =
     options.verifyParam ?? credentials?.providerSpecificData?._captchaVerifyParam;
   const sessionType = options.sessionType || "main";
   const queryId = normalizeZcodeAttributionId(options.queryId, ["query_"]);
+  const userAgent =
+    options.userAgent ||
+    normalizePrintableHeaderValue(zcodeConfig.inferenceUserAgent) ||
+    normalizePrintableHeaderValue(zcodeConfig.userAgent);
 
   const headers = {
     ...buildZcodeAppSourceHeaders(zcodeConfig.codingPlanUrl),
     Authorization: `Bearer ${jwt}`,
     "anthropic-version": "2023-06-01",
+    "anthropic-beta": options.anthropicBeta || "mid-conversation-system-2026-04-07",
     "X-ZCode-Agent": "glm",
     "x-zcode-session-type": sessionType,
     "x-request-id": options.requestId || randomUuid(),
@@ -350,9 +360,27 @@ export function buildZcodeCodingPlanHeaders(credentials, options = {}) {
     "x-session-id": getZcodeSessionId(credentials),
   };
 
+  if (userAgent) {
+    headers["User-Agent"] = userAgent;
+  }
+
+  // Native ZCode sends dual auth: both Authorization (Bearer jwt) AND x-api-key (project token)
+  if (apiKey) {
+    headers["x-api-key"] = apiKey;
+  }
+
   if (verifyParam) {
     headers["X-Aliyun-Captcha-Verify-Param"] = verifyParam;
     headers["X-Aliyun-Captcha-Verify-Region"] = "sgp";
+  }
+
+  // Support connection-level custom headers overrides if present
+  const customHeaders =
+    options.customHeaders ||
+    credentials?.customHeaders ||
+    credentials?.providerSpecificData?.customHeaders;
+  if (customHeaders && typeof customHeaders === "object") {
+    Object.assign(headers, customHeaders);
   }
 
   return headers;

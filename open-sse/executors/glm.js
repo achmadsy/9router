@@ -48,7 +48,10 @@ export class GlmExecutor extends DefaultExecutor {
   }
 
   usesCodingPlan(credentials) {
-    return isZaiStartPlan(credentials) && !!credentials?.providerSpecificData?.zcodeJwtToken;
+    return (
+      (isZaiStartPlan(credentials) || isZaiAccountCodingPlan(credentials)) &&
+      (!!credentials?.providerSpecificData?.zcodeJwtToken || !!credentials?.accessToken)
+    );
   }
 
   usesApiKeyOnly(credentials) {
@@ -258,11 +261,11 @@ export class GlmExecutor extends DefaultExecutor {
       credentials = { ...credentials, apiKey: token };
     }
     params = { ...params, credentials };
-    if (this.usesCodingPlan(credentials)) {
+    if (isZaiStartPlan(credentials)) {
       let verification;
       try { verification = await getCaptchaManager().fetchCaptchaConfig(params.proxyOptions); }
       catch { return this.verificationResult(); }
-      if (verification.enabled !== false && verification.skip_model_request !== true) {
+      if (verification && verification.enabled !== false && verification.skip_model_request !== true) {
         return this.verificationResult();
       }
     }

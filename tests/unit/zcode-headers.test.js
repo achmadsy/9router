@@ -41,9 +41,12 @@ describe("zcode headers", () => {
 
   it("builds ZCode 3.17.2 headers with native fingerprint", () => {
     const headers = buildZcodeCodingPlanHeaders(credentials);
-    expect(headers["User-Agent"]).toBe("ZCode/3.17.2");
+    expect(headers["User-Agent"]).toBe(
+      "ZCode/3.17.2 ai-sdk/provider-utils/4.0.27 runtime/node.js/24"
+    );
     expect(headers["X-ZCode-App-Version"]).toBe("3.17.2");
     expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(headers["anthropic-beta"]).toBe("mid-conversation-system-2026-04-07");
     expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
     expect(headers["X-Release-Channel"]).toBe("production");
     expect(headers["X-Platform"]).toContain(process.platform);
@@ -51,6 +54,23 @@ describe("zcode headers", () => {
     expect(headers["X-Aliyun-Captcha-Verify-Region"]).toBe("sgp");
     expect(headers["x-session-id"]).toBeTruthy();
     expect(headers["x-query-id"]).toBeUndefined();
+  });
+
+  it("builds ZCode dual-auth headers when apiKey is present", () => {
+    const headers = buildZcodeCodingPlanHeaders({
+      ...credentials,
+      apiKey: "project-token-123",
+    });
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+    expect(headers["x-api-key"]).toBe("project-token-123");
+    expect(headers["anthropic-beta"]).toBe("mid-conversation-system-2026-04-07");
+    expect(headers["User-Agent"]).toContain("ZCode/3.17.2");
+  });
+
+  it("omits x-api-key for Start Plan credentials without an apiKey", () => {
+    const headers = buildZcodeCodingPlanHeaders(credentials);
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+    expect(headers["x-api-key"]).toBeUndefined();
   });
 
   it("normalizes source headers and conditionally emits optional fields", () => {

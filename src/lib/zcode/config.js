@@ -67,6 +67,9 @@ const zcodeConfig = {
     "https://api.z.ai/api/coding/paas/v4/chat/completions",
   appVersion,
   userAgent: process.env.UPSTREAM_USER_AGENT || `ZCode/${appVersion}`,
+  inferenceUserAgent:
+    process.env.ZCODE_INFERENCE_USER_AGENT ||
+    `ZCode/${appVersion} ai-sdk/provider-utils/4.0.27 runtime/node.js/24`,
 };
 
 export default zcodeConfig;
