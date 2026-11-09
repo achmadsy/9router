@@ -293,6 +293,41 @@ describe("dashboard guard local-only access", () => {
     expect(response).toBe(mocks.nextResponse);
   });
 
+  it("rejects remote CommandCode host credential import even with dashboard auth", async () => {
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+    const response = await proxy(request("/api/oauth/commandcode/auto-import", {
+      host: "router.example.com",
+      authorization: "Bearer dashboard-token",
+    }));
+    expect(response.status).toBe(403);
+  });
+
+  it("requires authentication for local CommandCode import even when login is disabled", async () => {
+    mocks.getSettings.mockResolvedValue({ requireLogin: false });
+    const response = await proxy(localRequest("/api/oauth/commandcode/auto-import", {
+      host: "localhost:20128",
+      origin: "http://localhost:20128",
+    }));
+    expect(response.status).toBe(401);
+  });
+
+  it("allows CommandCode import with a valid CLI token", async () => {
+    const response = await proxy(request("/api/oauth/commandcode/auto-import", {
+      "x-9r-cli-token": "cli-token",
+    }));
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("allows authenticated loopback CommandCode import", async () => {
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+    const response = await proxy(localRequest("/api/oauth/commandcode/auto-import", {
+      host: "localhost:20128",
+      origin: "http://localhost:20128",
+      authorization: "Bearer dashboard-token",
+    }));
+    expect(response).toBe(mocks.nextResponse);
+  });
+
   it("allows /api/zcode/captcha routes from loopback without auth or CLI token", async () => {
     const response = await proxy(localRequest("/api/zcode/captcha/config", {
       host: "localhost:20128",

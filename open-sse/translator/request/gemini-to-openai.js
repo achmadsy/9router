@@ -124,34 +124,26 @@ function convertGeminiContent(content) {
     }
   }
 
-  // Turn contains tool responses (each response is a separate OpenAI tool message)
-  if (toolResults.length > 0) {
-    if (toolCalls.length > 0 || parts.length > 0) {
-      const companion = { role };
-      if (parts.length > 0) companion.content = collapseTextParts(parts);
-      if (toolCalls.length > 0) companion.tool_calls = toolCalls;
-      return [...toolResults, companion];
-    }
-    return toolResults;
-  }
-
+  let message = null;
   if (toolCalls.length > 0) {
-    const result = { role: ROLE.ASSISTANT };
+    message = { role: ROLE.ASSISTANT };
     if (parts.length > 0) {
-      result.content = parts.length === 1 ? parts[0].text : parts;
+      message.content = collapseTextParts(parts);
     }
-    result.tool_calls = toolCalls;
-    return result;
-  }
-
-  if (parts.length > 0) {
-    return {
+    message.tool_calls = toolCalls;
+  } else if (parts.length > 0) {
+    message = {
       role,
       content: collapseTextParts(parts)
     };
   }
 
-  return null;
+  // Complete the parts scan before returning: parallel results must all precede
+  // any co-located follow-up text or calls in the OpenAI message sequence.
+  if (toolResults.length > 0) {
+    return message ? [...toolResults, message] : toolResults;
+  }
+  return message;
 }
 
 // Extract text from Gemini content

@@ -14,6 +14,7 @@
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 
 ## Fixes
+- **Upstream v0.5.116 integration**: retain fork-specific strict proxy/TLS policy, provider-clone routing and system context while integrating transport retries, model selection and isolated Gemini Argon quotas. Restrict CommandCode host-credential auto-import to the same local-only, always-authenticated gates as other host-secret imports.
 - **GLM account-plan system context**: restore automatic ZCode 3.17.2 main-agent context assembly at the final executor boundary. Match the current prefix, identity, dynamic text and cache markers, omit fabricated environment context, preserve caller instructions in order, and avoid duplicating an existing native prefix. Keep mid-conversation system/developer instructions in place, remove the generic translator's unrelated Claude Code identity for GLM, and bound automatic cache markers after assembly. API-key routes do not receive the account-plan context; authentication, per-JWT billing identity, proxy selection and terminal verification/activity-block behavior are unchanged. A bounded pre-deploy GLM-5.3-Flash request with the updated helper returned HTTP 200; GLM-5.3 returned concurrency code 3009, so this is not a claim of universal upstream acceptance.
 - **Provider Custom Headers**: display GLM's actual ZCode account-plan defaults rather than inherited Claude flags. Persist deleted defaults explicitly across Save/Refresh, apply removals case-insensitively at send time, and make Reset + Save restore current defaults. Share validation across UI/API, reject duplicate casing and protected-header deletions, preserve clone isolation, and do not expose auth tokens or request-specific identity headers in default previews.
 - **ZCode inference authentication**: match the native SDK's same-token dual auth: send the login JWT in both `Authorization` and `x-api-key` for Start Plan, and the minted project token in both for Individual/Team Coding Plans. Never substitute business-platform credentials for inference. Apply validated dashboard Custom Headers case-insensitively so differently cased names replace defaults instead of becoming comma-joined values; remove the unvalidated connection-level override path and fail closed on missing verification configuration. Preserve per-JWT billing identity, selected routes and terminal activity-block handling. Verified with mocked upstreams only; this does not establish or clear the provider's HTTP 405/code 3012 activity block.
@@ -49,6 +50,39 @@
 - **Streaming**: return JSON when `stream` is omitted or false, while aggregating provider-required upstream SSE for non-streaming clients.
 - **Provider duplicates**: inherit base provider capabilities across auto-ping, quota retrieval, reset credits, GLM CAPTCHA proxy restrictions, connection validation, and live model tools while preserving duplicate credential and settings isolation.
 - **Providers authentication**: preserve selected duplicate provider across OAuth callbacks, device-code login, manual token exchange, specialized credential imports, and bulk imports; retain provider metadata and reject invalid or cross-provider destinations.
+
+# v0.5.116 (2026-11-08)
+
+## Features
+- **CommandCode**: align data bridge with official CLI v1.88.5 and add credential auto-import
+- **Antigravity**: track and display a separate Gemini 4 Argon weekly/session quota
+- **Codex Image**: add GPT Image 2.6 models (`gpt-image-2.6-flare`, `gpt-image-2.6-sunburst`)
+- **SenseNova**: add `sensenova-6.8-flash` and `glm-5.3`
+
+## Fixes
+- **Transport**: claude provider survives DPI-shaped networks (happy-eyeballs, undici 8, configurable TLS curve)
+- **Lazy Runtime**: fix lost named exports when loading CJS deps from the runtime dir
+- **OpenCode Go**: send Claude reasoning on the Messages transport
+- **Codex Image**: use native OAuth image generation safely
+- **Thinking**: keep thinking config on OpenAI tool-result turns (#5171)
+- **OpenCode Free**: alias "terminal" tool names the free tier 429-rejects (#5319)
+- **TTS**: list public voices without dashboard self-fetch auth (#1551)
+- **Translator**: retain Claude cache markers for DashScope targets (#2069)
+- **CLI**: launcher startup ~2.5x faster via PID-file process handling
+- **Gemini**: send concrete MIME for remote images instead of `image/*`
+- **Translator**: keep all Gemini tool results and follow-up parts (#2393)
+- **Codex Image**: drop `reasoning.effort` on tool requests, surface real upstream errors
+- **CLI**: ship `deepseek-pow-hash.js` next to the PoW worker (#5460)
+- **Web Fetch**: forward the selected output format to Jina and Tavily (#2239)
+- **Kiro**: stop splicing unserved regions into service hostnames; add `KIRO_INTEGRITY_GATE=off`
+- **Thinking**: preserve explicit DeepSeek thinking budgets on compat nodes (#5108)
+- **Tray**: report a tray that never started instead of claiming success
+- **Fetch**: stop reusing dead keep-alive sockets silently dropped by upstream edges
+- **CodeBuddy**: preserve client system prompts and sanitize CLI agent identity (intl WAF)
+- **OpenCode Go**: use current inference endpoints (`/zen/go/v1` retired)
+- **CLI Tools**: Add All Active Models now includes no-auth, alias and custom models (#5449)
+- **Runtime**: pass `--global=false` so npm hooks can't create stray global installs (#5443)
+- **Dedupe**: drop `tool_reference` blocks naming tools stripped by MCP dedupe (z.ai 400)
 
 # v0.5.112 (2026-10-28)
 

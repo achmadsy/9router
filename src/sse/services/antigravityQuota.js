@@ -33,6 +33,7 @@ export function getAntigravityModelFamily(model) {
   if (!model || typeof model !== "string") return null;
   const clean = (model.includes("/") ? model.slice(model.indexOf("/") + 1) : model).toLowerCase();
   if (clean.startsWith("claude-") || clean.startsWith("gpt-") || clean === "claude") return "claude_gpt";
+  if ((clean.startsWith("gemini-") && clean.includes("argon")) || clean === "gemini_argon") return "gemini_argon";
   if ((clean.startsWith("gemini-") && !clean.includes("image")) || clean === "gemini") return "gemini";
   return null;
 }
@@ -45,6 +46,7 @@ export function getAntigravityModelQuota(quotas, model) {
   const candidates = [];
   if (quotas[cleanModel]) candidates.push(quotas[cleanModel]);
   const aliases = {
+    "gemini-4-argon": "gemini-4-argon-high",
     "claude-sonnet-5-5": "claude-sonnet-5-5-high",
     "claude-opus-5-5": "claude-opus-5-5-high",
     "gemini-3.8-flash": "gemini-3.8-flash-medium",
@@ -53,7 +55,13 @@ export function getAntigravityModelQuota(quotas, model) {
   };
   if (aliases[cleanModel] && quotas[aliases[cleanModel]]) candidates.push(quotas[aliases[cleanModel]]);
   if (family === "claude_gpt") candidates.push(quotas.claude_gpt_session, quotas.claude_gpt_weekly);
-  else if (family === "gemini") candidates.push(quotas.gemini_session, quotas.gemini_weekly);
+  else if (family === "gemini_argon") {
+    candidates.push(quotas.gemini_argon_session, quotas.gemini_argon_weekly);
+    // Ultra plans share the main pool when no dedicated Argon buckets exist.
+    if (!quotas.gemini_argon_session && !quotas.gemini_argon_weekly) {
+      candidates.push(quotas.gemini_session, quotas.gemini_weekly);
+    }
+  } else if (family === "gemini") candidates.push(quotas.gemini_session, quotas.gemini_weekly);
 
   const valid = candidates.filter((q) => q && typeof q.remainingPercentage === "number");
   if (!valid.length) return null;
@@ -96,10 +104,16 @@ export function clearAntigravityStrikes(connectionId, model) {
   if (until === undefined) return;
   strikeBlocks.delete(key);
   const cached = quotaCache.get(connectionId);
-  if (cached?.[model]?.resetAt === new Date(until).toISOString()) {
+  const iso = new Date(until).toISOString();
+  if (cached?.[model]?.resetAt === iso) {
     delete cached[model];
-    quotaCache.set(connectionId, cached);
   }
+  const family = getAntigravityModelFamily(model);
+  const sessionKey = family ? `${family}_session` : null;
+  if (sessionKey && cached?.[sessionKey]?.resetAt === iso) {
+    delete cached[sessionKey];
+  }
+  if (cached) quotaCache.set(connectionId, cached);
   // Self-Aware: clear mirrored sidecar (RAM + SQLite together)
   clearSelfAwareCooldown({ provider: "antigravity", model, scopeType: "account", scopeId: connectionId })
     .catch(() => {});

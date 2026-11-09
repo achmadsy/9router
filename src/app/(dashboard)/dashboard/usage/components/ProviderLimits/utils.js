@@ -495,9 +495,12 @@ export function parseQuotaData(provider, data) {
           const groups = [
             { modelKey: "gemini-5h", name: "Gemini (5h)", models: [] },
             { modelKey: "gemini-weekly", name: "Gemini (Weekly)", models: [] },
+            { modelKey: "gemini-argon-5h", name: "Gemini 4 Argon (5h)", models: [] },
+            { modelKey: "gemini-argon-weekly", name: "Gemini 4 Argon (Weekly)", models: [] },
             { modelKey: "others-5h", name: "Others (5h)", models: [] },
             { modelKey: "others-weekly", name: "Others (Weekly)", models: [] },
             { modelKey: "gemini-unknown", name: "Gemini (Unknown window)", models: [] },
+            { modelKey: "gemini-argon-unknown", name: "Gemini 4 Argon (Unknown window)", models: [] },
             { modelKey: "others-unknown", name: "Others (Unknown window)", models: [] },
           ];
           const groupMap = new Map(groups.map((group) => [group.modelKey, group]));
@@ -507,19 +510,24 @@ export function parseQuotaData(provider, data) {
             const timeUntilReset = resetAtMs - now;
             // Weekly summary keys carry explicit window metadata and should not be
             // reclassified by reset proximity as their reset approaches.
-            const explicitWeekly = modelKey === "gemini_weekly" || modelKey === "claude_gpt_weekly";
+            const explicitWeekly = ["gemini_weekly", "claude_gpt_weekly", "gemini_argon_weekly"].includes(modelKey);
+            const explicitSession = ["gemini_session", "claude_gpt_session", "gemini_argon_session"].includes(modelKey);
             // Per-model entries expose no interval metadata. Valid future reset proximity
             // is the only window signal; a weekly reset in its final 5h remains ambiguous.
             const window = explicitWeekly
               ? "weekly"
-              : !Number.isFinite(resetAtMs) || timeUntilReset <= 0
-                ? "unknown"
-                : timeUntilReset <= fiveHoursMs
-                  ? "5h"
-                  : "weekly";
-            const family = modelKey.startsWith("gemini-") || modelKey === "gemini_weekly"
-              ? "gemini"
-              : "others";
+              : explicitSession
+                ? "5h"
+                : !Number.isFinite(resetAtMs) || timeUntilReset <= 0
+                  ? "unknown"
+                  : timeUntilReset <= fiveHoursMs
+                    ? "5h"
+                    : "weekly";
+            const family = modelKey.includes("argon")
+              ? "gemini-argon"
+              : modelKey.startsWith("gemini-") || modelKey === "gemini_weekly" || modelKey === "gemini_session"
+                ? "gemini"
+                : "others";
             groupMap.get(`${family}-${window}`).models.push(quota);
           });
 
@@ -544,6 +552,7 @@ export function parseQuotaData(provider, data) {
           const groupNameByKey = new Map(groups.map((group) => [group.modelKey, group.name]));
           const pairs = [
             ["gemini-5h", "gemini-weekly"],
+            ["gemini-argon-5h", "gemini-argon-weekly"],
             ["others-5h", "others-weekly"],
           ];
           for (const [firstKey, secondKey] of pairs) {
@@ -904,10 +913,12 @@ export function parseQuotaData(provider, data) {
       // Use modelKey for antigravity (mapped to family anchor), otherwise use name
       let keyA = a.modelKey || a.name;
       let keyB = b.modelKey || b.name;
-      if (keyA === "gemini") keyA = "gemini-3.8-flash-high";
-      if (keyA === "claude") keyA = "claude-sonnet-4-6";
-      if (keyB === "gemini") keyB = "gemini-3.8-flash-high";
-      if (keyB === "claude") keyB = "claude-sonnet-4-6";
+      if (keyA === "gemini_argon" || keyA === "gemini_argon_session") keyA = "gemini-4-argon-high";
+      if (keyA === "gemini" || keyA === "gemini_session") keyA = "gemini-3.8-flash-high";
+      if (keyA === "claude" || keyA === "claude_gpt_session") keyA = "claude-sonnet-4-6";
+      if (keyB === "gemini_argon" || keyB === "gemini_argon_session") keyB = "gemini-4-argon-high";
+      if (keyB === "gemini" || keyB === "gemini_session") keyB = "gemini-3.8-flash-high";
+      if (keyB === "claude" || keyB === "claude_gpt_session") keyB = "claude-sonnet-4-6";
       const orderA = orderMap.get(keyA) ?? 999;
       const orderB = orderMap.get(keyB) ?? 999;
       return orderA - orderB;

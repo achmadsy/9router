@@ -35,11 +35,18 @@ const nextConfig = {
     "@aws-sdk/credential-providers",
     // wreq-js loads its Rust binding by relative path from its package directory.
     "wreq-js",
+    // Keep the real dispatcher connect options in production builds.
+    "undici",
   ],
   turbopack: {
     root: tracingRoot
   },
   outputFileTracingRoot: tracingRoot,
+  outputFileTracingIncludes: {
+    // serverExternalPackages keeps undici external; dynamic import("undici")
+    // alone doesn't pull it into the trace, so force-ship the real package.
+    "*": ["./node_modules/undici/**/*"]
+  },
   outputFileTracingExcludes: {
     // Exclude docs from standalone; cloakbrowser/playwright ship via explicit COPY in Docker.
     "*": ["./gitbook/**/*"]
