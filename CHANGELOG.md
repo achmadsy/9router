@@ -14,6 +14,7 @@
 - **Probe Profiles**: add encrypted target and judge profiles with 24-hour TTL, AES-256-GCM credential encryption at rest using `API_KEY_SECRET`, automatic expiry purging on operations/startup, and safe metadata-only exposure without persistence of reports or run history.
 
 ## Fixes
+- **Upstream v0.5.119 integration**: combine new live catalogs, thinking metadata, usage display and proxy-capable transport with fork-specific clone routing, API-key catalog/usage filtering, combo suffix handling, Bun transport and strict proxy/TLS enforcement. Isolate OpenCode fallback transport sessions by full proxy credential identity while keeping diagnostic labels credential-free, and resolve SenseNova clone validation through its fixed base-provider host. Align the dashboard version and register NVIDIA tests with Vitest.
 - **Upstream v0.5.116 integration**: retain fork-specific strict proxy/TLS policy, provider-clone routing and system context while integrating transport retries, model selection and isolated Gemini Argon quotas. Restrict CommandCode host-credential auto-import to the same local-only, always-authenticated gates as other host-secret imports.
 - **GLM account-plan system context**: restore automatic ZCode 3.17.2 main-agent context assembly at the final executor boundary. Match the current prefix, identity, dynamic text and cache markers, omit fabricated environment context, preserve caller instructions in order, and avoid duplicating an existing native prefix. Keep mid-conversation system/developer instructions in place, remove the generic translator's unrelated Claude Code identity for GLM, and bound automatic cache markers after assembly. API-key routes do not receive the account-plan context; authentication, per-JWT billing identity, proxy selection and terminal verification/activity-block behavior are unchanged. A bounded pre-deploy GLM-5.3-Flash request with the updated helper returned HTTP 200; GLM-5.3 returned concurrency code 3009, so this is not a claim of universal upstream acceptance.
 - **Provider Custom Headers**: display GLM's actual ZCode account-plan defaults rather than inherited Claude flags. Persist deleted defaults explicitly across Save/Refresh, apply removals case-insensitively at send time, and make Reset + Save restore current defaults. Share validation across UI/API, reject duplicate casing and protected-header deletions, preserve clone isolation, and do not expose auth tokens or request-specific identity headers in default previews.
@@ -50,6 +51,41 @@
 - **Streaming**: return JSON when `stream` is omitted or false, while aggregating provider-required upstream SSE for non-streaming clients.
 - **Provider duplicates**: inherit base provider capabilities across auto-ping, quota retrieval, reset credits, GLM CAPTCHA proxy restrictions, connection validation, and live model tools while preserving duplicate credential and settings isolation.
 - **Providers authentication**: preserve selected duplicate provider across OAuth callbacks, device-code login, manual token exchange, specialized credential imports, and bulk imports; retain provider metadata and reject invalid or cross-provider destinations.
+
+# v0.5.119 (2026-11-11)
+
+## Features
+- **Claude**: add Claude Fable 5.2 ($8/$40) as the Fable flagship and `claude-haiku-5-5` ($0.10/$0.50, 1M/128K); the advertised Claude Code version now auto-tracks the latest npm release (floor 2.1.322, pin with `CLAUDE_CLI_VERSION`), and the dashboard lists live models through the OAuth bearer
+- **Antigravity**: add Gemini 4 Carbon in low/medium/high tiers plus a bare alias resolving to medium, and track the tiers in the usage quota list
+- **CommandCode**: add `google/gemini-4-carbon` and `claude-fable-5-2`, and resolve the model list from the CLI's live catalog (`GET /provider/v1/models?view=client`) in the dashboard and `GET /v1/models`
+- **ClinePass**: add a quota tracker mapping the five-hour/weekly/monthly plan windows into the usage-limits dashboard
+- **Proxy Pools**: All/Enabled/Disabled status filter and Shift+click range selection; bulk actions and Select All now target only visible rows
+- **Models**: `/v1/models` publishes `thinking_levels`, and opencode settings derive the effort variants from the same source
+
+## Fixes
+- **Transport**: keep undici on 7.30.2 — undici 8 requires Node 22.19+, so 0.5.116 crashed every outbound `fetch` on older runtimes (`createZstdDecompress.bind` is undefined below Node 22.15). 7.30.2 carries the same security fixes and the stale-socket/happy-eyeballs transport work.
+- **Node floor**: declare `engines.node >= 20.18.1` in both packages (the root manifest had none, the CLI claimed `>=18`).
+- **SenseNova**: add `sensenova-intl` provider on `token.sensenova.ai` for international keys (the `.cn` host returns 401 Forbidden for them)
+- **Claude**: retire Fable 5.1 from the claude, GitHub Copilot and OpenCode Zen catalogs now that 5.2 replaces it; the capabilities and pricing rows stay so an existing `claude-fable-5-1` config still translates and bills correctly
+- **Claude**: rename `tool_reference` blocks when cloaking tools, so tool search stays enabled instead of 400-ing and resending every definition each turn
+- **Pricing**: bill gemini-4 models at their real rate ($2/$10 instead of the generic `gemini-*` $0.50/$3.00) across commandcode, antigravity and vertex ids
+- **Stream**: emit a single framed `[DONE]` sentinel in passthrough streams instead of `data: [DONE]data: [DONE]` (strict SSE clients errored out)
+- **OpenCode**: keep the selected Proxy Pool on the wreq-js transport, with the session cache keyed by proxy so rotation takes effect; retry the free-lane "overloaded" 429 with backoff and drop rejected session ids
+- **Qoder**: keep catalog entries marked `enable:false` (still usable in the IDE) and sync upstream display names
+- **Codex Image**: send GPT Image edits to the native `images/edits` endpoint, and fall back to `gpt-5.6-terra` when the account rejects `gpt-6-sol` before it locks the model
+- **Codex**: advertise Codex CLI 0.167.1 — the backend rejects `0.159.0` identities with 400
+- **STT**: build multipart bodies with undici's `FormData` so fetch serializes the file and model fields instead of sending `[object FormData]`
+- **Muse Web**: accept Cookie-Editor JSON exports for credentials, normalized on read
+- **Fal**: validate new API keys through the model catalog instead of failing with "Provider validation not supported"
+- **NVIDIA NIM**: strip the params NIM 400s on, enable `dropClientMetadata`, cap the connect timeout, add the current catalogue, and cool down degraded clusters for 15m
+- **Compatibility**: advertise zstd only when the runtime can decode it (Node < 22.15 returns raw compressed bytes)
+- **Translator**: always emit `tool_result.is_error` for the Zed Anthropic wire, which 400s without it
+- **Translator**: show SearXNG in the combo Web Search model picker by deriving the no-auth list from the full registry
+- **Antigravity**: drop `~optional` from tool schemas (400 Unknown name)
+- **Quota**: catch a Claude reset missed between auto-ping ticks and retry it after the failure cooldown
+- **Routing**: route bare `claude-*` ids to Claude OAuth when no anthropic connection is active
+- **Usage**: display Claude `output_tokens` in request details instead of 0
+- **UI**: link explicit input ids to their labels
 
 # v0.5.116 (2026-11-08)
 
