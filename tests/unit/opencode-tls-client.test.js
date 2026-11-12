@@ -51,6 +51,47 @@ describe("opencodeTlsClient", () => {
     expect(result.headers.get("content-type")).toBe("text/event-stream");
   });
 
+  it("does not follow redirects when forwarding request content", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
+      status: 307,
+      headers: { location: "https://other.example/collect" },
+    }));
+    createSessionMock.mockResolvedValue({ fetch: fetchMock, close: vi.fn() });
+
+    const { opencodeTlsFetch } = await import("../../open-sse/services/opencodeTlsClient.js");
+    const result = await opencodeTlsFetch("https://opencode.ai/inference/v1/chat/completions", {
+      method: "POST", body: "private request content",
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1].redirect).toBe("manual");
+    expect(createSessionMock.mock.calls[0][0].insecure).not.toBe(true);
+    expect(result.status).toBe(307);
+    expect(result.headers.get("location")).toBe("https://other.example/collect");
+  });
+
+  it("returns the live stream without reading or buffering it", async () => {
+    let controller;
+    const stream = new ReadableStream({
+      start(value) { controller = value; },
+    });
+    const upstream = new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    const fetchMock = vi.fn().mockResolvedValue(upstream);
+    createSessionMock.mockResolvedValue({ fetch: fetchMock, close: vi.fn() });
+
+    const { opencodeTlsFetch } = await import("../../open-sse/services/opencodeTlsClient.js");
+    const result = await opencodeTlsFetch("https://opencode.ai/inference/v1/chat/completions", {});
+
+    expect(result.body).toBe(upstream.body);
+    expect(upstream.bodyUsed).toBe(false);
+    const reader = result.body.getReader();
+    controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("data: first\n\n");
+    controller.close();
+    expect((await reader.read()).done).toBe(true);
+    reader.releaseLock();
+  });
+
   it("reuses one session across requests", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => new Response("ok", { status: 200 }));
     createSessionMock.mockResolvedValue({ fetch: fetchMock, close: vi.fn() });

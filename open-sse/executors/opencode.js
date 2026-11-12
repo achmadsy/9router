@@ -10,8 +10,6 @@ import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { getModelTargetFormat } from "../config/providerModels.js";
 import { opencodeTlsFetch } from "../services/opencodeTlsClient.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
-import { opencodeBunFetch, OpenCodeBunTransportError } from "../services/opencodeBunClient.js";
-import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import {
   normalizeResponsesInput,
   clampResponsesCallId,
@@ -660,10 +658,10 @@ export class OpenCodeExecutor extends BaseExecutor {
     return Math.max(200, delayMs || 0);
   }
 
-  // The free gate keys on the TLS ClientHello, so a native Node fetch is refused
-  // no matter how faithful the body is. Prefer the supervised Bun sidecar and
-  // use the proxy-capable wreq-js adapter when it is unavailable. Proxy policy
-  // remains enforced by proxyAwareFetch; transport failure never drops a strict proxy.
+  // Use the upstream proxy-capable adapter through BaseExecutor's shared proxy
+  // resolver. A Bun-first fetchUpstream override would shadow this adapter in
+  // custom-server deployments, even though it is wired correctly below.
+  // Provider quota errors remain responses, not reasons to switch transports.
   async execute(args) {
     const credentials = this.prepareRequestCredentials(args);
     const directFetch = (url, options, proxyUrl) => opencodeTlsFetch(url, {
@@ -703,29 +701,6 @@ export class OpenCodeExecutor extends BaseExecutor {
       await sleep(backoff + Math.random() * 250, args.signal);
       // Aborted mid-backoff: surface it the way a disconnect during the fetch does.
       if (args.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-    }
-  }
-
-  async fetchUpstream(url, options, proxyOptions = null) {
-    // Vercel relays terminate and re-originate TLS, so they cannot preserve the
-    // Bun/OpenCode client fingerprint. Keep the existing relay path for explicit
-    // relay configurations; direct and HTTP-proxy requests use Bun end-to-end.
-    if (proxyOptions?.vercelRelayUrl) {
-      return proxyAwareFetch(url, options, proxyOptions);
-    }
-    const proxyEnabled = proxyOptions?.connectionProxyEnabled === true;
-    const proxyUrl = proxyEnabled ? proxyOptions?.connectionProxyUrl || "" : "";
-    if (proxyOptions?.strictProxy === true && !proxyUrl) {
-      throw new OpenCodeBunTransportError("Strict proxy is enabled but no usable proxy URL resolved");
-    }
-    try {
-      return await opencodeBunFetch(url, options, proxyUrl);
-    } catch (error) {
-      if (!(error instanceof OpenCodeBunTransportError)) throw error;
-      // Development and non-custom-server installs may not run the supervised
-      // Bun sidecar. Preserve configured proxies, otherwise use the in-process
-      // TLS impersonator threaded through BaseExecutor as directFetch.
-      return proxyAwareFetch(url, options, proxyOptions);
     }
   }
 

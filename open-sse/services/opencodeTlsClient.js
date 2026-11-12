@@ -131,7 +131,9 @@ export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEF
   const options = {
     method: init.method || "GET",
     headers: init.headers,
-    redirect: "follow",
+    // Preserve the former Bun helper's boundary: never forward conversation
+    // content or caller-supplied header overrides to a redirected destination.
+    redirect: "manual",
     timeout: timeoutMs,
   };
   if (init.body !== undefined) options.body = init.body;

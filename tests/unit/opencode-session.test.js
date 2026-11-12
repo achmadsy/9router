@@ -1,17 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchMock, OpenCodeBunTransportErrorMock } = vi.hoisted(() => {
-  class OpenCodeBunTransportErrorMock extends Error {}
-  return { fetchMock: vi.fn(), OpenCodeBunTransportErrorMock };
-});
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
 
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: fetchMock,
-}));
-
-vi.mock("../../open-sse/services/opencodeBunClient.js", () => ({
-  opencodeBunFetch: fetchMock,
-  OpenCodeBunTransportError: OpenCodeBunTransportErrorMock,
 }));
 
 import { getExecutor } from "../../open-sse/executors/index.js";
@@ -233,15 +225,28 @@ describe("OpenCode Free Executor Session Resolution", () => {
     expect(headers["Authorization"]).toBe("Bearer public");
   });
 
-  it("fails closed when strict proxy is enabled without a usable URL", async () => {
+  it("delegates strict proxy validation to the shared resolver", async () => {
     const executor = getExecutor("opencode");
+    const proxyOptions = {
+      strictProxy: true,
+      proxyPoolId: "pool-a",
+      connectionProxyEnabled: false,
+      connectionProxyUrl: "",
+    };
 
-    await expect(executor.fetchUpstream(
-      "https://opencode.ai/inference/openai/v1/chat/completions",
-      { method: "POST", body: "{}" },
-      { strictProxy: true, proxyPoolId: "pool-a", connectionProxyEnabled: false, connectionProxyUrl: "" },
-    )).rejects.toBeInstanceOf(OpenCodeBunTransportErrorMock);
-    expect(fetchMock).not.toHaveBeenCalled();
+    await executor.execute({
+      model: "glm-5.3-flash-free",
+      body: { messages: [{ role: "user", content: "hi" }] },
+      stream: true,
+      credentials: makeCredentials(),
+      proxyOptions,
+    });
+
+    // Enforcement itself uses the real resolver in the transport-forwarding
+    // suite; this session suite mocks it and checks that policy reaches it.
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][2]).toEqual(proxyOptions);
+    expect(fetchMock.mock.calls[0][1].directFetch.proxyCapable).toBe(true);
   });
   it("handles null or undefined body gracefully in transformRequest", () => {
     const executor = getExecutor("opencode");
