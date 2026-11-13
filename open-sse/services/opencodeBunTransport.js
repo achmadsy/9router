@@ -3,6 +3,13 @@ import { timingSafeEqual } from "node:crypto";
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.OPENCODE_BUN_TRANSPORT_PORT || 20131);
 const TOKEN = process.env.OPENCODE_BUN_TRANSPORT_TOKEN || "";
+// This dedicated process receives the resolver's exact route per request.
+// Bun 1.4.4 still reads env proxies for proxy:""/null, so remove them here only;
+// never let inherited environment silently override forceDirect or NO_PROXY.
+for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+  "http_proxy", "https_proxy", "all_proxy", "no_proxy"]) {
+  delete process.env[name];
+}
 const MAX_REQUEST_BYTES = 20 * 1024 * 1024;
 const ALLOWED_HEADERS = new Set([
   "accept",
@@ -111,8 +118,9 @@ Bun.serve({
         statusText: upstream.statusText,
         headers,
       });
-    } catch (error) {
-      return errorResponse(502, error instanceof Error ? error.message : "Bun upstream request failed", true);
+    } catch {
+      // Proxy errors can contain credentials; only return a generic diagnostic.
+      return errorResponse(502, "Bun upstream request failed", true);
     }
   },
 });

@@ -9,9 +9,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../open-sse/services/opencodeTlsClient.js", () => ({
   opencodeTlsFetch: mocks.tlsFetch,
 }));
-vi.mock("../../open-sse/services/opencodeBunClient.js", () => ({
+vi.mock("../../open-sse/services/opencodeBunClient.js", async (importOriginal) => ({
+  ...await importOriginal(),
   opencodeBunFetch: mocks.bunFetch,
-  OpenCodeBunTransportError: class extends Error {},
 }));
 // All network boundaries are mocked, including the explicit relay path.
 vi.mock("undici", () => ({ fetch: mocks.rawFetch }));
@@ -48,8 +48,9 @@ beforeEach(() => {
     "http_proxy", "https_proxy", "all_proxy", "no_proxy"]) {
     vi.stubEnv(key, "");
   }
-  // Match custom-server deployments: the helper is configured and healthy, not
-  // unavailable. The upstream adapter must still be the default transport.
+  // Managed helper eligibility is established before Next imports at startup.
+  vi.stubEnv("OPENCODE_BUN_TRANSPORT_MODE", "managed");
+  vi.stubEnv("OPENCODE_BUN_TRANSPORT_DISABLED", "");
   vi.stubEnv("OPENCODE_BUN_TRANSPORT_TOKEN", "test-helper-token");
   vi.stubEnv("OPENCODE_BUN_TRANSPORT_URL", "http://127.0.0.1:29999/fetch");
   mocks.tlsFetch.mockImplementation(async () => new Response("data: ok\n\n"));
@@ -61,36 +62,68 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("OpenCode default upstream transport", () => {
-  it("uses the upstream adapter even with a healthy configured Bun helper", async () => {
+describe("OpenCode helper configuration selection", () => {
+  it.each([
+    { mode: "", token: "", url: "", disabled: "" },
+    { mode: "disabled", token: "test", url: "http://127.0.0.1:29999/fetch", disabled: "" },
+    { mode: "unavailable", token: "test", url: "http://127.0.0.1:29999/fetch", disabled: "" },
+    { mode: "managed", token: "test", url: "http://127.0.0.1:29999/fetch", disabled: "1" },
+  ])("keeps wreq for absent/disabled/unavailable helper: %j", async ({ mode, token, url, disabled }) => {
+    vi.stubEnv("OPENCODE_BUN_TRANSPORT_MODE", mode);
+    vi.stubEnv("OPENCODE_BUN_TRANSPORT_TOKEN", token);
+    vi.stubEnv("OPENCODE_BUN_TRANSPORT_URL", url);
+    vi.stubEnv("OPENCODE_BUN_TRANSPORT_DISABLED", disabled);
+    await execute({ proxyOptions: strictProxy });
+    expect(mocks.tlsFetch).toHaveBeenCalledOnce();
+    expect(mocks.bunFetch).not.toHaveBeenCalled();
+  });
+
+  it("selects an explicitly configured external loopback helper", async () => {
+    vi.stubEnv("OPENCODE_BUN_TRANSPORT_MODE", "");
+    await execute({ proxyOptions: strictProxy });
+    expect(mocks.bunFetch).toHaveBeenCalledOnce();
+    expect(mocks.tlsFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(["Bun", "wreq"])("OpenCode %s shared proxy adapter", (transport) => {
+  let selected;
+  let alternative;
+  beforeEach(() => {
+    selected = transport === "Bun" ? mocks.bunFetch : mocks.tlsFetch;
+    alternative = transport === "Bun" ? mocks.tlsFetch : mocks.bunFetch;
+    if (transport === "wreq") vi.stubEnv("OPENCODE_BUN_TRANSPORT_MODE", "unavailable");
+  });
+  const forwardedProxy = () => transport === "Bun" ? selected.mock.calls[0][2] : selected.mock.calls[0][2].proxyUrl;
+  const forwardedSignal = () => transport === "Bun" ? selected.mock.calls[0][1].signal : selected.mock.calls[0][2].signal;
+  it("uses the configured adapter and preserves the response stream and signal", async () => {
     const response = new Response("data: ok\n\n", {
       headers: { "content-type": "text/event-stream" },
     });
-    mocks.tlsFetch.mockResolvedValue(response);
+    selected.mockResolvedValue(response);
     const controller = new AbortController();
 
     const result = await execute({ proxyOptions: strictProxy, signal: controller.signal });
 
-    expect(mocks.tlsFetch).toHaveBeenCalledOnce();
-    expect(mocks.tlsFetch).toHaveBeenCalledWith(TARGET, expect.objectContaining({
-      method: "POST",
-      body: expect.any(String),
-    }), expect.objectContaining({ proxyUrl: PROXY, signal: expect.any(AbortSignal) }));
+    expect(selected).toHaveBeenCalledOnce();
+    expect(selected.mock.calls[0][0]).toBe(TARGET);
+    expect(selected.mock.calls[0][1]).toMatchObject({ method: "POST", body: expect.any(String) });
+    expect(forwardedProxy()).toBe(PROXY);
     expect(result.response).toBe(response);
     expect(response.bodyUsed).toBe(false);
     expect(await response.text()).toBe("data: ok\n\n");
     controller.abort();
-    expect(mocks.tlsFetch.mock.calls[0][2].signal.aborted).toBe(true);
-    expect(mocks.bunFetch).not.toHaveBeenCalled();
+    expect(forwardedSignal().aborted).toBe(true);
+    expect(alternative).not.toHaveBeenCalled();
     expect(mocks.rawFetch).not.toHaveBeenCalled();
   });
 
   it("keeps explicit direct mode on the adapter without a proxy", async () => {
     await execute({ proxyOptions: { forceDirect: true } });
 
-    expect(mocks.tlsFetch).toHaveBeenCalledOnce();
-    expect(mocks.tlsFetch.mock.calls[0][2].proxyUrl).toBeUndefined();
-    expect(mocks.bunFetch).not.toHaveBeenCalled();
+    expect(selected).toHaveBeenCalledOnce();
+    expect(forwardedProxy()).toBe(transport === "Bun" ? "" : undefined);
+    expect(alternative).not.toHaveBeenCalled();
     expect(mocks.rawFetch).not.toHaveBeenCalled();
   });
 
@@ -101,9 +134,40 @@ describe("OpenCode default upstream transport", () => {
       connectionNoProxy: "opencode.ai",
     } });
 
-    expect(mocks.tlsFetch).toHaveBeenCalledOnce();
-    expect(mocks.tlsFetch.mock.calls[0][2].proxyUrl).toBeUndefined();
-    expect(mocks.bunFetch).not.toHaveBeenCalled();
+    expect(selected).toHaveBeenCalledOnce();
+    expect(forwardedProxy()).toBe(transport === "Bun" ? "" : undefined);
+    expect(alternative).not.toHaveBeenCalled();
+  });
+
+  it("preserves strict-proxy caller aborts without turning them into retries", async () => {
+    selected.mockRejectedValue(new DOMException("cancelled", "AbortError"));
+    await expect(execute({ proxyOptions: strictProxy })).rejects.toMatchObject({ name: "AbortError" });
+    expect(selected).toHaveBeenCalledOnce();
+    expect(alternative).not.toHaveBeenCalled();
+  });
+
+  it("honors environment NO_PROXY through the resolver", async () => {
+    vi.stubEnv("HTTPS_PROXY", PROXY);
+    vi.stubEnv("NO_PROXY", "opencode.ai");
+    await execute();
+    expect(selected).toHaveBeenCalledOnce();
+    expect(forwardedProxy()).toBe(transport === "Bun" ? "" : undefined);
+    expect(alternative).not.toHaveBeenCalled();
+  });
+
+  it("honors resolved environment proxies", async () => {
+    vi.stubEnv("HTTPS_PROXY", PROXY);
+    await execute();
+    expect(forwardedProxy()).toBe(PROXY);
+    expect(alternative).not.toHaveBeenCalled();
+  });
+
+  it("does not switch transport after a selected direct adapter fails", async () => {
+    selected.mockRejectedValue(new Error("helper or transport unavailable"));
+    await expect(execute({ proxyOptions: { forceDirect: true } })).rejects.toThrow(/unavailable/);
+    expect(selected).toHaveBeenCalledOnce();
+    expect(alternative).not.toHaveBeenCalled();
+    expect(mocks.rawFetch).not.toHaveBeenCalled();
   });
 
   it("keeps explicitly configured relays on the existing relay path", async () => {
@@ -130,14 +194,14 @@ describe("OpenCode default upstream transport", () => {
     expect(mocks.rawFetch).not.toHaveBeenCalled();
   });
 
-  it("never falls back to Bun or a direct request when the strict proxy fails", async () => {
-    mocks.tlsFetch.mockRejectedValue(new Error("proxy tunnel refused"));
+  it("never changes transport or falls back to direct when the strict proxy fails", async () => {
+    selected.mockRejectedValue(new Error("proxy tunnel refused"));
 
     await expect(execute({ proxyOptions: strictProxy })).rejects.toThrow(/strictProxy=true/);
 
-    expect(mocks.tlsFetch).toHaveBeenCalledOnce();
-    expect(mocks.tlsFetch.mock.calls[0][2].proxyUrl).toBe(PROXY);
-    expect(mocks.bunFetch).not.toHaveBeenCalled();
+    expect(selected).toHaveBeenCalledOnce();
+    expect(forwardedProxy()).toBe(PROXY);
+    expect(alternative).not.toHaveBeenCalled();
     expect(mocks.rawFetch).not.toHaveBeenCalled();
   });
 
@@ -146,16 +210,16 @@ describe("OpenCode default upstream transport", () => {
       type: "FreeUsageLimitError", message: "Free usage limit reached.",
     } });
     const response = new Response(body, { status: 429, headers: { "retry-after": "32400" } });
-    mocks.tlsFetch.mockResolvedValue(response);
-    // Even a working helper must not be used to retry a quota rejection.
+    selected.mockResolvedValue(response);
+    // A quota response is never retried through the alternative transport.
     const result = await execute({ proxyOptions: strictProxy });
 
     expect(result.response).toBe(response);
     expect(result.response.status).toBe(429);
     expect(result.response.headers.get("retry-after")).toBe("32400");
     expect(await result.response.text()).toBe(body);
-    expect(mocks.tlsFetch).toHaveBeenCalledOnce();
-    expect(mocks.bunFetch).not.toHaveBeenCalled();
+    expect(selected).toHaveBeenCalledOnce();
+    expect(alternative).not.toHaveBeenCalled();
     expect(mocks.rawFetch).not.toHaveBeenCalled();
   });
 });

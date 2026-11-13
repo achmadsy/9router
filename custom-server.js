@@ -45,10 +45,23 @@ if (!globalThis.__9router_request_als) {
 // so the request-detail header sanitizer redacts it too.
 const PEER_TOKEN = crypto.randomBytes(24).toString("hex");
 process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
-// Mint before requiring Next's server bundle so route modules that import the
-// Bun transport client capture the same process-local credential as the helper.
-if (!process.env.OPENCODE_BUN_TRANSPORT_TOKEN) {
-  process.env.OPENCODE_BUN_TRANSPORT_TOKEN = crypto.randomBytes(32).toString("hex");
+// Resolve eligibility before loading Next. A generated token alone does not mean
+// Bun is installed. This is configuration, not a health-based fallback switch:
+// a managed helper that later fails must never change the selected transport.
+const opencodeBunBinary = process.env.BUN_BINARY || "/usr/local/bin/bun";
+const opencodeBunHelper = path.join(__dirname, "open-sse", "services", "opencodeBunTransport.js");
+if (process.env.OPENCODE_BUN_TRANSPORT_DISABLED === "1") {
+  process.env.OPENCODE_BUN_TRANSPORT_MODE = "disabled";
+} else if (process.env.OPENCODE_BUN_TRANSPORT_URL && process.env.OPENCODE_BUN_TRANSPORT_TOKEN) {
+  // An operator-configured loopback helper is managed outside this process.
+  // The client validates its destination before sending the token or payload.
+  process.env.OPENCODE_BUN_TRANSPORT_MODE = "external";
+} else if (fs.existsSync(opencodeBunBinary) && fs.existsSync(opencodeBunHelper)) {
+  process.env.OPENCODE_BUN_TRANSPORT_MODE = "managed";
+  process.env.OPENCODE_BUN_TRANSPORT_TOKEN ||= crypto.randomBytes(32).toString("hex");
+  process.env.OPENCODE_BUN_TRANSPORT_URL = `http://127.0.0.1:${process.env.OPENCODE_BUN_TRANSPORT_PORT || 20131}/fetch`;
+} else {
+  process.env.OPENCODE_BUN_TRANSPORT_MODE = "unavailable";
 }
 
 let backgroundRefreshStarted = false;
@@ -57,23 +70,18 @@ let opencodeBunRestartTimer = null;
 let opencodeBunStopping = false;
 
 function startOpenCodeBunTransport() {
-  if (opencodeBunTransport || opencodeBunStopping || process.env.OPENCODE_BUN_TRANSPORT_DISABLED === "1") return;
-  const bun = process.env.BUN_BINARY || "/usr/local/bin/bun";
-  const helper = path.join(__dirname, "open-sse", "services", "opencodeBunTransport.js");
-  if (!fs.existsSync(bun) || !fs.existsSync(helper)) {
-    console.warn("[OpenCodeBunTransport] Bun/helper unavailable; OpenCode Free requests will fail closed");
-    return;
-  }
-  if (!process.env.OPENCODE_BUN_TRANSPORT_TOKEN) {
-    process.env.OPENCODE_BUN_TRANSPORT_TOKEN = crypto.randomBytes(32).toString("hex");
-  }
-  const child = spawn(bun, [helper], {
+  if (opencodeBunTransport || opencodeBunStopping || process.env.OPENCODE_BUN_TRANSPORT_MODE !== "managed") return;
+  const child = spawn(opencodeBunBinary, [opencodeBunHelper], {
     cwd: __dirname,
     env: process.env,
     stdio: ["ignore", "inherit", "inherit"],
   });
   opencodeBunTransport = child;
-  child.once("exit", (code, signal) => {
+  child.once("error", () => {
+    // Do not log spawn errors containing operator paths or change transport mode.
+    console.error("[OpenCodeBunTransport] helper could not start");
+  });
+  child.once("close", (code, signal) => {
     opencodeBunTransport = null;
     if (opencodeBunStopping) return;
     console.error(`[OpenCodeBunTransport] exited (${signal || code}); restarting in 1s`);

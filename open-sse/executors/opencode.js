@@ -9,6 +9,7 @@ import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
 import { getModelTargetFormat } from "../config/providerModels.js";
 import { opencodeTlsFetch } from "../services/opencodeTlsClient.js";
+import { getOpencodeBunTransportConfig, opencodeBunFetch } from "../services/opencodeBunClient.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -658,18 +659,20 @@ export class OpenCodeExecutor extends BaseExecutor {
     return Math.max(200, delayMs || 0);
   }
 
-  // Use the upstream proxy-capable adapter through BaseExecutor's shared proxy
-  // resolver. A Bun-first fetchUpstream override would shadow this adapter in
-  // custom-server deployments, even though it is wired correctly below.
-  // Provider quota errors remain responses, not reasons to switch transports.
+  // Both adapters own their upstream transport, but share the proxy resolver.
+  // Choose once per request: a helper failure or provider rejection must never
+  // switch to wreq/direct. Unconfigured installations retain the wreq adapter.
   async execute(args) {
     const credentials = this.prepareRequestCredentials(args);
-    const directFetch = (url, options, proxyUrl) => opencodeTlsFetch(url, {
-      method: options.method,
-      headers: options.headers,
-      body: options.body,
-    }, { signal: options.signal, proxyUrl });
-    // wreq-js tunnels the proxy itself; adapters that cannot must stay on undici.
+    const bunConfig = getOpencodeBunTransportConfig();
+    const directFetch = bunConfig
+      ? (url, options, proxyUrl) => opencodeBunFetch(url, options, proxyUrl || "", bunConfig)
+      : (url, options, proxyUrl) => opencodeTlsFetch(url, {
+        method: options.method,
+        headers: options.headers,
+        body: options.body,
+      }, { signal: options.signal, proxyUrl });
+    // Both adapters tunnel the resolved proxy themselves, never beside it.
     directFetch.proxyCapable = true;
     const run = () => super.execute({ ...args, credentials, directFetch });
 

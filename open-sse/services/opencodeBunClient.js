@@ -1,6 +1,7 @@
+import { Agent, fetch as loopbackFetch } from "undici";
+
 const DEFAULT_URL = "http://127.0.0.1:20131/fetch";
-const TRANSPORT_URL = process.env.OPENCODE_BUN_TRANSPORT_URL || DEFAULT_URL;
-const TRANSPORT_TOKEN = process.env.OPENCODE_BUN_TRANSPORT_TOKEN || "";
+let loopbackDispatcher;
 
 export class OpenCodeBunTransportError extends Error {
   constructor(message) {
@@ -9,22 +10,48 @@ export class OpenCodeBunTransportError extends Error {
   }
 }
 
-/**
- * Forward an OpenCode inference request through the loopback Bun transport.
- * The helper allowlists opencode.ai/inference/* and streams the response back.
- */
-export async function opencodeBunFetch(url, options = {}, proxyUrl = "") {
-  if (!TRANSPORT_TOKEN) {
-    throw new OpenCodeBunTransportError("OpenCode Bun transport token is not configured");
+/** Snapshot configuration once per executor call, never as a health fallback. */
+export function getOpencodeBunTransportConfig() {
+  const mode = process.env.OPENCODE_BUN_TRANSPORT_MODE;
+  if (process.env.OPENCODE_BUN_TRANSPORT_DISABLED === "1"
+      || mode === "disabled" || mode === "unavailable") return null;
+  const token = process.env.OPENCODE_BUN_TRANSPORT_TOKEN || "";
+  const configuredUrl = process.env.OPENCODE_BUN_TRANSPORT_URL || "";
+  if (!mode && !(token && configuredUrl)) return null;
+  if (!token) throw new OpenCodeBunTransportError("OpenCode Bun transport token is not configured");
+  let url;
+  try {
+    url = new URL(configuredUrl || DEFAULT_URL);
+  } catch {
+    throw new OpenCodeBunTransportError("Invalid OpenCode Bun loopback endpoint");
   }
+  // Never send the process-local token or conversation to a remote endpoint,
+  // DNS alias, URL credential, or redirect target.
+  if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname)
+      || url.username || url.password || url.pathname !== "/fetch" || url.search || url.hash) {
+    throw new OpenCodeBunTransportError("Invalid OpenCode Bun loopback endpoint");
+  }
+  return Object.freeze({ url: url.href, token });
+}
 
+/**
+ * Forward through the authenticated, allowlisted Bun helper. The explicit
+ * dispatcher keeps this local hop out of global/env proxy-aware fetch patches.
+ * The helper's header allowlist deliberately does not forward arbitrary custom
+ * headers, unlike wreq. Keep that security boundary when selecting Bun.
+ */
+export async function opencodeBunFetch(url, options = {}, proxyUrl = "", config = getOpencodeBunTransportConfig()) {
+  if (!config) throw new OpenCodeBunTransportError("OpenCode Bun transport is not configured");
   let response;
   try {
-    response = await fetch(TRANSPORT_URL, {
+    loopbackDispatcher ||= new Agent();
+    response = await loopbackFetch(config.url, {
+      dispatcher: loopbackDispatcher,
       method: "POST",
+      redirect: "manual",
       headers: {
         "content-type": "application/json",
-        "x-9r-bun-transport-token": TRANSPORT_TOKEN,
+        "x-9r-bun-transport-token": config.token,
       },
       body: JSON.stringify({
         url: typeof url === "string" ? url : url.toString(),
@@ -38,18 +65,16 @@ export async function opencodeBunFetch(url, options = {}, proxyUrl = "") {
       signal: options.signal,
     });
   } catch (error) {
-    throw new OpenCodeBunTransportError(
-      `OpenCode Bun transport unavailable: ${error instanceof Error ? error.message : "unknown error"}`,
-    );
+    if (options.signal?.aborted || error?.name === "AbortError") {
+      throw new DOMException("OpenCode Bun request aborted", "AbortError");
+    }
+    // Do not expose arbitrary proxy URLs, helper tokens, or raw error causes.
+    throw new OpenCodeBunTransportError("OpenCode Bun transport unavailable");
   }
 
   if (response.headers.get("x-9r-bun-transport-error") === "1") {
-    let detail = "Bun upstream request failed";
-    try {
-      const data = await response.json();
-      detail = data?.error?.message || detail;
-    } catch { /* keep default */ }
-    throw new OpenCodeBunTransportError(detail);
+    await response.body?.cancel().catch(() => {});
+    throw new OpenCodeBunTransportError("OpenCode Bun upstream transport failed");
   }
   return response;
 }
