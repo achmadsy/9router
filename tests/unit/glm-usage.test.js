@@ -296,16 +296,91 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
     });
   });
 
-  it("does not label the 1029 promotion as the original daily Start Plan", async () => {
+  it("displays the 1029 promotion separately from the original daily Start Plan", async () => {
+    const planId = "zcode-v3-start-plan-1029";
     proxyAwareFetch.mockResolvedValueOnce(jsonResponse({
       code: 0, data: {
-        plans: [{ plan_id: "zcode-v3-start-plan-1029", name: "ZCODE GLOBAL BUILD", status: "active" }],
-        balances: [{ show_name: "Flash promotion", total_units: 300000000, remaining_units: 300000000 }],
+        plans: [{ plan_id: planId, name: "ZCODE GLOBAL BUILD", status: "active" }],
+        balances: [{ plan_id: planId, show_name: "Flash promotion", total_units: 300000000, remaining_units: 300000000 }],
       },
     }));
     const usage = await getGlmUsage(undefined, "glm", null, { zcodeJwtToken: "promo-jwt" });
-    expect(usage.message).toBe("GLM Start Plan not active.");
-    expect(usage.quotas).toBeUndefined();
+    expect(usage.message).toBeUndefined();
+    expect(usage.plan).toBe("Start");
+    expect(usage.quotas[`Start: Flash promotion [${planId}]`]).toMatchObject({
+      planId, total: 300000000, remaining: 300000000, remainingPercentage: 100,
+      modelKey: expect.stringContaining(planId),
+    });
+    expect(usage.quotas["Start: Flash promotion"]).toBeUndefined();
+    expect(usage).not.toHaveProperty("originalStartPlanActive");
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["zcode-v3-start-plan-1113-wk", "future-weekly-grant"])(
+    "displays active non-original grant %s without requiring 0817", async (planId) => {
+      const expiresAt = 1900000000;
+      proxyAwareFetch.mockResolvedValueOnce(jsonResponse({
+        code: 0, data: {
+          plans: [{ plan_id: planId, status: " Active " }],
+          balances: [{ plan_id: planId, show_name: "GLM-5.3-Flash", capabilities: ["model:GLM-5.3-Flash"],
+            total_units: 500000000, used_units: 36790, remaining_units: 499963210, expires_at: expiresAt }],
+        },
+      }));
+      const usage = await getGlmUsage(undefined, "glm", null, { zcodeJwtToken: "weekly-jwt" });
+      expect(usage.message).toBeUndefined();
+      expect(Object.keys(usage.quotas)).toEqual([`Start: GLM-5.3-Flash [${planId}]`]);
+      const bucket = Object.values(usage.quotas)[0];
+      expect(bucket).toMatchObject({ planId, total: 500000000, used: 36790, remaining: 499963210,
+        modelKey: expect.stringContaining(planId), resetAt: new Date(expiresAt * 1000).toISOString() });
+      expect(bucket.remainingPercentage).toBeCloseTo(99.992642);
+      expect(usage.balance).toMatchObject({ stale: false, cached: false });
+      expect(proxyAwareFetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { plans: [] },
+    { plans: [{ plan_id: "expired-grant", status: "expired" }] },
+    { plans: [{ plan_id: "malformed-grant", status: 1 }] },
+  ])(
+    "does not display numeric balance remnants without an active plan: %j", async ({ plans }) => {
+      proxyAwareFetch.mockResolvedValueOnce(jsonResponse({ code: 0, data: {
+        plans, balances: [{ plan_id: "expired-grant", show_name: "Old quota", total_units: 100, remaining_units: 100 }],
+      } }));
+      const usage = await getGlmUsage(undefined, "glm", null, { zcodeJwtToken: "inactive-jwt" });
+      expect(usage.message).toBe("GLM Start Plan not active.");
+      expect(usage.quotas).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { balances: [] },
+    { balances: [{ total_units: null, used_units: null, remaining_units: null }] },
+    { balances: [{ total_units: "invalid" }] },
+  ])(
+    "does not fabricate quota for active grants without numeric balance buckets: %j", async ({ balances }) => {
+      proxyAwareFetch.mockResolvedValueOnce(jsonResponse({ code: 0, data: {
+        plans: [{ plan_id: "weekly-grant", status: "active" }], balances,
+      } }));
+      const usage = await getGlmUsage(undefined, "glm", null, { zcodeJwtToken: "empty-jwt" });
+      expect(usage.message).toBe("GLM Start Plan active but no balance buckets returned.");
+      expect(usage.quotas).toBeUndefined();
+    },
+  );
+
+  it("merges a non-original weekly grant with independent Coding Plan quotas", async () => {
+    const planId = "weekly-grant";
+    proxyAwareFetch.mockImplementation(async (url) => jsonResponse(String(url).includes("billing/balance")
+      ? { code: 0, data: { plans: [{ plan_id: planId, status: "active" }], balances: [{
+        plan_id: planId, show_name: "GLM-5.3-Flash", total_units: 1000, used_units: 100, remaining_units: 900,
+      }] } }
+      : SAMPLE_GLM_CREDIT_USAGE));
+    const usage = await getGlmUsage("coding-plan-key", "glm", null, { zcodeJwtToken: "weekly-jwt" });
+    expect(usage.plan).toBe("Start");
+    expect(usage.quotas[`Start: GLM-5.3-Flash [${planId}]`]).toMatchObject({ planId, remaining: 900 });
+    expect(usage.quotas["Session (5h)"].used).toBe(25);
+    expect(usage.quotas["Weekly (7d)"].used).toBe(10);
+    expect(proxyAwareFetch).toHaveBeenCalledTimes(2);
   });
 
   it("manual force bypasses a cached not-active balance", async () => {
@@ -359,7 +434,7 @@ describe("getGlmUsage Start Plan (zcode JWT / billing/balance)", () => {
 
     expect(proxyAwareFetch).toHaveBeenCalledTimes(2);
     expect(proxyAwareFetch.mock.calls.some(([url]) => String(url).includes("billing/current"))).toBe(false);
-    expect(usage.quotas["Start:"]).toBeUndefined();
+    expect(Object.keys(usage.quotas).some((name) => name.startsWith("Start:"))).toBe(false);
     expect(usage.quotas["Session (5h)"]).toBeTruthy();
     expect(usage.plan).toBe("Lite");
   });

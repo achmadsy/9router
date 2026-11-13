@@ -25,11 +25,10 @@ function getStartPlanJwt(providerSpecificData) {
   return typeof raw === "string" ? raw.trim() : "";
 }
 
-/** Only the original daily entitlement counts as Start Plan activation. */
-function hasActiveStartPlan(plans) {
+/** Quota display accepts active grants; original daily activation is separate. */
+function hasActiveBalancePlan(plans) {
   return Array.isArray(plans) && plans.some((plan) =>
-    plan?.status?.trim().toLowerCase() === "active" &&
-    plan?.plan_id === ZCODE_ORIGINAL_START_PLAN_ID
+    typeof plan?.status === "string" && plan.status.trim().toLowerCase() === "active"
   );
 }
 
@@ -103,7 +102,7 @@ async function fetchStartPlanUsage(jwt, proxyOptions, options) {
       : null;
     const metadata = { checkedAt: snapshot.checkedAt, stale: snapshot.stale, cached: snapshot.cached,
       ...(warning ? { warning, ...planErrorDetails(snapshot) } : {}) };
-    if (!hasActiveStartPlan(snapshot.data.plans)) {
+    if (!hasActiveBalancePlan(snapshot.data.plans)) {
       return { message: "GLM Start Plan not active.", balance: metadata };
     }
     const quotas = mapStartPlanBalances(snapshot.data.balances, {});

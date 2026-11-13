@@ -198,6 +198,27 @@ describe("shared ZCode balance snapshots", () => {
     expect(result.quotas.every((row) => row.modelKey && !/\(2\)$/.test(row.name))).toBe(true);
   });
 
+  it("aggregates promotional-only accounts without requiring the original daily plan", async () => {
+    const planId = "dynamic-weekly-promotion";
+    mocks.fetch.mockImplementation(async () => response({ code: 0, data: {
+      plans: [{ plan_id: planId, status: "active" }],
+      balances: [{ plan_id: planId, show_name: "GLM-5.3-Flash", capabilities: ["model:GLM-5.3-Flash"],
+        total_units: 1000, used_units: 100, remaining_units: 900 }],
+    } }));
+    const connections = [{ id: "weekly-one", provider: "glm" }, { id: "weekly-two", provider: "glm" }];
+    const snapshots = {};
+    for (const connection of connections) {
+      const usage = await getGlmUsage(null, "glm", proxy, { zcodeJwtToken: `jwt-${connection.id}` }, { accountScope: `glm:${connection.id}` });
+      snapshots[connection.id] = { quotas: parseQuotaData("glm", usage) };
+    }
+    const result = aggregateProviderQuotas(connections, snapshots);
+    expect(result.quotas).toHaveLength(1);
+    expect(result.quotas[0]).toMatchObject({ planId, modelKey: expect.stringContaining(planId),
+      name: `Start: GLM-5.3-Flash [${planId}]`, total: 2000, used: 200, accountCount: 2 });
+    expect(result.failedConnections).toHaveLength(0);
+    expect(balanceCalls()).toHaveLength(2);
+  });
+
   it("adds multiple grants of the same plan/model once per account, regardless of entitlement IDs", async () => {
     const daily = { plan_id: "zcode-v3-start-plan-0817", show_name: "GLM-5.3-Flash", meter: "model_usage", capabilities: ["model:GLM-5.3-Flash"], total_units: 2_500_000, used_units: 500_000, remaining_units: 2_000_000 };
     mocks.fetch.mockResolvedValue(response({ code: 0, data: { plans: data().plans, balances: [{ ...daily, entitlement_id: "first" }, { ...daily, entitlement_id: "second" }] } }));
