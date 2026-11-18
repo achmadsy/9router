@@ -33,6 +33,11 @@
  *    (see the test below), so the guard is unreachable by construction today --
  *    it exists so a future validator rule cannot ship an unusable body silently.
  *
+ * F. Argument-less tool calls were dropped. Claude Code's ExitPlanMode takes no
+ *    parameters, so Kiro sends the call with no input fragment (or only empty
+ *    ones). parsedToolInput() rejected that as "missing input", so the client
+ *    got a turn with no tool_use and the tool never ran.
+ *
  * Kiro also answers an unusable conversation with 400 {"message":"Improperly
  * formed request.","reason":"REQUEST_BODY_INVALID"}, which cools down every
  * account that reports it. That is a property of ERROR_RULES rather than of this
@@ -46,11 +51,18 @@ const fetchMock = vi.fn();
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: (...args) => fetchMock(...args)
 }));
+vi.mock("@/lib/usageDb.js", () => ({
+  appendRequestLog: vi.fn(async () => {}),
+  saveRequestDetail: vi.fn(async () => {}),
+  saveRequestUsage: vi.fn(async () => {})
+}));
 
 const { KiroExecutor } = await import("../../open-sse/executors/kiro.js");
 const { kiroToClaudeResponse, kiroToClaudeNonStreaming } = await import(
   "../../open-sse/translator/response/kiro-to-claude.js"
 );
+const { parseSSEToOpenAIResponse } = await import("../../open-sse/handlers/chatCore/sseToJsonHandler.js");
+const { openAICompletionToClaudeMessage } = await import("../../open-sse/handlers/chatCore/claudeMessageResponse.js");
 const { validateKiroConversation, canonicalizeKiroConversation } = await import(
   "../../open-sse/translator/concerns/kiroConversation.js"
 );
@@ -249,6 +261,112 @@ describe("C: one unusable tool fragment does not take the whole turn with it", (
     ]);
     expect(body).toContain("invalid_kiro_tool_call");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("F: an argument-less tool call ships with {} input", () => {
+  const plan = (extra = {}) => frame("toolUseEvent", { toolUseId: "toolu_plan", name: "ExitPlanMode", ...extra });
+  const sseData = (body) => body
+    .split("\n")
+    .filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+    .map(line => JSON.parse(line.slice(6)));
+
+  const expectDelivered = (body) => {
+    expect(body).not.toContain("invalid_kiro_tool_call");
+    expect(body).toContain('"id":"toolu_plan"');
+    expect(body).toContain('"name":"ExitPlanMode"');
+    expect(body).toContain('"arguments":"{}"');
+    expect(body).toContain('"finish_reason":"tool_calls"');
+  };
+
+  it.each([
+    ["no input field", [plan()]],
+    ["a null input", [plan({ input: null })]],
+    ["an empty string fragment", [plan({ input: "" })]],
+    ["whitespace-only fragments", [plan({ input: " " }), plan({ input: "\n" })]]
+  ])("delivers the call with %s once the turn stops", async (_label, toolFrames) => {
+    expectDelivered(await runNoRepair([...toolFrames, frame("metadataEvent", { stopReason: "tool_use" })]));
+  });
+
+  it.each([
+    ["the per-tool stop frame", () => plan({ stop: true })],
+    ["a bare messageStopEvent", () => frame("messageStopEvent", {})],
+    ["metadata end_turn", () => frame("metadataEvent", { stopReason: "end_turn" })]
+  ])("accepts %s as the completion signal", async (_label, stopFrame) => {
+    expectDelivered(await runNoRepair([plan(), stopFrame()]));
+  });
+
+  // Without any stop signal the input may simply never have arrived (the
+  // "requires complete direct tool input" case in kiro-terminal-integrity).
+  it("still drops an input-less call when nothing says the call finished", async () => {
+    const body = await runNoRepair([plan()]);
+    expect(body).toContain("invalid_kiro_tool_call");
+    expect(body).not.toContain('"name":"ExitPlanMode"');
+  });
+
+  it("still drops an input-less call cut off by max_tokens", async () => {
+    const body = await runNoRepair([
+      frame("assistantResponseEvent", { content: "Here is the plan." }),
+      plan(),
+      frame("metadataEvent", { stopReason: "max_tokens" })
+    ]);
+    expect(body).toContain("Here is the plan.");
+    expect(body).not.toContain('"name":"ExitPlanMode"');
+  });
+
+  // Production shape (5x ExitPlanMode, 2026-11-18): reasoning, then the call.
+  // The dropped call left a reasoning-only "stop" turn that combo fallback
+  // read as empty.
+  const productionTurn = () => run([
+    frame("reasoningContentEvent", { text: "The plan is ready for review." }),
+    plan(),
+    frame("metadataEvent", { stopReason: "tool_use" }),
+    ...METERED
+  ]);
+
+  it("reaches a Claude streaming client as a tool_use block with {} input", async () => {
+    const body = await productionTurn();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const state = {};
+    const events = sseData(body).flatMap(chunk => kiroToClaudeResponse(chunk, state) || []);
+    const start = events.find(e => e.type === "content_block_start" && e.content_block.type === "tool_use");
+    expect(start?.content_block).toMatchObject({ id: "toolu_plan", name: "ExitPlanMode" });
+    const json = events
+      .filter(e => e.type === "content_block_delta" && e.index === start.index && e.delta.type === "input_json_delta")
+      .map(e => e.delta.partial_json)
+      .join("");
+    expect(JSON.parse(json)).toEqual({});
+    expect(events.find(e => e.type === "message_delta").delta.stop_reason).toBe("tool_use");
+  });
+
+  it("reaches non-streaming Claude and OpenAI clients with {} input", async () => {
+    const parsed = parseSSEToOpenAIResponse(await productionTurn(), "kr/claude-opus-4.8");
+    expect(parsed.choices[0].message.tool_calls).toEqual([
+      { id: "toolu_plan", type: "function", function: { name: "ExitPlanMode", arguments: "{}" } }
+    ]);
+
+    const message = openAICompletionToClaudeMessage(parsed);
+    expect(message.content).toContainEqual({ type: "tool_use", id: "toolu_plan", name: "ExitPlanMode", input: {} });
+    expect(message.stop_reason).toBe("tool_use");
+  });
+
+  it("still drops a call whose input is truncated JSON", async () => {
+    const body = await runNoRepair([
+      frame("toolUseEvent", { toolUseId: "toolu_write", name: "Write", input: '{"file_path":"a.txt","content":"x' }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]);
+    expect(body).toContain("invalid_kiro_tool_call");
+    expect(body).not.toContain('"name":"Write"');
+  });
+
+  it("still drops a tool_call wrapper with no input (no nested MCP name)", async () => {
+    const body = await runNoRepair([
+      frame("toolUseEvent", { toolUseId: "wrap", name: "tool_call" }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]);
+    expect(body).toContain("invalid_kiro_tool_call");
+    expect(body).not.toContain('"id":"wrap"');
   });
 });
 

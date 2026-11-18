@@ -714,7 +714,7 @@ export class KiroExecutor extends BaseExecutor {
       throw error;
     };
     const appendToolInput = (tool, input) => {
-      if (input === undefined) return;
+      if (input == null) return;
       if (typeof input === "string") {
         if (tool.inputKind && tool.inputKind !== "string") throw new Error("Kiro tool input changed fragment type");
         tool.inputKind = "string";
@@ -734,10 +734,19 @@ export class KiroExecutor extends BaseExecutor {
       assertToolBufferBound();
     };
     const parsedToolInput = (tool) => {
-      if (!tool.inputKind) throw new Error("Kiro tool call is missing input");
+      // A call with no parameters (Claude Code's ExitPlanMode) arrives with no
+      // input, or only blank fragments. That means {} once Kiro says the call
+      // is finished; without that signal the input may just not have arrived.
+      const complete = tool.stopped || ["end_turn", "tool_use"].includes(state.stopReason);
+      if (!tool.inputKind) {
+        if (complete) return {};
+        throw new Error("Kiro tool call is missing input");
+      }
       if (tool.inputKind === "object") return tool.inputObject;
+      const raw = tool.inputChunks.join("");
+      if (complete && !raw.trim()) return {};
       try {
-        const input = JSON.parse(tool.inputChunks.join(""));
+        const input = JSON.parse(raw);
         if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("not an object");
         return input;
       } catch (error) {
@@ -877,6 +886,7 @@ export class KiroExecutor extends BaseExecutor {
             throw new Error("Kiro tool name changed between fragments");
           }
           appendToolInput(tool, value.input);
+          if (value.stop === true) tool.stopped = true;
         }
       } else if (eventType === "messageStopEvent") {
         state.explicitStop = true;

@@ -66,6 +66,30 @@ describe("Claude → Kiro (direct route)", () => {
     expect(everyHistoryClean).toBe(true);
   });
 
+  it("replays an argument-less tool_use (input: {}) with its tool_result as a structured pair", () => {
+    // Claude Code's ExitPlanMode takes no parameters, so the next request
+    // replays the call with input {}. It must stay a real toolUses/toolResults
+    // pair, not be flattened to text or rejected.
+    const out = C2K({
+      tools: [{ name: "ExitPlanMode", description: "Exit plan mode", input_schema: { type: "object", properties: {} } }],
+      messages: [
+        { role: "user", content: "plan it" },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_bdrk_01TYxRJ6r7MtsYD1MrZyPRHN", name: "ExitPlanMode", input: {} }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bdrk_01TYxRJ6r7MtsYD1MrZyPRHN", content: "User approved the plan" }] },
+      ],
+    });
+    const cs = out.conversationState;
+    const calls = cs.history.flatMap((t) => t.assistantResponseMessage?.toolUses || []);
+    expect(calls).toEqual([{ toolUseId: "toolu_bdrk_01TYxRJ6r7MtsYD1MrZyPRHN", name: "ExitPlanMode", input: {} }]);
+    const results = cs.currentMessage.userInputMessage.userInputMessageContext.toolResults;
+    expect(results).toEqual([{
+      toolUseId: "toolu_bdrk_01TYxRJ6r7MtsYD1MrZyPRHN",
+      status: "success",
+      content: [{ text: "User approved the plan" }],
+    }]);
+    expect(JSON.stringify(cs)).not.toContain("[Tool call: ExitPlanMode");
+  });
+
   it("guard 2: with tools, an orphaned tool_result is folded into user text", () => {
     const out = C2K({
       tools: [{ name: "f", description: "fn", input_schema: { type: "object", properties: {} } }],
